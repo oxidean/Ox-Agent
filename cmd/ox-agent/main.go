@@ -22,6 +22,7 @@ var version = "dev"
 //go:embed all:assets
 var embeddedAssets embed.FS
 
+// projectConfig mirrors the .ox-agent/framework.yaml schema.
 type projectConfig struct {
 	SchemaVersion int `yaml:"schema_version"`
 	Framework     struct {
@@ -35,6 +36,7 @@ type projectConfig struct {
 	} `yaml:"project"`
 }
 
+// main dispatches ox-agent subcommands.
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "help" || os.Args[1] == "--help" {
 		printHelp()
@@ -64,6 +66,7 @@ func main() {
 	}
 }
 
+// printHelp writes the CLI usage summary to stdout.
 func printHelp() {
 	fmt.Println(`ox-agent - repository-local AI-SDLC
 
@@ -75,6 +78,7 @@ Usage:
   ox-agent status`)
 }
 
+// initProject materializes a new .ox-agent project scaffold at root.
 func initProject(root string) error {
 	base := filepath.Join(root, ".ox-agent")
 	if _, err := os.Stat(base); err == nil {
@@ -120,6 +124,7 @@ func initProject(root string) error {
 	return nil
 }
 
+// materializeAssets expands the embedded asset tree under base.
 func materializeAssets(base string) error {
 	return fs.WalkDir(embeddedAssets, "assets", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -144,6 +149,7 @@ func materializeAssets(base string) error {
 	})
 }
 
+// doctor verifies that root contains a valid Ox-Agent project layout.
 func doctor(root string) error {
 	base := filepath.Join(root, ".ox-agent")
 	configData, err := os.ReadFile(filepath.Join(base, "framework.yaml"))
@@ -166,28 +172,46 @@ func doctor(root string) error {
 	return nil
 }
 
+// start creates a work item in .ox-agent/work/active with the next available
+// WI-NNNN identifier, writes its index.json, and records a work_item.created
+// lifecycle event. ID allocation and directory creation are serialized across
+// concurrent processes.
 func start(root, title string) error {
 	if strings.TrimSpace(title) == "" {
 		return errors.New("start requires a work-item title")
 	}
 	workRoot := filepath.Join(root, ".ox-agent", "work")
-	next, err := nextWorkItemNumber(workRoot)
+	var id, dir string
+	created := false
+	err := withWorkItemLock(workRoot, func() error {
+		next, err := nextWorkItemNumber(workRoot)
+		if err != nil {
+			return err
+		}
+		id = fmt.Sprintf("WI-%04d", next)
+		dir = filepath.Join(workRoot, "active", id+"-"+slugify(title))
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			return fmt.Errorf("creating work item: %w", err)
+		}
+		created = true
+		now := time.Now().UTC().Format(time.RFC3339)
+		index := map[string]any{"schema_version": 1, "id": id, "title": title, "state": "intake", "profile": "normal", "current_stage": "intake", "created_at": now}
+		data, err := json.MarshalIndent(index, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encoding work item: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+			return fmt.Errorf("writing work item: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
+		if created {
+			if removeErr := os.RemoveAll(dir); removeErr != nil {
+				return fmt.Errorf("%w (rolling back %s also failed: %v)", err, dir, removeErr)
+			}
+		}
 		return err
-	}
-	id := fmt.Sprintf("WI-%04d", next)
-	dir := filepath.Join(workRoot, "active", id+"-"+slugify(title))
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return fmt.Errorf("creating work item: %w", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	index := map[string]any{"schema_version": 1, "id": id, "title": title, "state": "intake", "profile": "normal", "current_stage": "intake", "created_at": now}
-	data, err := json.MarshalIndent(index, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encoding work item: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "index.json"), append(data, '\n'), 0o644); err != nil {
-		return fmt.Errorf("writing work item: %w", err)
 	}
 	rel, err := filepath.Rel(root, dir)
 	if err != nil {
@@ -199,6 +223,9 @@ func start(root, title string) error {
 		Actor:      "cli",
 		Data:       map[string]any{"title": title, "directory": filepath.ToSlash(rel)},
 	}); err != nil {
+		if removeErr := os.RemoveAll(dir); removeErr != nil {
+			return fmt.Errorf("%w (rolling back %s also failed: %v)", err, dir, removeErr)
+		}
 		return err
 	}
 	fmt.Printf("%s: %s\n", id, title)
@@ -207,6 +234,7 @@ func start(root, title string) error {
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
 
+// slugify converts a work-item title into a filesystem-safe directory suffix.
 func slugify(title string) string {
 	slug := strings.Trim(nonSlugChars.ReplaceAllString(strings.ToLower(title), "-"), "-")
 	if len(slug) > 48 {
@@ -218,6 +246,8 @@ func slugify(title string) string {
 	return slug
 }
 
+// nextWorkItemNumber returns the lowest unallocated work-item number across
+// the active and archived buckets.
 func nextWorkItemNumber(workRoot string) (int, error) {
 	highest := 0
 	for _, bucket := range []string{"active", "archived"} {
@@ -245,6 +275,40 @@ func nextWorkItemNumber(workRoot string) (int, error) {
 	return highest + 1, nil
 }
 
+// allocationLockStaleAfter bounds how long an orphaned allocation lock file is
+// trusted before a waiting process reclaims it.
+const allocationLockStaleAfter = 30 * time.Second
+
+// withWorkItemLock serializes work-item ID allocation across concurrent
+// ox-agent processes. The scan-and-create critical section runs while holding
+// an atomic lock file so two start commands cannot claim the same WI-NNNN
+// number under different directory slugs.
+func withWorkItemLock(workRoot string, fn func() error) error {
+	lockPath := filepath.Join(workRoot, ".allocate.lock")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			fmt.Fprintf(lock, "pid=%d\n", os.Getpid())
+			lock.Close()
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("acquiring work item lock: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > allocationLockStaleAfter {
+			os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for work item allocation lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// lifecycleEvent is one entry in the .ox-agent/state/events.ndjson journal.
 type lifecycleEvent struct {
 	SchemaVersion int            `json:"schema_version"`
 	EventID       string         `json:"event_id"`
@@ -255,6 +319,7 @@ type lifecycleEvent struct {
 	Data          map[string]any `json:"data,omitempty"`
 }
 
+// appendEvent appends a lifecycle event to the project's event journal.
 func appendEvent(root string, event lifecycleEvent) error {
 	event.SchemaVersion = 1
 	event.EventID = fmt.Sprintf("evt_%d_%06x", time.Now().UnixMilli(), rand.Uint64N(1<<24))
@@ -274,6 +339,7 @@ func appendEvent(root string, event lifecycleEvent) error {
 	return nil
 }
 
+// status lists the active work items for the project at root.
 func status(root string) error {
 	entries, err := os.ReadDir(filepath.Join(root, ".ox-agent", "work", "active"))
 	if err != nil {

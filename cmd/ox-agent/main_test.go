@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInitDoctorStartStatus(t *testing.T) {
@@ -105,5 +107,95 @@ func TestStartAppendsCreatedEvent(t *testing.T) {
 	}
 	if event["type"] != "work_item.created" || event["work_item_id"] != "WI-0001" || event["actor"] != "cli" {
 		t.Fatalf("unexpected event: %v", event)
+	}
+}
+
+func TestStartSerializesConcurrentAllocation(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(root); err != nil {
+		t.Fatalf("initProject() error = %v", err)
+	}
+	const workers = 8
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		go func(n int) {
+			errs <- start(root, fmt.Sprintf("Concurrent item %d", n))
+		}(i)
+	}
+	for i := 0; i < workers; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("start() error = %v", err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".ox-agent", "work", "active"))
+	if err != nil {
+		t.Fatalf("reading active work items: %v", err)
+	}
+	if len(entries) != workers {
+		t.Fatalf("active work items = %d, want %d", len(entries), workers)
+	}
+	ids := map[string]bool{}
+	for _, entry := range entries {
+		parts := strings.SplitN(entry.Name(), "-", 3)
+		if ids[parts[0]+"-"+parts[1]] {
+			t.Fatalf("duplicate work item number allocated: %s", entry.Name())
+		}
+		ids[parts[0]+"-"+parts[1]] = true
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".ox-agent", "state", "events.ndjson"))
+	if err != nil {
+		t.Fatalf("reading event journal: %v", err)
+	}
+	if n := len(strings.Split(strings.TrimSpace(string(data)), "\n")); n != workers {
+		t.Fatalf("event journal entries = %d, want %d", n, workers)
+	}
+}
+
+func TestStartReclaimsStaleAllocationLock(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(root); err != nil {
+		t.Fatalf("initProject() error = %v", err)
+	}
+	lockPath := filepath.Join(root, ".ox-agent", "work", ".allocate.lock")
+	if err := os.WriteFile(lockPath, []byte("pid=0\n"), 0o644); err != nil {
+		t.Fatalf("seeding stale lock: %v", err)
+	}
+	stale := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(lockPath, stale, stale); err != nil {
+		t.Fatalf("backdating stale lock: %v", err)
+	}
+	if err := start(root, "After stale lock"); err != nil {
+		t.Fatalf("start() error = %v", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("lock file remains after start: %v", err)
+	}
+	workDir := filepath.Join(root, ".ox-agent", "work", "active", "WI-0001-after-stale-lock")
+	if _, err := os.Stat(filepath.Join(workDir, "index.json")); err != nil {
+		t.Fatalf("work item index missing: %v", err)
+	}
+}
+
+func TestStartRollsBackWhenEventAppendFails(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(root); err != nil {
+		t.Fatalf("initProject() error = %v", err)
+	}
+	journal := filepath.Join(root, ".ox-agent", "state", "events.ndjson")
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("removing event journal: %v", err)
+	}
+	if err := os.Mkdir(journal, 0o755); err != nil {
+		t.Fatalf("replacing event journal with directory: %v", err)
+	}
+	if err := start(root, "Will roll back"); err == nil {
+		t.Fatal("start() succeeded; want event journal failure")
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".ox-agent", "work", "active"))
+	if err != nil {
+		t.Fatalf("reading active work items: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rolled-back work item remains: %v", entries)
 	}
 }

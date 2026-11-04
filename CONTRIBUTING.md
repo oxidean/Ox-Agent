@@ -71,8 +71,9 @@ git push origin v0.2.0
 
 The tag triggers `.github/workflows/release.yml`, which builds the Go binary,
 creates archives for supported platforms, generates checksums, and creates the
-GitHub Release. To republish an existing tag, dispatch `release.yml` manually
-with the tag as input.
+GitHub Release. To republish an existing tag, first delete the published
+release (`gh release delete <tag> --yes`, which keeps the tag), then dispatch
+`release.yml` manually with the tag as input.
 
 ## Documentation changes
 

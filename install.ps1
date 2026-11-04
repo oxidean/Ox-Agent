@@ -17,11 +17,21 @@ try {
   Expand-Archive "$temp/$archive" -DestinationPath $temp -Force
   Copy-Item "$temp/ox-agent.exe" (Join-Path $installDir "ox-agent.exe") -Force
   Write-Host "Installed ox-agent $version to $installDir"
-  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if (($userPath -split ';') -notcontains $installDir) {
-    $newPath = if ([string]::IsNullOrEmpty($userPath)) { $installDir } else { "$userPath;$installDir" }
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+  $userKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+  if ($null -eq $userKey) { throw "Could not open the HKCU\Environment registry key" }
+  try {
+    $userPath = $userKey.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if (($userPath -split ';') -notcontains $installDir) {
+      $newPath = if ([string]::IsNullOrEmpty($userPath)) { $installDir } else { "$userPath;$installDir" }
+      $pathKind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+      if (-not [string]::IsNullOrEmpty($userPath)) {
+        try { $pathKind = $userKey.GetValueKind("Path") } catch { }
+      }
+      $userKey.SetValue("Path", $newPath, $pathKind)
+      Write-Host "Added $installDir to the user PATH"
+    }
+  } finally { $userKey.Close() }
+  if (($env:Path -split ';') -notcontains $installDir) {
     $env:Path = "$env:Path;$installDir"
-    Write-Host "Added $installDir to the user PATH"
   }
 } finally { Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue }
