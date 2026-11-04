@@ -37,6 +37,64 @@ type projectConfig struct {
 	} `yaml:"project"`
 }
 
+// projectSettings mirrors the .ox-agent/config.yaml project-configuration
+// schema; framework identity lives in framework.yaml.
+type projectSettings struct {
+	SchemaVersion int `yaml:"schema_version"`
+	Project       struct {
+		Name        string `yaml:"name"`
+		TestCommand string `yaml:"test_command"`
+	} `yaml:"project"`
+	Workflow struct {
+		DefaultProfile string              `yaml:"default_profile"`
+		Profiles       map[string][]string `yaml:"profiles"`
+	} `yaml:"workflow"`
+	Skills struct {
+		Enabled     []string            `yaml:"enabled"`
+		StageSkills map[string][]string `yaml:"stage_skills"`
+	} `yaml:"skills"`
+}
+
+// policyConfig mirrors the .ox-agent/policy.yaml schema.
+type policyConfig struct {
+	SchemaVersion int `yaml:"schema_version"`
+	Autonomy      struct {
+		ProfileChanges string `yaml:"profile_changes"`
+		AllowDowngrade bool   `yaml:"allow_downgrade"`
+	} `yaml:"autonomy"`
+	Approvals struct {
+		ProductionDeploy  string `yaml:"production_deploy"`
+		DestructiveChange string `yaml:"destructive_change"`
+		PolicyChange      string `yaml:"policy_change"`
+	} `yaml:"approvals"`
+	Budgets struct {
+		MaxParallelAgents int `yaml:"max_parallel_agents"`
+		MaxChildDepth     int `yaml:"max_child_depth"`
+		MaxFixCycles      int `yaml:"max_fix_cycles"`
+	} `yaml:"budgets"`
+}
+
+// defaultStages, defaultSkills, and defaultStageSkills seed a new project's
+// config.yaml with the standard lifecycle profile and bundled skill set.
+var defaultStages = []string{"discover", "brainstorm", "specify", "plan", "implement", "verify", "ship"}
+
+var defaultSkills = []string{
+	"discover-context", "brainstorm", "specify", "adr", "multi-stage-plan",
+	"tdd", "implementation", "code-review", "verify", "discussion",
+	"progress", "shipping", "retrospective",
+}
+
+var defaultStageSkills = map[string][]string{
+	"discovery":      {"discover-context"},
+	"brainstorming":  {"brainstorm", "adr"},
+	"specification":  {"specify", "adr"},
+	"planning":       {"multi-stage-plan"},
+	"implementation": {"tdd", "implementation"},
+	"verification":   {"code-review", "verify"},
+	"shipping":       {"shipping"},
+	"retrospective":  {"retrospective", "progress"},
+}
+
 // main dispatches ox-agent subcommands.
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "help" || os.Args[1] == "--help" {
@@ -53,11 +111,13 @@ func main() {
 	case "init":
 		err = initProject(".")
 	case "doctor":
-		err = doctor(".")
+		err = withProjectRoot(doctor)
 	case "start":
-		err = start(".", strings.Join(os.Args[2:], " "))
+		err = withProjectRoot(func(root string) error {
+			return start(root, strings.Join(os.Args[2:], " "))
+		})
 	case "status":
-		err = status(".")
+		err = withProjectRoot(status)
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -128,6 +188,27 @@ func initProject(root string) (err error) {
 	if err := os.WriteFile(filepath.Join(base, "framework.yaml"), data, 0o644); err != nil {
 		return fmt.Errorf("writing framework configuration: %w", err)
 	}
+	settings := projectSettings{SchemaVersion: 1}
+	settings.Project.Name = project
+	settings.Workflow.DefaultProfile = "normal"
+	settings.Workflow.Profiles = map[string][]string{"normal": defaultStages}
+	settings.Skills.Enabled = defaultSkills
+	settings.Skills.StageSkills = defaultStageSkills
+	if err := writeYAML(filepath.Join(base, "config.yaml"), settings); err != nil {
+		return err
+	}
+	policy := policyConfig{SchemaVersion: 1}
+	policy.Autonomy.ProfileChanges = "managed"
+	policy.Autonomy.AllowDowngrade = false
+	policy.Approvals.ProductionDeploy = "human"
+	policy.Approvals.DestructiveChange = "human"
+	policy.Approvals.PolicyChange = "human"
+	policy.Budgets.MaxParallelAgents = 4
+	policy.Budgets.MaxChildDepth = 1
+	policy.Budgets.MaxFixCycles = 3
+	if err := writeYAML(filepath.Join(base, "policy.yaml"), policy); err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644); err != nil {
 		return fmt.Errorf("creating event journal: %w", err)
 	}
@@ -136,6 +217,47 @@ func initProject(root string) (err error) {
 	}
 	fmt.Printf("Initialized %s\n", finalBase)
 	return nil
+}
+
+// writeYAML marshals value and writes it to path with mode 0644.
+func writeYAML(path string, value any) error {
+	data, err := yaml.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encoding %s: %w", filepath.Base(path), err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// findProjectRoot locates the nearest ancestor of start containing a
+// .ox-agent directory, matching the discovery behavior of the legacy CLI.
+func findProjectRoot(start string) (string, error) {
+	current, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(current, ".ox-agent")); err == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("could not find .ox-agent from %s", start)
+		}
+		current = parent
+	}
+}
+
+// withProjectRoot resolves the enclosing project's root and invokes fn with
+// it, so project commands work from any subdirectory.
+func withProjectRoot(fn func(string) error) error {
+	root, err := findProjectRoot(".")
+	if err != nil {
+		return err
+	}
+	return fn(root)
 }
 
 // renameScaffold publishes a fully staged scaffold; a var so tests can inject failures.
@@ -196,7 +318,7 @@ func doctor(root string) error {
 	if config.SchemaVersion != 1 || config.Framework.Name != "ox-agent" {
 		return errors.New("unsupported or invalid Ox-Agent framework configuration")
 	}
-	for _, file := range []string{"state/events.ndjson", "work/active", "skills", "workflows", "pipelines"} {
+	for _, file := range []string{"framework.yaml", "config.yaml", "policy.yaml", "state/events.ndjson", "work/active", "skills", "workflows", "pipelines"} {
 		if _, err := os.Stat(filepath.Join(base, file)); err != nil {
 			return fmt.Errorf("missing .ox-agent/%s: %w", file, err)
 		}

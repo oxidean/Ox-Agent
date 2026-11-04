@@ -38,6 +38,57 @@ func TestInitIsNonDestructive(t *testing.T) {
 	}
 }
 
+func TestInitMaterializesConfigAndPolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(root); err != nil {
+		t.Fatalf("initProject() error = %v", err)
+	}
+	base := filepath.Join(root, ".ox-agent")
+	config, err := os.ReadFile(filepath.Join(base, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+	for _, want := range []string{"test_command:", "default_profile: normal", "enabled:", "stage_skills:"} {
+		if !strings.Contains(string(config), want) {
+			t.Fatalf("config.yaml missing %q:\n%s", want, config)
+		}
+	}
+	policy, err := os.ReadFile(filepath.Join(base, "policy.yaml"))
+	if err != nil {
+		t.Fatalf("reading policy.yaml: %v", err)
+	}
+	for _, want := range []string{"profile_changes: managed", "production_deploy: human", "max_parallel_agents: 4"} {
+		if !strings.Contains(string(policy), want) {
+			t.Fatalf("policy.yaml missing %q:\n%s", want, policy)
+		}
+	}
+}
+
+func TestFindProjectRootWalksUp(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(root); err != nil {
+		t.Fatalf("initProject() error = %v", err)
+	}
+	nested := filepath.Join(root, "sub", "dir")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("creating nested dir: %v", err)
+	}
+	got, err := findProjectRoot(nested)
+	if err != nil {
+		t.Fatalf("findProjectRoot() error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolving root: %v", err)
+	}
+	if got, err = filepath.EvalSymlinks(got); err != nil || got != want {
+		t.Fatalf("findProjectRoot() = %q; want %q", got, want)
+	}
+	if _, err := findProjectRoot(t.TempDir()); err == nil {
+		t.Fatal("findProjectRoot() succeeded outside a project; want error")
+	}
+}
+
 func TestInitUsesCurrentDirectoryName(t *testing.T) {
 	project := filepath.Join(t.TempDir(), "alpha-project")
 	if err := os.Mkdir(project, 0o755); err != nil {

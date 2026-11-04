@@ -23,7 +23,11 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$base/$archive" -o "$tmp/$archive"
 curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt"
 expected="$(awk -v file="$archive" '$2 == file { print $1 }' "$tmp/checksums.txt")"
-actual="$(shasum -a 256 "$tmp/$archive" | awk '{ print $1}')"
+if [[ "$os_name" == "darwin" ]]; then
+  actual="$(shasum -a 256 "$tmp/$archive" | awk '{ print $1}')"
+else
+  actual="$(sha256sum "$tmp/$archive" | awk '{ print $1}')"
+fi
 [[ -n "$expected" && "$expected" == "$actual" ]] || { echo "Checksum verification failed" >&2; exit 1; }
 mkdir -p "$install_dir"
 tar -xzf "$tmp/$archive" -C "$tmp"
