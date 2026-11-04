@@ -1,0 +1,33 @@
+{
+  "name": "ox-agent",
+  "version": "0.1.0",
+  "description": "Repository-local, token-efficient AI software development lifecycle kit",
+  "type": "module",
+  "bin": {
+    "ox-agent": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schemas",
+    "skills",
+    "templates",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test",
+    "validate": "npm run build && node dist/cli.js doctor"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@9.15.6+sha512.139cab068fdf0b751268179ac5f909b5be72afb4a75c513d1905d151befc8977b593d3cf8671ed83d4d6637c5c94b98ffbce108125de4a5a27a31233601a99de"
+}

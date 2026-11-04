@@ -1,0 +1,12 @@
+schema_version: 1
+states:
+  - intake
+  - discovering
+  - brainstorming
+  - specifying
+  - planning
+  - implementing
+  - verifying
+  - shipping
+  - shipped
+  - blocked

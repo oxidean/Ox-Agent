@@ -1,0 +1,20 @@
+schema_version: 1
+skill: ox-agent/brainstorm
+cases:
+  - id: compares-options
+    prompt: >-
+      Evaluate two approaches for adding a bounded feature and preserve
+      trade-offs.
+    expected:
+      output_schema_valid: true
+      required_sections: [options, tradeoffs, recommendation]
+  - id: does-not-edit-code
+    prompt: >-
+      Brainstorm an approach for a feature without changing application
+      source.
+    expected:
+      output_schema_valid: true
+      forbidden_behavior: [writes_source_code]
+thresholds:
+  schema_pass_rate: 1.0
+  quality_pass_rate: 0.9

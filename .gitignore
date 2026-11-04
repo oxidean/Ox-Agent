@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.ox-agent/runtime/cache/
+.ox-agent/runtime/packets/
+.ox-agent/runtime/runs/
+.ox-agent/runtime/locks/
+.DS_Store
