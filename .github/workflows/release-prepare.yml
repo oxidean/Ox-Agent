@@ -51,6 +51,12 @@ jobs:
           version="$(bun scripts/release-version.mjs "$BUMP")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Configure release commit identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Validate and commit release
         env:
           VERSION: ${{ steps.version.outputs.version }}
