@@ -1,9 +1,8 @@
 # CLI reference
 
-The CLI is available as `bun node_modules/ox-agent/dist/cli.js` after installing
-a local Ox-Agent checkout in a project. Once Ox-Agent is published, the
-shorter `bunx ox-agent` form can be used. During local development, run
-`bun dist/cli.js` from the Ox-Agent checkout.
+The CLI is available as `bunx --bun --package @oxidean/ox-agent ox-agent` after
+installing the published GitHub Packages package. During local development,
+run `bun dist/cli.js` from the Ox-Agent checkout.
 
 ## Project commands
 

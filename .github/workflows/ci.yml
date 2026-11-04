@@ -34,6 +34,9 @@ jobs:
       - name: Validate Ox-Agent repository state
         run: bun run validate
 
+      - name: Validate package contents
+        run: bun run validate-package
+
       - name: Smoke test CLI in a temporary project
         shell: bash
         run: |
