@@ -1,0 +1,22 @@
+schema_version: 1
+framework:
+  name: ox-agent
+  source: oxidean/ox-agent
+  ref: main
+project:
+  name: ox-agent
+  test_command: ""
+workflow:
+  default_profile: normal
+  profiles:
+    normal:
+      - discover
+      - brainstorm
+      - specify
+      - plan
+      - implement
+      - verify
+      - ship
+skills:
+  enabled:
+    - brainstorm
