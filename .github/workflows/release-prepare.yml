@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release-prepare
@@ -81,3 +82,14 @@ jobs:
           git tag -a "v${VERSION}" -m "v${VERSION}: release ${VERSION}"
           git push origin main
           git push origin "v${VERSION}"
+
+      - name: Publish package and create release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "@oxidean:registry=https://npm.pkg.github.com" > .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> .npmrc
+          bun publish --registry https://npm.pkg.github.com
+          gh release create "v${VERSION}" --verify-tag --generate-notes

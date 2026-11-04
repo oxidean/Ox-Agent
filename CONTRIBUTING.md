@@ -68,8 +68,13 @@ package.json: 0.2.0
 tag:        v0.2.0
 ```
 
-The tag then triggers `.github/workflows/release.yml`, which publishes
-`@oxidean/ox-agent` to GitHub Packages and creates a GitHub release.
+The prepare workflow publishes `@oxidean/ox-agent` and creates the GitHub
+release in the same run after pushing the tag. The tag-triggered
+`.github/workflows/release.yml` remains available for manual recovery of an
+existing tag; GitHub does not start a new workflow from events emitted with the
+default `GITHUB_TOKEN`.
+
+The release workflows require `contents: write` and `packages: write`.
 
 To run the same checks locally before manually creating a release:
 
@@ -82,8 +87,6 @@ bun run validate-package
 bun scripts/release-version.mjs patch  # modifies package.json; do not run casually
 bun scripts/validate-release.mjs HEAD v0.2.0
 ```
-
-The release workflow requires `contents: write` and `packages: write`.
 
 ## Documentation changes
 
