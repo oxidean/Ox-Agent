@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// TestInitDoctorStartStatus exercises the init → doctor → start → status happy path.
 func TestInitDoctorStartStatus(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -28,6 +29,7 @@ func TestInitDoctorStartStatus(t *testing.T) {
 	}
 }
 
+// TestInitIsNonDestructive verifies init refuses to overwrite an existing project.
 func TestInitIsNonDestructive(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -38,6 +40,7 @@ func TestInitIsNonDestructive(t *testing.T) {
 	}
 }
 
+// TestInitMaterializesConfigAndPolicy verifies init writes config.yaml and policy.yaml with the documented defaults.
 func TestInitMaterializesConfigAndPolicy(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -64,6 +67,7 @@ func TestInitMaterializesConfigAndPolicy(t *testing.T) {
 	}
 }
 
+// TestFindProjectRootWalksUp verifies project discovery resolves the root from nested subdirectories.
 func TestFindProjectRootWalksUp(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -89,6 +93,7 @@ func TestFindProjectRootWalksUp(t *testing.T) {
 	}
 }
 
+// TestInitUsesCurrentDirectoryName verifies init derives project.name from the directory basename.
 func TestInitUsesCurrentDirectoryName(t *testing.T) {
 	project := filepath.Join(t.TempDir(), "alpha-project")
 	if err := os.Mkdir(project, 0o755); err != nil {
@@ -107,6 +112,7 @@ func TestInitUsesCurrentDirectoryName(t *testing.T) {
 	}
 }
 
+// TestStartAllocatesUniqueIDsAcrossBuckets verifies WI numbering continues past archived items.
 func TestStartAllocatesUniqueIDsAcrossBuckets(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -127,6 +133,7 @@ func TestStartAllocatesUniqueIDsAcrossBuckets(t *testing.T) {
 	}
 }
 
+// TestStartSanitizesSlug verifies title slugification strips unsafe characters and caps length.
 func TestStartSanitizesSlug(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -141,6 +148,7 @@ func TestStartSanitizesSlug(t *testing.T) {
 	}
 }
 
+// TestStartAppendsCreatedEvent verifies start journals a work_item.created event.
 func TestStartAppendsCreatedEvent(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -162,6 +170,7 @@ func TestStartAppendsCreatedEvent(t *testing.T) {
 	}
 }
 
+// TestStartSerializesConcurrentAllocation verifies the allocation lock serializes concurrent start calls.
 func TestStartSerializesConcurrentAllocation(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -203,6 +212,7 @@ func TestStartSerializesConcurrentAllocation(t *testing.T) {
 	}
 }
 
+// TestStartReclaimsStaleAllocationLock verifies a stale lock file is reclaimed rather than blocking forever.
 func TestStartReclaimsStaleAllocationLock(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -228,6 +238,7 @@ func TestStartReclaimsStaleAllocationLock(t *testing.T) {
 	}
 }
 
+// TestStartRollsBackWhenEventAppendFails verifies start removes the new work item when event journaling fails.
 func TestStartRollsBackWhenEventAppendFails(t *testing.T) {
 	root := t.TempDir()
 	if err := initProject(root); err != nil {
@@ -252,6 +263,7 @@ func TestStartRollsBackWhenEventAppendFails(t *testing.T) {
 	}
 }
 
+// TestInitRetryAfterPublishFailure verifies init can be retried after a mid-scaffold failure.
 func TestInitRetryAfterPublishFailure(t *testing.T) {
 	root := t.TempDir()
 	injected := errors.New("publish failed")
@@ -273,6 +285,7 @@ func TestInitRetryAfterPublishFailure(t *testing.T) {
 	}
 }
 
+// TestInitPreservesUnownedStagingDirs verifies init does not delete staging directories it did not create.
 func TestInitPreservesUnownedStagingDirs(t *testing.T) {
 	root := t.TempDir()
 	unowned := filepath.Join(root, ".ox-agent.tmp-stale")
