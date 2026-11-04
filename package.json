@@ -1,5 +1,5 @@
 {
-  "name": "ox-agent",
+  "name": "@oxidean/ox-agent",
   "version": "0.1.0",
   "description": "Repository-local, token-efficient AI software development lifecycle kit",
   "type": "module",
@@ -20,7 +20,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "bun run build && bun test",
-    "validate": "bun run build && bun dist/cli.js doctor"
+    "package": "bun run build && bun pm pack",
+    "validate": "bun run build && bun dist/cli.js doctor",
+    "validate-package": "bun run package && bun scripts/validate-package.mjs",
+    "version": "bun dist/cli.js --version"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "dependencies": {
     "ajv": "^8.17.1",

@@ -42,9 +42,27 @@ GitHub Actions runs the same core checks as local development:
 - `bun run build`
 - `bun test`
 - `bun run validate`
+- Package-content validation
 - CLI smoke testing in a temporary project
 
 CI intentionally does not install remote skills or invoke LLMs.
+
+## Package release
+
+Set the package version, create a matching `v*.*.*` tag, and push the tag to
+trigger `.github/workflows/release.yml`. Before tagging, run:
+
+```bash
+bun install --frozen-lockfile
+bun run build
+bun test
+bun run validate
+bun run validate-package
+```
+
+The release workflow publishes `@oxidean/ox-agent` to GitHub Packages and
+creates a GitHub release. Publishing requires the workflow's `packages: write`
+permission.
 
 ## Documentation changes
 

@@ -27,37 +27,45 @@ and difficult to audit. Ox-Agent provides:
 ## Prerequisites
 
 - Bun `>= 1.4`
-- Git
-- Network access for remote skill installation
-- `bunx skills` access for skill installation and updates
+- GitHub Packages access with a token that has `read:packages`
 - A compatible coding-agent harness for future skill execution
-
-Ox-Agent is not published to npm yet. The quickstart below installs it from a
-local checkout.
 
 ## Quickstart
 
-```bash
-git clone https://github.com/oxidean/Ox-Agent.git
-cd Ox-Agent
-bun install
-bun run build
+Ox-Agent is distributed as the scoped GitHub Packages package
+`@oxidean/ox-agent`. Configure the `@oxidean` scope in your user-level
+`.npmrc` (Bun uses this registry configuration too):
 
-mkdir ../ox-agent-test-project
-cd ../ox-agent-test-project
-bun init -y
-bun add --dev file:../Ox-Agent
-
-bun node_modules/ox-agent/dist/cli.js init
-bun node_modules/ox-agent/dist/cli.js doctor
-bun node_modules/ox-agent/dist/cli.js start "Add a health-check endpoint"
-bun node_modules/ox-agent/dist/cli.js status
+```ini
+@oxidean:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
-After Ox-Agent is published, the same commands can use `bunx ox-agent`.
-For a local checkout, invoke the installed binary directly as shown above.
-`start` currently creates work-item scaffolding; it does not yet dispatch an
-agent or execute the requested change.
+Set `GITHUB_TOKEN` to a GitHub token with access to the package, then run these
+commands from the repository you want to manage:
+
+```bash
+bunx --bun --package @oxidean/ox-agent ox-agent init
+bunx --bun --package @oxidean/ox-agent ox-agent doctor
+bunx --bun --package @oxidean/ox-agent ox-agent start \
+  "Add a health-check endpoint"
+bunx --bun --package @oxidean/ox-agent ox-agent status
+```
+
+For repeated use, install the CLI globally:
+
+```bash
+bun add --global @oxidean/ox-agent --registry https://npm.pkg.github.com
+ox-agent init
+```
+
+`init` is non-destructive and refuses to overwrite an existing `.ox-agent/`
+directory. `start` currently creates work-item scaffolding; it does not yet
+dispatch an agent or execute the requested change.
+
+> The GitHub Packages release workflow must publish a version before the
+> package commands above can be used. Contributors working from a checkout
+> should follow [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Current status
 
@@ -100,10 +108,13 @@ See [`docs/cli.md`](docs/cli.md) for command behavior and options.
 ## Continuous integration
 
 The repository includes `.github/workflows/ci.yml`. Pull requests targeting
-`main` and pushes to `main` or `init` run `bun install --frozen-lockfile`,
-`bun run build`, `bun test`, `bun run validate`, and a CLI smoke test in a
-temporary project. CI does not install remote skills or invoke LLMs, so these
-checks remain deterministic.
+`main` and pushes to `main` run `bun install --frozen-lockfile`, `bun run build`,
+`bun test`, `bun run validate`, package-content validation, and a CLI smoke test
+in a temporary project. CI does not install remote skills or invoke LLMs, so
+these checks remain deterministic.
+
+Tagged releases use `.github/workflows/release.yml` to validate, package, and
+publish `@oxidean/ox-agent` to GitHub Packages.
 
 ## Configuration and governance
 
