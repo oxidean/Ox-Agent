@@ -27,7 +27,7 @@ export async function initCommand(root: string): Promise<void> {
     framework: { name: 'ox-agent', source: 'oxidean/ox-agent', ref: 'main' },
     project: { name: path.basename(root), test_command: '' },
     workflow: { default_profile: 'normal', profiles: { normal: ['discover', 'brainstorm', 'specify', 'plan', 'implement', 'verify', 'ship'] } },
-    skills: { enabled: ['brainstorm', 'specify', 'adr', 'multi-stage-plan', 'tdd', 'code-review', 'shipping', 'discussion', 'progress'] },
+    skills: { enabled: ['brainstorm'] },
   });
   await writeYaml(path.join(ox, 'policy.yaml'), {
     schema_version: 1,

@@ -14,12 +14,13 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "bun": ">=1.2.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test",
-    "validate": "npm run build && node dist/cli.js doctor"
+    "test": "bun run build && bun test",
+    "validate": "bun run build && bun dist/cli.js doctor"
   },
   "dependencies": {
     "ajv": "^8.17.1",
@@ -29,5 +30,5 @@
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   },
-  "packageManager": "pnpm@9.15.6+sha512.139cab068fdf0b751268179ac5f909b5be72afb4a75c513d1905d151befc8977b593d3cf8671ed83d4d6637c5c94b98ffbce108125de4a5a27a31233601a99de"
+  "packageManager": "bun@1.4.0"
 }

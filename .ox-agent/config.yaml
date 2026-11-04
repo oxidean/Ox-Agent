@@ -20,11 +20,3 @@ workflow:
 skills:
   enabled:
     - brainstorm
-    - specify
-    - adr
-    - multi-stage-plan
-    - tdd
-    - code-review
-    - shipping
-    - discussion
-    - progress
