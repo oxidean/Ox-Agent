@@ -62,16 +62,17 @@ before installing a binary.
 
 ## Releases
 
-Run the release preparation workflow from `main`, select `patch`, `minor`, or
-`major`, and let the workflow create the strict release commit and matching
-annotated tag:
+Tag the commit to release on `main` with an annotated `v*.*.*` tag and push it:
 
-```text
-v0.2.0: release 0.2.0
+```bash
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
-The release workflow builds the Go binary, creates archives for supported
-platforms, generates checksums, and creates the GitHub Release.
+The tag triggers `.github/workflows/release.yml`, which builds the Go binary,
+creates archives for supported platforms, generates checksums, and creates the
+GitHub Release. To republish an existing tag, dispatch `release.yml` manually
+with the tag as input.
 
 ## Documentation changes
 

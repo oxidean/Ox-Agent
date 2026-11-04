@@ -16,10 +16,9 @@ curl -fsSL \
 Install a specific release:
 
 ```bash
-OX_AGENT_VERSION=v0.2.0 \
-  curl -fsSL \
+curl -fsSL \
   https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.sh \
-  | bash
+  | OX_AGENT_VERSION=v0.2.0 bash
 ```
 
 The default destination is `~/.local/bin`. Set `OX_AGENT_INSTALL_DIR` to use a

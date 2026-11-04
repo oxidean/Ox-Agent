@@ -41,10 +41,9 @@ Ensure that directory is on your `PATH`.
 Install a specific version:
 
 ```bash
-OX_AGENT_VERSION=v0.2.0 \
-  curl -fsSL \
+curl -fsSL \
   https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.sh \
-  | bash
+  | OX_AGENT_VERSION=v0.2.0 bash
 ```
 
 Verify the installation:

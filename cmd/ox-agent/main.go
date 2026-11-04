@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,7 +95,11 @@ func initProject(root string) error {
 	if err := materializeAssets(base); err != nil {
 		return err
 	}
-	project := filepath.Base(root)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolving project root: %w", err)
+	}
+	project := filepath.Base(absRoot)
 	config := projectConfig{SchemaVersion: 1}
 	config.Framework.Name = "ox-agent"
 	config.Framework.Distribution = "standalone"
@@ -163,18 +170,14 @@ func start(root, title string) error {
 	if strings.TrimSpace(title) == "" {
 		return errors.New("start requires a work-item title")
 	}
-	base := filepath.Join(root, ".ox-agent", "work", "active")
-	entries, err := os.ReadDir(base)
+	workRoot := filepath.Join(root, ".ox-agent", "work")
+	next, err := nextWorkItemNumber(workRoot)
 	if err != nil {
-		return fmt.Errorf("reading active work items: %w", err)
+		return err
 	}
-	id := fmt.Sprintf("WI-%04d", len(entries)+1)
-	slug := strings.Trim(strings.ToLower(strings.NewReplacer(" ", "-", "/", "-", "_", "-").Replace(title)), "-")
-	if slug == "" {
-		slug = "work-item"
-	}
-	dir := filepath.Join(base, id+"-"+slug)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	id := fmt.Sprintf("WI-%04d", next)
+	dir := filepath.Join(workRoot, "active", id+"-"+slugify(title))
+	if err := os.Mkdir(dir, 0o755); err != nil {
 		return fmt.Errorf("creating work item: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -186,7 +189,88 @@ func start(root, title string) error {
 	if err := os.WriteFile(filepath.Join(dir, "index.json"), append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("writing work item: %w", err)
 	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		rel = dir
+	}
+	if err := appendEvent(root, lifecycleEvent{
+		Type:       "work_item.created",
+		WorkItemID: id,
+		Actor:      "cli",
+		Data:       map[string]any{"title": title, "directory": filepath.ToSlash(rel)},
+	}); err != nil {
+		return err
+	}
 	fmt.Printf("%s: %s\n", id, title)
+	return nil
+}
+
+var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
+
+func slugify(title string) string {
+	slug := strings.Trim(nonSlugChars.ReplaceAllString(strings.ToLower(title), "-"), "-")
+	if len(slug) > 48 {
+		slug = strings.Trim(slug[:48], "-")
+	}
+	if slug == "" {
+		slug = "work-item"
+	}
+	return slug
+}
+
+func nextWorkItemNumber(workRoot string) (int, error) {
+	highest := 0
+	for _, bucket := range []string{"active", "archived"} {
+		entries, err := os.ReadDir(filepath.Join(workRoot, bucket))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return 0, fmt.Errorf("reading %s work items: %w", bucket, err)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, "WI-") {
+				continue
+			}
+			digits := name[3:]
+			if i := strings.IndexByte(digits, '-'); i >= 0 {
+				digits = digits[:i]
+			}
+			if n, err := strconv.Atoi(digits); err == nil && n > highest {
+				highest = n
+			}
+		}
+	}
+	return highest + 1, nil
+}
+
+type lifecycleEvent struct {
+	SchemaVersion int            `json:"schema_version"`
+	EventID       string         `json:"event_id"`
+	Timestamp     string         `json:"timestamp"`
+	Type          string         `json:"type"`
+	WorkItemID    string         `json:"work_item_id"`
+	Actor         string         `json:"actor"`
+	Data          map[string]any `json:"data,omitempty"`
+}
+
+func appendEvent(root string, event lifecycleEvent) error {
+	event.SchemaVersion = 1
+	event.EventID = fmt.Sprintf("evt_%d_%06x", time.Now().UnixMilli(), rand.Uint64N(1<<24))
+	event.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encoding lifecycle event: %w", err)
+	}
+	file, err := os.OpenFile(filepath.Join(root, ".ox-agent", "state", "events.ndjson"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening event journal: %w", err)
+	}
+	defer file.Close()
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("appending lifecycle event: %w", err)
+	}
 	return nil
 }
 
