@@ -2,25 +2,41 @@
 
 ## Development prerequisites
 
-- Bun `>= 1.4`
+- Go 1.26 or newer
 - Git
 - A checkout of this repository
 
 ## Development commands
 
 ```bash
-bun install --frozen-lockfile
-bun run build
-bun test
-bun run validate
+go test ./...
+go vet ./...
+go build ./cmd/ox-agent
 ```
 
-`bun run validate` builds the CLI and runs `doctor` against the repository's
-own `.ox-agent/` state.
+The CLI embeds the asset tree under `cmd/ox-agent/assets/`. When changing
+skills, schemas, workflows, or pipelines, update the embedded assets and test a
+fresh temporary project:
+
+```bash
+tmp=$(mktemp -d)
+go build -o "$tmp/ox-agent" ./cmd/ox-agent
+(cd "$tmp" && ./ox-agent init && ./ox-agent doctor)
+rm -rf "$tmp"
+```
+
+## Distribution model
+
+Ox-Agent is a globally installed Go binary. Target repositories do not install
+Ox-Agent through npm, Bun, or project dependencies. The binary materializes and
+validates project-local `.ox-agent/` skills, workflows, pipelines, schemas, and
+work-item state.
 
 ## Adding a skill
 
-Official skills live under `skills/`. Every skill must provide:
+Official skill assets live under `cmd/ox-agent/assets/skills/` in the standalone
+binary distribution and are mirrored from the canonical `skills/` definitions.
+Every skill must provide:
 
 - `skill.yaml` metadata
 - `SKILL.md` instructions
@@ -29,66 +45,38 @@ Official skills live under `skills/`. Every skill must provide:
 - `evals/evals.yaml`
 
 Skills must use the Ox-Agent skill API and remain compatible with the declared
-framework version. See [`skills/README.md`](skills/README.md).
-
-Projects consume official skills or a pinned Ox-Agent fork. Do not add
-project-specific overrides to the target repository's `.ox-agent/skills/`.
+framework version. Projects consume official skills or a compatible fork; do
+not patch installed project skills in place.
 
 ## CI
 
-GitHub Actions runs the same core checks as local development:
+Go CI runs:
 
-- `bun install --frozen-lockfile`
-- `bun run build`
-- `bun test`
-- `bun run validate`
-- Package-content validation
-- CLI smoke testing in a temporary project
+- `go test ./...`
+- `go vet ./...`
+- `go build ./cmd/ox-agent`
 
-CI intentionally does not install remote skills or invoke LLMs.
+Release CI builds cross-platform archives, generates checksums, and publishes
+GitHub Release assets. The shell and PowerShell installers verify checksums
+before installing a binary.
 
-## Package release
+## Releases
 
-Use the **Prepare release** GitHub Actions workflow from the `main` branch and
-select `patch`, `minor`, or `major`. The workflow calculates the next strict
-SemVer version, validates the repository and package, commits the version bump,
-validates the release commit, creates the matching annotated tag, and pushes
-both the commit and tag.
-
-Release commits must use this exact format:
-
-```text
-v0.2.0: release 0.2.0
-```
-
-The tag must match the package version:
-
-```text
-package.json: 0.2.0
-tag:        v0.2.0
-```
-
-The prepare workflow publishes `@oxidean/ox-agent` and creates the GitHub
-release in the same run after pushing the tag. The tag-triggered
-`.github/workflows/release.yml` remains available for manual recovery of an
-existing tag; GitHub does not start a new workflow from events emitted with the
-default `GITHUB_TOKEN`.
-
-The release workflows require `contents: write` and `packages: write`.
-
-To run the same checks locally before manually creating a release:
+Tag the commit to release on `main` with an annotated `v*.*.*` tag and push it:
 
 ```bash
-bun install --frozen-lockfile
-bun run build
-bun test
-bun run validate
-bun run validate-package
-bun scripts/release-version.mjs patch  # modifies package.json; do not run casually
-bun scripts/validate-release.mjs HEAD v0.2.0
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
+
+The tag triggers `.github/workflows/release.yml`, which builds the Go binary,
+creates archives for supported platforms, generates checksums, and creates the
+GitHub Release. To republish an existing tag, first delete the published
+release (`gh release delete <tag> --yes`, which keeps the tag), then dispatch
+`release.yml` manually with the tag as input.
 
 ## Documentation changes
 
 Keep the root README product and end-user focused. Put detailed CLI behavior in
-[`docs/cli.md`](docs/cli.md), and keep contributor instructions here.
+`docs/cli.md`, installation details in `docs/install.md`, and release details in
+`docs/releasing.md` as those documents are added.

@@ -8,7 +8,7 @@ description: >-
   operational requirements before shipping.
 compatibility:
   skill_api: 1
-  ox_agent: '>=0.1.0 <0.2.0'
+  ox_agent: '>=0.2.0 <0.3.0'
 inputs:
   schema: schemas/input.schema.json
 outputs:

@@ -1,12 +1,15 @@
 # Contributing to Ox-Agent
 
-Ox-Agent is a greenfield TypeScript CLI and skill distribution. Keep the core deterministic and token-efficient.
+Ox-Agent is a Go CLI and repository-local AI-SDLC distribution. Keep the binary
+small, deterministic, and token-efficient.
 
 ## Rules
 
-- Keep all target-project artifacts under `.ox-agent/`.
-- Do not add project-local skill overrides; modify skills in this repository or an explicit fork.
-- Validate changes with `npm run build`, `npm test`, and `npm run validate`.
-- Keep CLI commands deterministic. LLM calls belong behind skill or harness contracts.
-- Preserve append-only event and discussion semantics.
-- New skills require `skill.yaml`, `SKILL.md`, input/output schemas, and evaluation cases.
+- The globally installed `ox-agent` binary is the execution boundary.
+- Target repositories store project assets and state under `.ox-agent/`.
+- Do not reintroduce npm, Bun, or project-local runtime installation.
+- Preserve `.ox-agent/` compatibility and append-only event semantics.
+- Official assets must be embedded and materialized consistently.
+- New skills require metadata, instructions, input/output schemas, and evals.
+- Run `go test ./...`, `go vet ./...`, and `go build ./cmd/ox-agent`.
+- Checksum and release changes must be tested against a temporary project.

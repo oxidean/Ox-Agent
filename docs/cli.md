@@ -1,61 +1,43 @@
 # CLI reference
 
-The CLI is available as `bunx --bun --package @oxidean/ox-agent ox-agent` after
-installing the published GitHub Packages package. During local development,
-run `bun dist/cli.js` from the Ox-Agent checkout.
+Ox-Agent is a globally installed Go binary. Run it from any repository after
+installing the release binary.
 
-## Project commands
+## `ox-agent version`
 
-### `init`
+Print the installed binary version.
 
-Create `.ox-agent/` in the current directory. The command is non-destructive
-and refuses to overwrite an existing directory.
+## `ox-agent init`
 
-### `doctor`
+Create the repository-local `.ox-agent/` directory. The command materializes
+the official skills, schemas, workflows, and pipelines embedded in the binary.
+It is non-destructive and refuses to overwrite an existing `.ox-agent/`.
 
-Validate the supported project configuration, policy, installed skill manifests,
-evaluation manifests, and discussion summaries. Exits non-zero when validation
-fails.
+## `ox-agent doctor`
 
-### `start <title>`
+Validate the local framework configuration and required repository-local
+structure. It also reports the installed binary version.
 
-Create a work item under `.ox-agent/work/active/` and append a creation event.
-Phase 0 creates the record only; it does not execute the work item.
+## `ox-agent start <title>`
 
-### `status [work-item]`
+Create a work item under `.ox-agent/work/active/`. The current foundation
+creates the work-item record; lifecycle execution is implemented incrementally.
 
-List active and archived work items. The optional identifier uses prefix
-matching, for example `bunx ox-agent status WI-0001`.
+## `ox-agent status`
 
-## Skill commands
+List active work items.
 
-### `skills list`
+## Planned commands
 
-List installed skills and their metadata.
+The following commands are part of the standalone roadmap:
 
-### `skills install [source] [--skill <name>]`
-
-Delegate skill installation to the external `bunx skills` CLI. If no source is
-provided, the source configured in `.ox-agent/config.yaml` is used. If no skill
-is selected, the enabled skills from project configuration are requested.
-
-Example:
-
-```bash
-bunx ox-agent skills install /path/to/ox-agent --skill brainstorm
+```text
+ox-agent update
+ox-agent update --check
+ox-agent state replay <work-item>
+ox-agent state explain <work-item>
+ox-agent context compile <work-item>
+ox-agent run <work-item>
+ox-agent review <work-item>
+ox-agent ship <work-item>
 ```
-
-### `skills check`
-
-Check for available updates through `bunx skills`. A non-zero result indicates
-that updates are available or the check failed.
-
-### `skills update [--yes]`
-
-Update skills through `bunx skills`. Use `--yes` in non-interactive environments.
-Updates should be reviewed before applying them to active work.
-
-## Exit behavior
-
-The CLI exits non-zero when a command cannot complete, the project root cannot
-be found, validation fails, or the delegated skills command fails.
