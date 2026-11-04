@@ -238,9 +238,14 @@ func findProjectRoot(start string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if current, err = filepath.EvalSymlinks(current); err != nil {
+		return "", fmt.Errorf("resolving %s: %w", start, err)
+	}
 	for {
 		if _, err := os.Stat(filepath.Join(current, ".ox-agent")); err == nil {
 			return current, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("checking %s: %w", filepath.Join(current, ".ox-agent"), err)
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
