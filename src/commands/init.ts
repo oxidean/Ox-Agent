@@ -2,6 +2,33 @@ import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureDir, writeText, writeYaml } from '../core/files.js';
 
+const DEFAULT_SKILLS = [
+  'discover-context',
+  'brainstorm',
+  'specify',
+  'adr',
+  'multi-stage-plan',
+  'tdd',
+  'implementation',
+  'code-review',
+  'verify',
+  'discussion',
+  'progress',
+  'shipping',
+  'retrospective',
+];
+
+const DEFAULT_STAGE_SKILLS = {
+  discovery: ['discover-context'],
+  brainstorming: ['brainstorm', 'adr'],
+  specification: ['specify', 'adr'],
+  planning: ['multi-stage-plan'],
+  implementation: ['tdd', 'implementation'],
+  verification: ['code-review', 'verify'],
+  shipping: ['shipping'],
+  retrospective: ['retrospective', 'progress'],
+};
+
 export async function initCommand(root: string): Promise<void> {
   const ox = path.join(root, '.ox-agent');
   try {
@@ -27,7 +54,7 @@ export async function initCommand(root: string): Promise<void> {
     framework: { name: 'ox-agent', source: 'oxidean/ox-agent', ref: 'main' },
     project: { name: path.basename(root), test_command: '' },
     workflow: { default_profile: 'normal', profiles: { normal: ['discover', 'brainstorm', 'specify', 'plan', 'implement', 'verify', 'ship'] } },
-    skills: { enabled: ['brainstorm'] },
+    skills: { enabled: DEFAULT_SKILLS, stage_skills: DEFAULT_STAGE_SKILLS },
   });
   await writeYaml(path.join(ox, 'policy.yaml'), {
     schema_version: 1,
@@ -35,7 +62,11 @@ export async function initCommand(root: string): Promise<void> {
     approvals: { production_deploy: 'human', destructive_change: 'human', policy_change: 'human' },
     budgets: { max_parallel_agents: 4, max_child_depth: 1, max_fix_cycles: 3 },
   });
-  await writeYaml(path.join(ox, 'lifecycle', 'workflow.yaml'), { schema_version: 1, states: ['intake', 'discovering', 'brainstorming', 'specifying', 'planning', 'implementing', 'verifying', 'shipping', 'shipped', 'blocked'] });
+  await writeYaml(path.join(ox, 'lifecycle', 'workflow.yaml'), {
+    schema_version: 1,
+    states: ['intake', 'discovering', 'brainstorming', 'specifying', 'planning', 'implementing', 'verifying', 'shipping', 'shipped', 'blocked'],
+    stage_skills: DEFAULT_STAGE_SKILLS,
+  });
   await writeYaml(path.join(ox, 'context', 'project.yaml'), { schema_version: 1, name: path.basename(root), standards: [] });
   await writeText(path.join(ox, 'README.md'), '# Ox-Agent project state\n\nThis directory contains the repository-local Ox-Agent configuration and work artifacts.\n');
   await writeText(path.join(ox, 'state', 'events.ndjson'), '');

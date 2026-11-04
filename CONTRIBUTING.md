@@ -2,7 +2,7 @@
 
 ## Development prerequisites
 
-- Bun `>= 1.2`
+- Bun `>= 1.4`
 - Git
 - A checkout of this repository
 

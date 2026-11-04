@@ -36,7 +36,7 @@ List installed skills and their metadata.
 
 ### `skills install [source] [--skill <name>]`
 
-Delegate skill installation to the external `npx skills` CLI. If no source is
+Delegate skill installation to the external `bunx skills` CLI. If no source is
 provided, the source configured in `.ox-agent/config.yaml` is used. If no skill
 is selected, the enabled skills from project configuration are requested.
 
@@ -48,12 +48,12 @@ bunx ox-agent skills install /path/to/ox-agent --skill brainstorm
 
 ### `skills check`
 
-Check for available updates through `npx skills`. A non-zero result indicates
+Check for available updates through `bunx skills`. A non-zero result indicates
 that updates are available or the check failed.
 
 ### `skills update [--yes]`
 
-Update skills through `npx skills`. Use `--yes` in non-interactive environments.
+Update skills through `bunx skills`. Use `--yes` in non-interactive environments.
 Updates should be reviewed before applying them to active work.
 
 ## Exit behavior

@@ -4,8 +4,8 @@ version: 0.1.0
 kind: core
 category: brainstorming
 description: >-
-  Run structured divergent and convergent analysis for a work item, preserving
-  disagreement and producing decision-ready options.
+  Run structured divergent and convergent analysis for a work item while
+  preserving disagreement and producing decision-ready options.
 compatibility:
   skill_api: 1
   ox_agent: '>=0.1.0 <0.2.0'

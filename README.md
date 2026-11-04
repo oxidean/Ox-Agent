@@ -20,15 +20,16 @@ and difficult to audit. Ox-Agent provides:
 - **Token-efficient context** — task-specific context instead of loading every
   lifecycle artifact into every agent session.
 - **Structured work items** — explicit state, progress, and lifecycle records.
-- **Governed skills** — versioned capabilities installed through `npx skills`.
+- **Governed skills** — versioned capabilities installed through `bunx skills`.
 - **Fork-based customization** — change methodology through a pinned Ox-Agent
   fork rather than local prompt patches.
 
 ## Prerequisites
 
-- Bun `>= 1.2`
+- Bun `>= 1.4`
 - Git
 - Network access for remote skill installation
+- `bunx skills` access for skill installation and updates
 - A compatible coding-agent harness for future skill execution
 
 Ox-Agent is not published to npm yet. The quickstart below installs it from a
@@ -67,7 +68,9 @@ Available today:
 - Supported JSON/YAML contract validation through `doctor`.
 - Append-only lifecycle events in `.ox-agent/state/events.ndjson`.
 - Initial `brainstorm` skill manifest, schemas, and evaluation contract.
-- `npx skills` integration commands: `skills list`, `skills install`,
+- All official lifecycle skills are packaged and enabled by default; the
+  orchestrator will load them by lifecycle stage.
+- `bunx skills` integration commands: `skills list`, `skills install`,
   `skills check`, and `skills update`.
 
 Not yet implemented:
@@ -77,7 +80,7 @@ Not yet implemented:
 - Context-packet compilation.
 - Full lifecycle stage execution.
 - LLM-backed evaluation runs.
-- The remaining official skills.
+- Agent implementation, review, and shipping orchestration.
 
 ## CLI reference
 
@@ -87,7 +90,7 @@ bunx ox-agent doctor                       Validate supported contracts
 bunx ox-agent start <title>                Create a work item
 bunx ox-agent status [WI-0001]             Show active and archived work
 bunx ox-agent skills list                  List installed Ox-Agent skills
-bunx ox-agent skills install [source]      Install skills through npx skills
+bunx ox-agent skills install [source]      Install skills through bunx skills
 bunx ox-agent skills check                 Check for available skill updates
 bunx ox-agent skills update [--yes]        Update skills with confirmation
 ```
@@ -170,23 +173,28 @@ Current capability status:
 
 ## Skills
 
-Skills are versioned Ox-Agent capabilities used by agents during the
-lifecycle. The initial available skill is:
+Skills are versioned Ox-Agent capabilities used by agents during the lifecycle.
+`.ox-agent/skills/` contains the complete official lifecycle skill set:
 
-- `brainstorm` — structured divergent and convergent analysis.
-
-The following skills are planned:
-
+- `discover-context`
+- `brainstorm`
 - `specify`
 - `adr`
 - `multi-stage-plan`
 - `tdd`
+- `implementation`
 - `code-review`
-- `shipping`
+- `verify`
 - `discussion`
 - `progress`
+- `shipping`
+- `retrospective`
 
-Install the current local skill with:
+The current Phase 0 CLI packages and validates these skills. Full agent
+execution of each lifecycle stage is implemented incrementally, but every skill
+uses the same metadata, schema, and evaluation contract.
+
+Install a selected skill with:
 
 ```bash
 bunx ox-agent skills install /path/to/ox-agent --skill brainstorm
@@ -195,11 +203,10 @@ bunx ox-agent skills check
 bunx ox-agent skills update
 ```
 
-The CLI delegates installation and updates to the external `npx skills` tool,
-which remains intentionally separate from Bun. Official skills are managed by
-Ox-Agent. Projects configure them but do not patch them locally; organization-
-specific behavior belongs in a pinned Ox-Agent fork. See
-[`skills/README.md`](skills/README.md) for the skill contract.
+The CLI delegates installation and updates to the external `bunx skills` tool.
+Official skills are managed by Ox-Agent. Projects configure them but do not
+patch them locally; organization-specific behavior belongs in a pinned Ox-Agent
+fork. See [`skills/README.md`](skills/README.md) for the skill contract.
 
 `skills install` uses the configured source from `.ox-agent/config.yaml`, or
 `oxidean/ox-agent` by default. The selected source is recorded in

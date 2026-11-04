@@ -15,7 +15,7 @@
   ],
   "engines": {
     "node": ">=20",
-    "bun": ">=1.2.0"
+    "bun": ">=1.4.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -27,6 +27,7 @@
     "yaml": "^2.6.1"
   },
   "devDependencies": {
+    "@types/bun": "1.4.0",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   },

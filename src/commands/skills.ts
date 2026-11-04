@@ -3,9 +3,9 @@ import path from 'node:path';
 import { listDirectories, readYaml, writeYaml } from '../core/files.js';
 import { oxPath } from '../core/paths.js';
 
-function runNpx(args: string[], cwd: string): Promise<number> {
+function runSkills(args: string[], cwd: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['skills', ...args], { cwd, stdio: 'inherit' });
+    const child = spawn('bunx', ['skills', ...args], { cwd, stdio: 'inherit' });
     child.on('error', reject);
     child.on('exit', (code: number | null) => resolve(code ?? 1));
   });
@@ -28,19 +28,19 @@ export async function skillsInstallCommand(root: string, source?: string, select
   const packageSource = source ?? configured.framework?.source ?? 'oxidean/ox-agent';
   const skills = selected.length > 0 ? selected : configured.skills?.enabled ?? ['*'];
   const args = ['add', packageSource, '-y', '--skill', ...skills];
-  const code = await runNpx(args, root);
-  if (code !== 0) throw new Error(`npx skills exited with code ${code}`);
-  await writeYaml(oxPath(root, 'skills.lock'), { schema_version: 1, source: packageSource, skills, installed_at: new Date().toISOString(), installation: 'npx skills symlinks' });
-  console.log('Skills installed through npx skills.');
+  const code = await runSkills(args, root);
+  if (code !== 0) throw new Error(`bunx skills exited with code ${code}`);
+  await writeYaml(oxPath(root, 'skills.lock'), { schema_version: 1, source: packageSource, skills, installed_at: new Date().toISOString(), installation: 'bunx skills symlinks' });
+  console.log('Skills installed through bunx skills.');
 }
 
 export async function skillsCheckCommand(root: string): Promise<void> {
-  const code = await runNpx(['check'], root);
+  const code = await runSkills(['check'], root);
   if (code !== 0) throw new Error('Skill updates are available or the skills check failed.');
 }
 
 export async function skillsUpdateCommand(root: string, yes = false): Promise<void> {
   if (!yes && !process.stdin.isTTY) throw new Error('skills update requires --yes in non-interactive mode');
-  const code = await runNpx(['update', ...(yes ? ['-y'] : [])], root);
-  if (code !== 0) throw new Error(`npx skills update exited with code ${code}`);
+  const code = await runSkills(['update', ...(yes ? ['-y'] : [])], root);
+  if (code !== 0) throw new Error(`bunx skills update exited with code ${code}`);
 }
