@@ -49,8 +49,29 @@ CI intentionally does not install remote skills or invoke LLMs.
 
 ## Package release
 
-Set the package version, create a matching `v*.*.*` tag, and push the tag to
-trigger `.github/workflows/release.yml`. Before tagging, run:
+Use the **Prepare release** GitHub Actions workflow from the `main` branch and
+select `patch`, `minor`, or `major`. The workflow calculates the next strict
+SemVer version, validates the repository and package, commits the version bump,
+validates the release commit, creates the matching annotated tag, and pushes
+both the commit and tag.
+
+Release commits must use this exact format:
+
+```text
+v0.2.0: release 0.2.0
+```
+
+The tag must match the package version:
+
+```text
+package.json: 0.2.0
+tag:        v0.2.0
+```
+
+The tag then triggers `.github/workflows/release.yml`, which publishes
+`@oxidean/ox-agent` to GitHub Packages and creates a GitHub release.
+
+To run the same checks locally before manually creating a release:
 
 ```bash
 bun install --frozen-lockfile
@@ -58,11 +79,11 @@ bun run build
 bun test
 bun run validate
 bun run validate-package
+bun scripts/release-version.mjs patch  # modifies package.json; do not run casually
+bun scripts/validate-release.mjs HEAD v0.2.0
 ```
 
-The release workflow publishes `@oxidean/ox-agent` to GitHub Packages and
-creates a GitHub release. Publishing requires the workflow's `packages: write`
-permission.
+The release workflow requires `contents: write` and `packages: write`.
 
 ## Documentation changes
 
