@@ -1,6 +1,6 @@
 {
   "name": "@oxidean/ox-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Repository-local, token-efficient AI software development lifecycle kit",
   "type": "module",
   "bin": {
