@@ -28,6 +28,8 @@ try {
         try { $pathKind = $userKey.GetValueKind("Path") } catch { }
       }
       $userKey.SetValue("Path", $newPath, $pathKind)
+      # Broadcast the change so processes started later see the new PATH.
+      [Environment]::SetEnvironmentVariable("OX_AGENT_PATH_REFRESH", $null, "User")
       Write-Host "Added $installDir to the user PATH"
     }
   } finally { $userKey.Close() }

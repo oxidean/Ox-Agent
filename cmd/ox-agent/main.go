@@ -79,13 +79,26 @@ Usage:
 }
 
 // initProject materializes a new .ox-agent project scaffold at root.
-func initProject(root string) error {
-	base := filepath.Join(root, ".ox-agent")
-	if _, err := os.Stat(base); err == nil {
-		return fmt.Errorf("%s already exists; refusing to overwrite it", base)
+func initProject(root string) (err error) {
+	finalBase := filepath.Join(root, ".ox-agent")
+	if _, err := os.Stat(finalBase); err == nil {
+		return fmt.Errorf("%s already exists; refusing to overwrite it", finalBase)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	for _, stale := range mustGlob(filepath.Join(root, ".ox-agent.tmp-*")) {
+		_ = os.RemoveAll(stale)
+	}
+	staging, err := os.MkdirTemp(root, ".ox-agent.tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temporary scaffold: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	base := staging
 	dirs := []string{
 		"skills", "work/active", "work/archived", "context/standards",
 		"lifecycle", "workflows", "pipelines", "state", "integrations",
@@ -120,8 +133,21 @@ func initProject(root string) error {
 	if err := os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644); err != nil {
 		return fmt.Errorf("creating event journal: %w", err)
 	}
-	fmt.Printf("Initialized %s\n", base)
+	if err := renameScaffold(base, finalBase); err != nil {
+		return fmt.Errorf("publishing project scaffold: %w", err)
+	}
+	fmt.Printf("Initialized %s\n", finalBase)
 	return nil
+}
+
+// renameScaffold publishes a fully staged scaffold; a var so tests can inject failures.
+var renameScaffold = os.Rename
+
+// mustGlob returns the matches for pattern, swallowing the only possible
+// error (ErrBadPattern), which cannot occur for the fixed patterns used here.
+func mustGlob(pattern string) []string {
+	matches, _ := filepath.Glob(pattern)
+	return matches
 }
 
 // materializeAssets expands the embedded asset tree under base.

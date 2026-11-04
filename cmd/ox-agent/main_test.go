@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,5 +198,43 @@ func TestStartRollsBackWhenEventAppendFails(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("rolled-back work item remains: %v", entries)
+	}
+}
+
+func TestInitRetryAfterPublishFailure(t *testing.T) {
+	root := t.TempDir()
+	injected := errors.New("publish failed")
+	restore := renameScaffold
+	renameScaffold = func(string, string) error { return injected }
+	defer func() { renameScaffold = restore }()
+	if err := initProject(root); !errors.Is(err, injected) {
+		t.Fatalf("initProject() error = %v, want %v", err, injected)
+	}
+	renameScaffold = restore
+	if _, err := os.Stat(filepath.Join(root, ".ox-agent")); !os.IsNotExist(err) {
+		t.Fatalf("partial .ox-agent scaffold remains after failure: %v", err)
+	}
+	if leftovers := mustGlob(filepath.Join(root, ".ox-agent.tmp-*")); len(leftovers) != 0 {
+		t.Fatalf("staging residue remains after failure: %v", leftovers)
+	}
+	if err := initProject(root); err != nil {
+		t.Fatalf("retry initProject() error = %v", err)
+	}
+}
+
+func TestInitRemovesStaleStagingDirs(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, ".ox-agent.tmp-stale")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatalf("seeding stale staging dir: %v", err)
+	}
+	if err := initProject(root); err != nil {
+		t.Fatalf("initProject() error = %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale staging dir remains after init: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".ox-agent")); err != nil {
+		t.Fatalf(".ox-agent scaffold missing: %v", err)
 	}
 }
