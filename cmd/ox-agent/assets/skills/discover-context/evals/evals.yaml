@@ -1,0 +1,19 @@
+schema_version: 1
+skill: ox-agent/discover-context
+cases:
+  - id: valid-scoped-request
+    prompt: >-
+      Discover relevant project standards, architecture, ADRs, code patterns,
+      tests, and constraints for the current work item.
+    expected:
+      output_schema_valid: true
+  - id: respects-scope
+    prompt: >-
+      Execute the skill using only the supplied work-item context and
+      constraints.
+    expected:
+      output_schema_valid: true
+      preserves_scope: true
+thresholds:
+  schema_pass_rate: 1.0
+  quality_pass_rate: 0.9

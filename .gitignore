@@ -1,5 +1,6 @@
 node_modules/
 dist/
+/ox-agent
 .ox-agent/runtime/cache/
 .ox-agent/runtime/packets/
 .ox-agent/runtime/runs/

@@ -1,0 +1,13 @@
+name: plan
+version: 1
+steps:
+  - id: discover
+    skill: discover-context
+  - id: brainstorm
+    skill: brainstorm
+  - id: specify
+    skill: specify
+    depends_on: [discover, brainstorm]
+  - id: validate
+    skill: verify
+    depends_on: [specify]
