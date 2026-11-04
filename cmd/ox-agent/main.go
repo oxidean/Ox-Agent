@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// version is the build version, injected via -ldflags at release time.
 var version = "dev"
 
 //go:embed all:assets
@@ -86,12 +87,9 @@ func initProject(root string) (err error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	for _, stale := range mustGlob(filepath.Join(root, ".ox-agent.tmp-*")) {
-		_ = os.RemoveAll(stale)
-	}
-	staging, err := os.MkdirTemp(root, ".ox-agent.tmp-*")
+	staging, err := newStagingDir(root)
 	if err != nil {
-		return fmt.Errorf("creating temporary scaffold: %w", err)
+		return err
 	}
 	defer func() {
 		if err != nil {
@@ -143,11 +141,20 @@ func initProject(root string) (err error) {
 // renameScaffold publishes a fully staged scaffold; a var so tests can inject failures.
 var renameScaffold = os.Rename
 
-// mustGlob returns the matches for pattern, swallowing the only possible
-// error (ErrBadPattern), which cannot occur for the fixed patterns used here.
-func mustGlob(pattern string) []string {
-	matches, _ := filepath.Glob(pattern)
-	return matches
+// newStagingDir creates a uniquely named staging directory under root with
+// mode 0755 subject to the process umask, retrying on name collisions.
+func newStagingDir(root string) (string, error) {
+	for i := 0; i < 10; i++ {
+		candidate := filepath.Join(root, fmt.Sprintf(".ox-agent.tmp-%08x", rand.Uint32()))
+		if err := os.Mkdir(candidate, 0o755); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("creating temporary scaffold: %w", err)
+		}
+		return candidate, nil
+	}
+	return "", errors.New("creating temporary scaffold: no unique name available")
 }
 
 // materializeAssets expands the embedded asset tree under base.
@@ -258,6 +265,7 @@ func start(root, title string) error {
 	return nil
 }
 
+// nonSlugChars matches title characters that are not valid in a work-item slug.
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
 
 // slugify converts a work-item title into a filesystem-safe directory suffix.

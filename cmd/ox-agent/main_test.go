@@ -214,7 +214,7 @@ func TestInitRetryAfterPublishFailure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".ox-agent")); !os.IsNotExist(err) {
 		t.Fatalf("partial .ox-agent scaffold remains after failure: %v", err)
 	}
-	if leftovers := mustGlob(filepath.Join(root, ".ox-agent.tmp-*")); len(leftovers) != 0 {
+	if leftovers, _ := filepath.Glob(filepath.Join(root, ".ox-agent.tmp-*")); len(leftovers) != 0 {
 		t.Fatalf("staging residue remains after failure: %v", leftovers)
 	}
 	if err := initProject(root); err != nil {
@@ -222,17 +222,17 @@ func TestInitRetryAfterPublishFailure(t *testing.T) {
 	}
 }
 
-func TestInitRemovesStaleStagingDirs(t *testing.T) {
+func TestInitPreservesUnownedStagingDirs(t *testing.T) {
 	root := t.TempDir()
-	stale := filepath.Join(root, ".ox-agent.tmp-stale")
-	if err := os.MkdirAll(stale, 0o755); err != nil {
-		t.Fatalf("seeding stale staging dir: %v", err)
+	unowned := filepath.Join(root, ".ox-agent.tmp-stale")
+	if err := os.MkdirAll(unowned, 0o755); err != nil {
+		t.Fatalf("seeding unowned staging dir: %v", err)
 	}
 	if err := initProject(root); err != nil {
 		t.Fatalf("initProject() error = %v", err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale staging dir remains after init: %v", err)
+	if _, err := os.Stat(unowned); err != nil {
+		t.Fatalf("unowned staging dir was removed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".ox-agent")); err != nil {
 		t.Fatalf(".ox-agent scaffold missing: %v", err)
