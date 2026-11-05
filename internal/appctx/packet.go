@@ -123,6 +123,12 @@ func Compile(root string, item *state.WorkItem, skill, stage string, budget int,
 		return nil, err
 	}
 	packet.Context.PriorOutputs = priors
+	_ = state.Append(root, state.Event{
+		Type:       "context.compiled",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"packet_id": packet.PacketID, "skill": packet.Skill, "stage": stage},
+	})
 	return packet, nil
 }
 

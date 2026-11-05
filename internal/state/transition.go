@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/oxidean/Ox-Agent/internal/project"
 )
 
 // indexPath returns the work item's index.json path.
@@ -211,4 +213,80 @@ func EventsFor(root, workItemID string, limit int) ([]Event, error) {
 		out = out[len(out)-limit:]
 	}
 	return out, nil
+}
+
+// ApprovalRequiredError reports a lifecycle edge that needs a human
+// approver; the CLI surfaces it as guidance rather than a failure.
+type ApprovalRequiredError struct {
+	ID   string
+	From string
+	To   string
+}
+
+// Error formats the approval hint with the exact command to run.
+func (e *ApprovalRequiredError) Error() string {
+	return fmt.Sprintf("transition %s → %s requires human approval (run: ox-agent transition %s %s --by <name>)", e.From, e.To, e.ID, e.To)
+}
+
+// Advance moves the work item to the next stage of its profile and applies
+// the mapped lifecycle state transition when the new stage maps to one. It
+// returns the new stage name, or "" when the profile is complete.
+func (item *WorkItem) Advance(root, actor string) (string, error) {
+	settings, err := project.LoadSettings(root)
+	if err != nil {
+		return "", err
+	}
+	stages := settings.Workflow.Profiles[item.Profile]
+	if len(stages) == 0 {
+		return "", fmt.Errorf("profile %q has no stages", item.Profile)
+	}
+	idx := -1
+	for i, stage := range stages {
+		if stage == item.CurrentStage {
+			idx = i
+			break
+		}
+	}
+	next := ""
+	if idx == -1 {
+		if item.CurrentStage != "intake" {
+			return "", fmt.Errorf("current_stage %q is not in profile %q", item.CurrentStage, item.Profile)
+		}
+		next = stages[0]
+	} else {
+		if idx == len(stages)-1 {
+			return "", nil
+		}
+		next = stages[idx+1]
+	}
+	previous := item.CurrentStage
+	if target, ok := stageToState[next]; ok && target != item.State {
+		life, err := LoadLifecycle(root)
+		if err != nil {
+			return "", err
+		}
+		gate, legal := life.Find(item.State, target)
+		if !legal {
+			return "", fmt.Errorf("no lifecycle path %s → %s; transition the work item manually", item.State, target)
+		}
+		if gate == "human" {
+			return "", &ApprovalRequiredError{ID: item.ID, From: item.State, To: target}
+		}
+		if err := item.Transition(root, target, actor, "", "advance to "+next); err != nil {
+			return "", err
+		}
+	}
+	item.CurrentStage = next
+	if err := item.Save(); err != nil {
+		return "", err
+	}
+	if err := Append(root, Event{
+		Type:       "work_item.stage_advanced",
+		WorkItemID: item.ID,
+		Actor:      actor,
+		Data:       map[string]any{"from_stage": previous, "to_stage": next},
+	}); err != nil {
+		return "", err
+	}
+	return next, nil
 }

@@ -167,3 +167,34 @@ func newArchiveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&by, "by", "", "approver name for human-gated archives")
 	return cmd
 }
+
+// newAdvanceCmd builds the advance command, moving a work item to its
+// profile's next stage and applying the mapped lifecycle transition.
+func newAdvanceCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "advance <work-item>",
+		Short:   "Advance a work item to the next profile stage",
+		Args:    cobra.ExactArgs(1),
+		GroupID: "work",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := project.Find(".")
+			if err != nil {
+				return err
+			}
+			item, err := state.Resolve(root, args[0])
+			if err != nil {
+				return err
+			}
+			next, err := item.Advance(root, "cli")
+			if err != nil {
+				return err
+			}
+			if next == "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: profile %s complete\n", item.ID, item.Profile)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: stage → %s (state %s)\n", item.ID, next, item.State)
+			return nil
+		},
+	}
+}

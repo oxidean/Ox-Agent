@@ -12,7 +12,7 @@ import (
 // newInitCmd builds the init command, which materializes .ox-agent/.
 func newInitCmd() *cobra.Command {
 	var path string
-	var repair bool
+	var repair, integrate bool
 	cmd := &cobra.Command{
 		Use:     "init",
 		Short:   "Initialize .ox-agent/ in a repository",
@@ -43,11 +43,19 @@ func newInitCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Initialized %s\n", filepath.Join(path, ".ox-agent"))
+			if integrate {
+				report, err := project.Integrate(path)
+				if err != nil {
+					return err
+				}
+				printIntegrateReport(cmd, report)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&path, "path", ".", "directory to initialize")
 	cmd.Flags().BoolVar(&repair, "repair", false, "restore missing scaffold pieces in an existing project")
+	cmd.Flags().BoolVar(&integrate, "integrate", false, "wire AGENTS.md and .agents/skills discovery into the project")
 	return cmd
 }
 

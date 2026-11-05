@@ -1,0 +1,267 @@
+package harness
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/oxidean/Ox-Agent/internal/appctx"
+	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/state"
+)
+
+// Run is one dispatched skill invocation, mirroring run.schema.json.
+type Run struct {
+	SchemaVersion int    `json:"schema_version"`
+	RunID         string `json:"run_id"`
+	WorkItemID    string `json:"work_item_id"`
+	Skill         string `json:"skill"`
+	Stage         string `json:"stage"`
+	Adapter       string `json:"adapter"`
+	Status        string `json:"status"`
+	PacketPath    string `json:"packet_path"`
+	CreatedAt     string `json:"created_at"`
+	CollectedAt   string `json:"collected_at,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Dir           string `json:"-"`
+}
+
+// runsDir returns the runtime/runs directory under root.
+func runsDir(root string) string {
+	return filepath.Join(root, ".ox-agent", "runtime", "runs")
+}
+
+// save persists run.json into the run directory.
+func (r *Run) save(root string) error {
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(runsDir(root), r.RunID, "run.json"), append(data, '\n'), 0o644)
+}
+
+// LoadRun reads a run record by id.
+func LoadRun(root, runID string) (*Run, error) {
+	data, err := os.ReadFile(filepath.Join(runsDir(root), runID, "run.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no run %q", runID)
+		}
+		return nil, err
+	}
+	var run Run
+	if err := json.Unmarshal(data, &run); err != nil {
+		return nil, fmt.Errorf("parsing run %s: %w", runID, err)
+	}
+	run.Dir = filepath.Join(runsDir(root), runID)
+	return &run, nil
+}
+
+// PendingRuns lists run ids awaiting collection.
+func PendingRuns(root string) ([]string, error) {
+	entries, err := os.ReadDir(runsDir(root))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		run, err := LoadRun(root, entry.Name())
+		if err == nil && run.Status == "pending" {
+			out = append(out, run.RunID)
+		}
+	}
+	return out, nil
+}
+
+// NextSkill picks the first stage_skills entry for the stage that has no
+// collected run on this work item yet.
+func NextSkill(root string, item *state.WorkItem, stage string, skills map[string][]string) (string, error) {
+	candidates := skills[stage]
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no skills mapped to stage %q", stage)
+	}
+	collected := map[string]bool{}
+	entries, err := os.ReadDir(runsDir(root))
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			run, err := LoadRun(root, entry.Name())
+			if err == nil && run.WorkItemID == item.ID && run.Stage == stage && run.Status == "collected" {
+				collected[run.Skill] = true
+			}
+		}
+	}
+	for _, skill := range candidates {
+		if !collected["ox-agent/"+skill] && !collected[skill] {
+			return skill, nil
+		}
+	}
+	return "", fmt.Errorf("all %d skill(s) for stage %q already collected", len(candidates), stage)
+}
+
+// Dispatch compiles the packet and creates a pending run. For manual
+// integrations the operator completes the run offline and collects it later.
+func Dispatch(root string, item *state.WorkItem, skill, stage, integrationName string, budget int) (*Run, error) {
+	integration, err := Resolve(root, integrationName)
+	if err != nil {
+		return nil, err
+	}
+	runID := fmt.Sprintf("run_%d_%06x", time.Now().UnixMilli(), rand.Uint64N(1<<24))
+	rel := "runtime/runs/" + runID
+	runDir := filepath.Join(root, ".ox-agent", filepath.FromSlash(rel))
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		return nil, err
+	}
+	packet, err := appctx.Compile(root, item, skill, stage, budget, rel+"/output.json")
+	if err != nil {
+		return nil, err
+	}
+	data, err := packet.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "packet.json"), append(data, '\n'), 0o644); err != nil {
+		return nil, err
+	}
+	run := &Run{
+		SchemaVersion: 1,
+		RunID:         runID,
+		WorkItemID:    item.ID,
+		Skill:         packet.Skill,
+		Stage:         stage,
+		Adapter:       integration.Adapter,
+		Status:        "pending",
+		PacketPath:    rel + "/packet.json",
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		Dir:           runDir,
+	}
+	if err := run.save(root); err != nil {
+		return nil, err
+	}
+	if err := state.Append(root, state.Event{
+		Type:       "skill.invoked",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"run_id": runID, "skill": packet.Skill, "stage": stage, "adapter": integration.Adapter},
+	}); err != nil {
+		return nil, err
+	}
+	if integration.Adapter == "spawn-cli" {
+		if err := run.spawn(root, integration); err != nil {
+			return nil, err
+		}
+	} else if integration.Adapter == "api" {
+		return nil, fmt.Errorf("integration %q uses adapter api, which is not implemented yet", integration.Name)
+	}
+	return run, nil
+}
+
+// Collect validates a pending run's output.json against the skill's output
+// schema, journals the outcome, and applies the declared next_action.
+func Collect(root, runID string) (*Run, map[string]any, error) {
+	run, err := LoadRun(root, runID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if run.Status != "pending" {
+		return nil, nil, fmt.Errorf("run %s is %s, not pending", runID, run.Status)
+	}
+	item, err := state.Resolve(root, run.WorkItemID)
+	if err != nil {
+		return nil, nil, err
+	}
+	outputPath := filepath.Join(run.Dir, "output.json")
+	outputData, err := os.ReadFile(outputPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("run %s has no output.json yet: %w", runID, err)
+	}
+	skill := strings.TrimPrefix(run.Skill, "ox-agent/")
+	schemaPath := filepath.Join(root, ".ox-agent", "skills", skill, "schemas", "output.schema.json")
+	if err := contract.ValidateFile(schemaPath, outputData); err != nil {
+		run.Status = "failed"
+		run.Error = "output failed schema validation: " + err.Error()
+		_ = run.save(root)
+		_ = state.Append(root, state.Event{
+			Type:       "skill.failed",
+			WorkItemID: item.ID,
+			Actor:      "ox-agent",
+			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+		})
+		return run, nil, fmt.Errorf("output for %s failed validation: %w", runID, err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(outputData, &output); err != nil {
+		return nil, nil, fmt.Errorf("parsing output.json: %w", err)
+	}
+	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
+	status, _ := output["status"].(string)
+	verdict, _ := output["verdict"].(string)
+	if status == "failed" {
+		run.Status = "failed"
+		run.Error, _ = output["summary"].(string)
+	} else {
+		run.Status = "collected"
+	}
+	if err := run.save(root); err != nil {
+		return nil, nil, err
+	}
+	eventType := "skill.completed"
+	if run.Status == "failed" {
+		eventType = "skill.failed"
+	}
+	if err := state.Append(root, state.Event{
+		Type:       eventType,
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict},
+	}); err != nil {
+		return run, output, err
+	}
+	if run.Status == "collected" {
+		if err := applyOutcome(root, item, output); err != nil {
+			return run, output, err
+		}
+	}
+	return run, output, nil
+}
+
+// applyOutcome applies the skill's verdict and next_action to the work item:
+// blocked verdicts block the item, rework stays, and pass verdicts advance
+// the stage (surfacing approval requirements to the operator).
+func applyOutcome(root string, item *state.WorkItem, output map[string]any) error {
+	status, _ := output["status"].(string)
+	verdict, _ := output["verdict"].(string)
+	next, _ := output["next_action"].(map[string]any)
+	action, _ := next["type"].(string)
+	reason, _ := next["reason"].(string)
+	summary, _ := output["summary"].(string)
+	if reason == "" {
+		reason = summary
+	}
+	switch {
+	case status == "blocked" || verdict == "blocked" || action == "escalate":
+		if item.State != "blocked" {
+			return item.Transition(root, "blocked", "ox-agent", "", reason)
+		}
+		return nil
+	case verdict == "needs_rework" || action == "retry":
+		return nil
+	case action == "advance_stage" || action == "complete" || action == "" || verdict == "pass" || verdict == "pass_with_notes":
+		_, err := item.Advance(root, "ox-agent")
+		return err
+	default:
+		return fmt.Errorf("unknown next_action.type %q", action)
+	}
+}
