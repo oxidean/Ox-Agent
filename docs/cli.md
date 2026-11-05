@@ -84,6 +84,19 @@ description: Dispatch runs to the myagent CLI.
 Validate a run's `output.json` against the skill's output schema, journal the
 result, and apply `next_action`. Invalid output marks the run failed.
 
+A run ends in one of three statuses:
+
+- `collected` — the output was applied. Collected runs count toward skill
+  selection, stage completion, and pipeline progress.
+- `retry` — the output signalled unfinished work (`verdict: needs_rework`,
+  `next_action.type: retry`, or an escalated rework). The skill stays
+  dispatchable and does not count as done.
+- `failed` — schema validation failed or the skill reported `status: failed`.
+
+Completion checks use only the latest run per skill or pipeline step: a
+collected run superseded by a newer retry no longer counts, so the skill is
+re-selected after the item is unblocked.
+
 ### `ox-agent review <work-item>` / `ox-agent ship <work-item>`
 
 Shortcuts for `run --pipeline review` and `run --pipeline ship`.
