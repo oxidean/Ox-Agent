@@ -22,6 +22,17 @@ archives:
         formats: [zip]
 checksum:
   name_template: checksums.txt
+signs:
+  - cmd: cosign
+    env:
+      - COSIGN_EXPERIMENTAL=1
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "--yes"
+      - "${artifact}"
+    artifacts: checksum
 release:
   prerelease: auto
   extra_files:

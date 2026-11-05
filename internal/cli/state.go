@@ -16,40 +16,7 @@ func newStateCmd() *cobra.Command {
 		Use:   "state",
 		Short: "Inspect and fold work-item state",
 	}
-	cmd.AddCommand(newStateReplayCmd(), newStateExplainCmd(), newEventsCmd())
-	return cmd
-}
-
-// newEventsCmd builds the events listing command.
-func newEventsCmd() *cobra.Command {
-	var eventType string
-	cmd := &cobra.Command{
-		Use:   "events [work-item]",
-		Short: "List journal events, optionally for one work item",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			root, err := project.Find(".")
-			if err != nil {
-				return err
-			}
-			events, err := state.ReadEvents(root)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			for _, event := range events {
-				if len(args) == 1 && event.WorkItemID != args[0] {
-					continue
-				}
-				if eventType != "" && event.Type != eventType {
-					continue
-				}
-				fmt.Fprintf(out, "%s %s %s\n", event.Timestamp, event.Type, event.WorkItemID)
-			}
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&eventType, "type", "", "only show events of this type")
+	cmd.AddCommand(newStateReplayCmd(), newStateExplainCmd())
 	return cmd
 }
 

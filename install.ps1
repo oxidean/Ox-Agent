@@ -1,6 +1,23 @@
 $ErrorActionPreference = "Stop"
 $repo = if ($env:OX_AGENT_REPOSITORY) { $env:OX_AGENT_REPOSITORY } else { "oxidean/Ox-Agent" }
-$version = if ($env:OX_AGENT_VERSION) { $env:OX_AGENT_VERSION } else { (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name }
+$version = $env:OX_AGENT_VERSION
+if (-not $version) {
+  # Resolve "latest" from the releases/latest redirect — avoids the
+  # api.github.com JSON endpoint and its unauthenticated rate limit.
+  try {
+    $response = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -Method Head -UseBasicParsing
+    # ResponseUri exists only on some hosts; probe via PSObject so the access
+    # stays safe under caller-enabled strict mode, then fall back to the
+    # final request URI.
+    $finalUri = $null
+    if ($null -ne $response.BaseResponse -and $response.BaseResponse.PSObject.Properties['ResponseUri']) {
+      $finalUri = $response.BaseResponse.ResponseUri
+    }
+    if ($null -eq $finalUri -and $null -ne $response.BaseResponse.RequestMessage) { $finalUri = $response.BaseResponse.RequestMessage.RequestUri }
+    if ($finalUri -and $finalUri.AbsoluteUri -match '/tag/([^/]+)$') { $version = $Matches[1] }
+  } catch { }
+}
+if (-not $version) { throw "Could not determine the latest release tag; set OX_AGENT_VERSION to install a specific version" }
 $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { throw "Unsupported architecture" }
 $archive = "ox-agent_$($version.TrimStart('v'))_windows_${arch}.zip"
 $base = "https://github.com/$repo/releases/download/$version"

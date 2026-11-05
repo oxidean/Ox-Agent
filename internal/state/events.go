@@ -8,6 +8,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,8 +51,12 @@ func Append(root string, event Event) error {
 	return nil
 }
 
-// ReadEvents parses every entry in the project event journal. A missing
-// journal reads as empty; malformed lines report their line number.
+// ReadEvents parses every entry in the project event journal in timestamp
+// order. The journal merges with the union driver across branches, which can
+// interleave cross-branch appends out of chronological order; readers sort by
+// the recorded timestamp so replay, snapshots, and LastEventID stay correct
+// regardless of file position. A missing journal reads as empty; malformed
+// lines report their line number.
 func ReadEvents(root string) ([]Event, error) {
 	data, err := os.ReadFile(journalPath(root))
 	if err != nil {
@@ -70,5 +76,27 @@ func ReadEvents(root string) ([]Event, error) {
 		}
 		events = append(events, event)
 	}
+	sort.SliceStable(events, func(i, j int) bool {
+		return eventOrderKey(events[i]) < eventOrderKey(events[j])
+	})
 	return events, nil
+}
+
+// eventOrderKey returns a millisecond ordering key for an event. The
+// millisecond value embedded in evt_<millis>_<suffix> ids is the primary
+// key so same-second events order by creation sequence rather than by
+// journal position after a union merge; the second-precision timestamp is
+// the fallback for events without a parseable id.
+func eventOrderKey(event Event) int64 {
+	if rest, ok := strings.CutPrefix(event.EventID, "evt_"); ok {
+		if i := strings.IndexByte(rest, '_'); i > 0 {
+			if ms, err := strconv.ParseInt(rest[:i], 10, 64); err == nil {
+				return ms
+			}
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, event.Timestamp); err == nil {
+		return t.UnixMilli()
+	}
+	return 0
 }

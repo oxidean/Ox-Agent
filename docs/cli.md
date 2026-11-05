@@ -63,6 +63,22 @@ The manual adapter writes the packet under `runtime/runs/<id>/packet.json`,
 prints the skill documentation path, and waits for
 `runtime/runs/<id>/output.json`.
 
+Supported adapters are `manual` and `spawn-cli`; new adapters are added per
+concrete consumer, never as generic placeholders. A `spawn-cli` integration
+shells a command template — `{packet}`, `{output}`, and `{run_dir}` expand to
+paths under the run directory — and works for any agent CLI, including remote
+dispatch (`ssh host agent ...`). Example, saved as
+`.ox-agent/integrations/myagent.yaml`:
+
+```yaml
+schema_version: 1
+name: myagent
+adapter: spawn-cli
+command: "myagent run --packet {packet} --write-output {output}"
+timeout_seconds: 600
+description: Dispatch runs to the myagent CLI.
+```
+
 ### `ox-agent run collect <run-id>`
 
 Validate a run's `output.json` against the skill's output schema, journal the
@@ -98,9 +114,12 @@ Rebuild current work-item state by replaying the event journal.
 
 Print the journal events that produced the current state.
 
-### `ox-agent state events [work-item]`
+### `ox-agent events [work-item]`
 
-List raw journal events, optionally filtered to one work item.
+Inspect the project event journal — the audit spine every command appends
+to. With a work item (id or directory name) only its events print.
+`--type <prefix>` filters by event-type prefix (e.g. `work_item`), `--json`
+emits the raw journal lines.
 
 Snapshots are written under `.ox-agent/state/snapshots/` and journal
 `snapshot.written` events.
@@ -116,6 +135,29 @@ Build the context index over `.ox-agent/context/` and `.ox-agent/discussions/`.
 Compile a token-budgeted context packet for `--skill` at the work item's
 current stage. Prints to stdout, or writes to the `.ox-agent`-relative path
 given by `-o/--output`. Journals `context.compiled`.
+
+## Skills
+
+### `ox-agent skills list`
+
+List every materialized skill under `.ox-agent/skills/` with its version,
+enabled flag, drift status against the embedded distribution
+(`current`/`modified`/`incomplete`/`project`), and binary compatibility.
+Directories the embedded tree does not cover are project-local skills.
+
+### `ox-agent skills check`
+
+Validate each materialized skill: `skill.yaml` against the manifest schema,
+declared input/output schemas present and compilable, `SKILL.md` present,
+eval suite present, and the `compatibility.ox_agent` pin satisfied by the
+running binary. Exits non-zero on any error finding.
+
+### `ox-agent skills update [--yes]`
+
+Re-materialize embedded skill files that are missing or drifted from the
+binary's embedded copy, and refresh the asset lock. Missing files are always
+restored; drifted files are only overwritten with `--yes` (otherwise listed
+as skipped). Project-local skills are never touched.
 
 ## Administration
 

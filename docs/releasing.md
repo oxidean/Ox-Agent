@@ -14,6 +14,30 @@ go build ./cmd/ox-agent
 
 GoReleaser creates archives for supported platforms and architectures, plus
 `checksums.txt`. The shell installer verifies the checksum before installation.
+`checksums.txt` is signed keylessly with cosign during the release workflow;
+the Sigstore bundle publishes alongside it as `checksums.txt.sigstore.json`:
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github\.com/oxidean/Ox-Agent/\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+The identity pins the signing to the release workflow on tag refs. Releases
+republished through `workflow_dispatch` carry a branch ref instead — verify
+those against `@refs/heads/<dispatch-branch>`:
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github\.com/oxidean/Ox-Agent/\.github/workflows/release\.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+Republishing a tag only produces a signature bundle when the tag's tree carries
+the signing configuration — `v0.0.1` predates it, so republishing that tag
+rebuilds unsigned artifacts.
 
 ## Release workflow
 
