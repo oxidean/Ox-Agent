@@ -4,9 +4,25 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// symlinkOrSkip plants a fixture symlink, skipping the test on Windows hosts
+// without symlink privilege (ERROR_PRIVILEGE_NOT_HELD) rather than failing —
+// Developer Mode or elevation is not guaranteed there. Other errors fail so
+// fixture mistakes stay visible.
+func symlinkOrSkip(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.Symlink(oldname, newname); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skipf("symlink privilege unavailable: %v", err)
+		}
+		t.Fatalf("creating symlink: %v", err)
+	}
+}
 
 // TestInitDoctor verifies init produces a scaffold doctor accepts.
 func TestInitDoctor(t *testing.T) {
@@ -237,9 +253,7 @@ func TestRepairConfinesWritesToProject(t *testing.T) {
 		if err := os.Remove(target); err != nil {
 			t.Fatalf("removing asset: %v", err)
 		}
-		if err := os.Symlink(outside, target); err != nil {
-			t.Fatalf("planting symlink: %v", err)
-		}
+		symlinkOrSkip(t, outside, target)
 		if _, err := Repair(root); err != nil {
 			t.Fatalf("Repair() error = %v", err)
 		}
@@ -260,9 +274,7 @@ func TestRepairConfinesWritesToProject(t *testing.T) {
 		if err := os.Remove(target); err != nil {
 			t.Fatalf("removing asset: %v", err)
 		}
-		if err := os.Symlink(outside, target); err != nil {
-			t.Fatalf("planting symlink: %v", err)
-		}
+		symlinkOrSkip(t, outside, target)
 		if _, err := Repair(root); err != nil {
 			t.Fatalf("Repair() error = %v", err)
 		}
@@ -294,9 +306,7 @@ func TestRepairConfinesWritesToProject(t *testing.T) {
 		if err := os.RemoveAll(skillsDir); err != nil {
 			t.Fatalf("removing skills dir: %v", err)
 		}
-		if err := os.Symlink(outside, skillsDir); err != nil {
-			t.Fatalf("symlinking skills dir: %v", err)
-		}
+		symlinkOrSkip(t, outside, skillsDir)
 		if _, err := Repair(root); err == nil {
 			t.Fatal("Repair() succeeded through a symlinked parent dir; want refusal")
 		}
@@ -349,9 +359,7 @@ func TestDoctorWarnsWithoutIntegration(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "AGENTS.md")); err != nil {
 		t.Fatalf("removing AGENTS.md: %v", err)
 	}
-	if err := os.Symlink("../elsewhere", link); err != nil {
-		t.Fatalf("creating foreign link: %v", err)
-	}
+	symlinkOrSkip(t, "../elsewhere", link)
 	report = Doctor(root)
 	found = false
 	for _, w := range report.Warnings {
@@ -366,9 +374,7 @@ func TestDoctorWarnsWithoutIntegration(t *testing.T) {
 	if err := os.Remove(link); err != nil {
 		t.Fatalf("removing foreign link: %v", err)
 	}
-	if err := os.Symlink(filepath.Join("..", ".ox-agent", "skills"), link); err != nil {
-		t.Fatalf("creating managed link: %v", err)
-	}
+	symlinkOrSkip(t, filepath.Join("..", ".ox-agent", "skills"), link)
 	report = Doctor(root)
 	for _, w := range report.Warnings {
 		if strings.Contains(w, "ox-agent integrate") {
