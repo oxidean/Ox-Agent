@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -277,7 +278,11 @@ func TestDispatchRejectsAPIAdapter(t *testing.T) {
 // TestSpawnCLIResolvesRunDirPlaceholders verifies {packet}/{output}/{run_dir}
 // expand to paths under the real run directory so the spawned command (whose
 // working directory is the project root, not .ox-agent) can reach them.
+// spawn-cli runs through `sh -c`, which only exists on Unix platforms.
 func TestSpawnCLIResolvesRunDirPlaceholders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("spawn-cli runs commands through sh -c, which is unavailable on Windows")
+	}
 	root, item := initProject(t)
 	integrations := filepath.Join(root, ".ox-agent", "integrations")
 	if err := os.WriteFile(filepath.Join(integrations, "copy.yaml"), []byte(
