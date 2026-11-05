@@ -12,11 +12,18 @@ import (
 	"time"
 )
 
-// WorkItem is a work item record under .ox-agent/work.
+// WorkItem is a work item index record under .ox-agent/work.
 type WorkItem struct {
-	ID    string
-	Title string
-	Dir   string
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	State         string `json:"state"`
+	Profile       string `json:"profile"`
+	CurrentStage  string `json:"current_stage"`
+	BlockedFrom   string `json:"blocked_from,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+	Dir           string `json:"-"`
 }
 
 // workRoot returns the .ox-agent/work directory under root.
@@ -47,7 +54,7 @@ func Start(root, title string) (_ *WorkItem, err error) {
 		}
 		created = true
 		now := time.Now().UTC().Format(time.RFC3339)
-		index := map[string]any{"schema_version": 1, "id": id, "title": title, "state": "intake", "profile": "normal", "current_stage": "intake", "created_at": now}
+		index := WorkItem{SchemaVersion: 1, ID: id, Title: title, State: "intake", Profile: "normal", CurrentStage: "intake", CreatedAt: now}
 		data, err := json.MarshalIndent(index, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encoding work item: %w", err)
@@ -80,7 +87,7 @@ func Start(root, title string) (_ *WorkItem, err error) {
 		}
 		return nil, err
 	}
-	return &WorkItem{ID: id, Title: title, Dir: dir}, nil
+	return &WorkItem{ID: id, Title: title, State: "intake", Profile: "normal", CurrentStage: "intake", Dir: dir}, nil
 }
 
 // ListActive returns the directory names of active work items.

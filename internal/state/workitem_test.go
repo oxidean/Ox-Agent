@@ -155,3 +155,117 @@ func TestStartRollsBackWhenEventAppendFails(t *testing.T) {
 		t.Fatalf("rolled-back work item remains: %v", entries)
 	}
 }
+
+// startItem creates a work item and returns it resolved.
+func startItem(t *testing.T, root, title string) *WorkItem {
+	t.Helper()
+	if _, err := Start(root, title); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err := Resolve(root, "WI-0001")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	return item
+}
+
+// TestTransitionWalksLifecycle verifies the linear chain advances and the
+// index records state, stage, and timestamps.
+func TestTransitionWalksLifecycle(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "lifecycle walk")
+	for _, target := range []string{"discovering", "brainstorming", "specifying", "planning", "implementing", "verifying"} {
+		if err := item.Transition(root, target, "cli", "", ""); err != nil {
+			t.Fatalf("Transition(%s) error = %v", target, err)
+		}
+	}
+	if item.State != "verifying" || item.CurrentStage != "verification" {
+		t.Fatalf("state=%s stage=%s, want verifying/verification", item.State, item.CurrentStage)
+	}
+	if err := item.Transition(root, "implementing", "cli", "", "rework"); err != nil {
+		t.Fatalf("rework transition error = %v", err)
+	}
+	if item.State != "implementing" {
+		t.Fatalf("state = %s, want implementing", item.State)
+	}
+}
+
+// TestTransitionRejectsIllegal verifies an edge not in the lifecycle fails.
+func TestTransitionRejectsIllegal(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "illegal move")
+	if err := item.Transition(root, "implementing", "cli", "", ""); err == nil {
+		t.Fatal("intake → implementing succeeded; want rejection")
+	}
+	if item.State != "intake" {
+		t.Fatalf("state mutated on rejected transition: %s", item.State)
+	}
+}
+
+// TestTransitionGateRequiresApprover verifies the shipped edge demands --by.
+func TestTransitionGateRequiresApprover(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "gate check")
+	item.State = "shipping"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding shipping state: %v", err)
+	}
+	if err := item.Transition(root, "shipped", "cli", "", ""); err == nil {
+		t.Fatal("gated transition succeeded without approver")
+	}
+	if err := item.Transition(root, "shipped", "cli", "jesse", ""); err != nil {
+		t.Fatalf("gated transition with approver error = %v", err)
+	}
+	events, err := EventsFor(root, "WI-0001", 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	last := events[len(events)-1]
+	if last.Data["approved_by"] != "jesse" || last.Data["gate"] != "human" {
+		t.Fatalf("gate not journaled: %v", last.Data)
+	}
+}
+
+// TestUnblockReturnsToBlockedFrom verifies blocked items restore their state.
+func TestUnblockReturnsToBlockedFrom(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "block me")
+	if err := item.Transition(root, "discovering", "cli", "", ""); err != nil {
+		t.Fatalf("Transition() error = %v", err)
+	}
+	if err := item.Transition(root, "blocked", "cli", "", "waiting on spec"); err != nil {
+		t.Fatalf("blocking error = %v", err)
+	}
+	if item.BlockedFrom != "discovering" {
+		t.Fatalf("blocked_from = %s, want discovering", item.BlockedFrom)
+	}
+	if err := item.Unblock(root, "cli", "spec landed"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	if item.State != "discovering" {
+		t.Fatalf("state = %s, want discovering", item.State)
+	}
+}
+
+// TestArchiveMovesBucket verifies archive relocates the directory and journals.
+func TestArchiveMovesBucket(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "archive me")
+	if err := item.Archive(root, "cli", "", "done"); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	work := filepath.Join(root, ".ox-agent", "work")
+	if _, err := os.Stat(filepath.Join(work, "archived", "WI-0001-archive-me")); err != nil {
+		t.Fatalf("item not in archived bucket: %v", err)
+	}
+	resolved, err := Resolve(root, "WI-0001")
+	if err != nil {
+		t.Fatalf("resolving archived item: %v", err)
+	}
+	if resolved.State != "archived" {
+		t.Fatalf("state = %s, want archived", resolved.State)
+	}
+	if err := resolved.Archive(root, "cli", "", ""); err == nil {
+		t.Fatal("double archive succeeded; want error")
+	}
+}
