@@ -55,7 +55,7 @@ func validOutput(skill string) map[string]any {
 		"summary":        "done",
 		"artifacts":      []any{},
 		"findings":       []any{},
-		"next_action":    map[string]any{"type": "advance_stage"},
+		"next_action":    map[string]any{"type": "advance_stage", "reason": "unit of work done"},
 	}
 }
 

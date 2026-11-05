@@ -220,7 +220,7 @@ func writeRunOutput(t *testing.T, root, runID string) {
 		"summary":        "e2e",
 		"artifacts":      []any{},
 		"findings":       []any{},
-		"next_action":    map[string]any{"type": "advance_stage"},
+		"next_action":    map[string]any{"type": "advance_stage", "reason": "ship it"},
 	})
 	if err != nil {
 		t.Fatal(err)

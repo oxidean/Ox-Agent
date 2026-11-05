@@ -398,8 +398,19 @@ func (r *DoctorReport) checkIntegration(root string) {
 	if data, err := os.ReadFile(filepath.Join(root, "AGENTS.md")); err == nil && strings.Contains(string(data), markerBegin) {
 		wired = true
 	}
-	if _, err := os.Lstat(filepath.Join(root, ".agents", "skills")); err == nil {
-		wired = true
+	// Only the managed link counts: a symlink at .agents/skills must resolve
+	// to this project's .ox-agent/skills. Foreign dirs or dangling links
+	// leave agents without a path to the materialized skills.
+	link := filepath.Join(root, ".agents", "skills")
+	if target, err := os.Readlink(link); err == nil {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(link), target)
+		}
+		if filepath.Clean(target) == filepath.Join(root, ".ox-agent", "skills") {
+			if _, err := os.Stat(link); err == nil {
+				wired = true
+			}
+		}
 	}
 	if !wired {
 		r.Warnings = append(r.Warnings, "no harness integration detected; run `ox-agent integrate` so agents discover the materialized skills")

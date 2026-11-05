@@ -40,7 +40,7 @@ func validOutput(evalBlock map[string]any) map[string]any {
 		"schema_version": 1, "invocation_id": "e1",
 		"skill": "ox-agent/discover-context", "status": "complete",
 		"verdict": "pass", "summary": "s", "artifacts": []any{},
-		"findings": []any{}, "next_action": map[string]any{"type": "advance_stage"},
+		"findings": []any{}, "next_action": map[string]any{"type": "advance_stage", "reason": "done"},
 		"eval": evalBlock,
 	}
 }
