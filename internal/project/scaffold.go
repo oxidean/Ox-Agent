@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -184,8 +185,27 @@ func newStagingDir(root string) (string, error) {
 	return "", errors.New("creating temporary scaffold: no unique name available")
 }
 
+// readmeContent documents the .ox-agent layout for humans and agents that
+// discover the directory without harness integration.
+const readmeContent = `# Ox-Agent project state
+
+This directory is managed by the ox-agent CLI — a repository-local AI-SDLC
+runtime (https://github.com/oxidean/Ox-Agent).
+
+- Contracts (managed assets, do not edit in place): skills/, schemas/,
+  workflows/, pipelines/, lifecycle/, integrations/ — tracked by assets.lock.
+- Project state: framework.yaml, config.yaml, policy.yaml, work/,
+  state/events.ndjson (append-only journal), discussions/, context/.
+- Generated runtime (gitignored): runtime/ packets and run outputs.
+
+Drive work items with 'ox-agent start|status|transition|run|collect' and
+validate the setup with 'ox-agent doctor'. For agent-harness wiring
+(AGENTS.md block + .agents/skills discovery), run 'ox-agent integrate'.
+`
+
 // writeSeeds writes generated project files that are not static assets:
-// the .gitignore, the asset lock, and the project context file.
+// the .gitignore, the asset lock, the README pointer, and the project
+// context file.
 func writeSeeds(base, project string) error {
 	gitignore := "# Generated ox-agent runtime state; do not commit.\nruntime/\n"
 	if err := os.WriteFile(filepath.Join(base, ".gitignore"), []byte(gitignore), 0o644); err != nil {
@@ -197,6 +217,9 @@ func writeSeeds(base, project string) error {
 	}
 	if err := assets.WriteLock(base); err != nil {
 		return err
+	}
+	if err := os.WriteFile(filepath.Join(base, "README.md"), []byte(readmeContent), 0o644); err != nil {
+		return fmt.Errorf("writing README.md: %w", err)
 	}
 	ctx := struct {
 		SchemaVersion int      `yaml:"schema_version"`
@@ -213,13 +236,16 @@ func writeSeeds(base, project string) error {
 type RepairReport struct {
 	DirsCreated   []string
 	FilesRestored []string
+	FilesSynced   []string
 	SeedsWritten  []string
 }
 
 // Repair restores missing scaffold directories, missing materialized asset
-// files, and missing generated seed files in an existing project. It never
-// overwrites files that already exist; doctor reports drifted content.
-func Repair(root string) (*RepairReport, error) {
+// files, and missing generated seed files in an existing project. With sync
+// false it never overwrites files that already exist; with sync true it also
+// rewrites materialized asset files whose content drifted from the embedded
+// tree. Doctor reports drifted content.
+func Repair(root string, sync bool) (*RepairReport, error) {
 	base := Base(root)
 	if _, err := os.Stat(base); err != nil {
 		if os.IsNotExist(err) {
@@ -245,13 +271,21 @@ func Repair(root string) (*RepairReport, error) {
 	}
 	for _, rel := range files {
 		target := filepath.Join(base, filepath.FromSlash(rel))
-		if _, err := os.Stat(target); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
 		data, err := assets.ReadFile(rel)
 		if err != nil {
+			return nil, err
+		}
+		disk, err := os.ReadFile(target)
+		switch {
+		case err == nil:
+			if sync && !bytes.Equal(disk, data) {
+				if err := os.WriteFile(target, data, 0o644); err != nil {
+					return nil, err
+				}
+				report.FilesSynced = append(report.FilesSynced, rel)
+			}
+			continue
+		case !os.IsNotExist(err):
 			return nil, err
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -306,6 +340,9 @@ func Repair(root string) (*RepairReport, error) {
 			policy.Budgets.MaxFixCycles = 3
 			return writeYAML(filepath.Join(base, "policy.yaml"), policy)
 		},
+		"README.md": func() error {
+			return os.WriteFile(filepath.Join(base, "README.md"), []byte(readmeContent), 0o644)
+		},
 		"context/project.yaml": func() error {
 			ctx := struct {
 				SchemaVersion int      `yaml:"schema_version"`
@@ -315,7 +352,7 @@ func Repair(root string) (*RepairReport, error) {
 			return writeYAML(filepath.Join(base, "context", "project.yaml"), ctx)
 		},
 	}
-	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
+	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "README.md", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		if _, err := os.Stat(target); err == nil {
 			continue

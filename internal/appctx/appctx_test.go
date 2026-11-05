@@ -98,3 +98,24 @@ func TestCompileBuildsContract(t *testing.T) {
 		t.Fatal("Compile() with unknown skill succeeded; want error")
 	}
 }
+
+// TestCompileAcceptsNamespacedSkill verifies Compile resolves the namespaced
+// skill reference form packets and events use.
+func TestCompileAcceptsNamespacedSkill(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "namespaced skill")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	packet, err := Compile(root, item, "ox-agent/specify", "specification", 0, "")
+	if err != nil {
+		t.Fatalf("Compile() with namespaced skill error = %v", err)
+	}
+	if packet.Skill != "ox-agent/specify" || packet.SkillDir != "skills/specify" {
+		t.Fatalf("packet skill fields wrong: %+v", packet)
+	}
+}

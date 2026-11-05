@@ -319,6 +319,13 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 	if reason == "" {
 		reason = summary
 	}
+	// Unknown action types fail loudly even when the verdict would
+	// otherwise drive a transition — a typo'd action must not no-op.
+	switch action {
+	case "", "advance_stage", "complete", "retry", "escalate":
+	default:
+		return fmt.Errorf("unknown next_action.type %q", action)
+	}
 	switch {
 	case status == "blocked" || verdict == "blocked" || action == "escalate":
 		if item.State != "blocked" {
@@ -351,7 +358,6 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 		}
 		_, err = item.Advance(root, "ox-agent")
 		return err
-	default:
-		return fmt.Errorf("unknown next_action.type %q", action)
 	}
+	return nil
 }

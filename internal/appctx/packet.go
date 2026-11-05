@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oxidean/Ox-Agent/internal/project"
+	"github.com/oxidean/Ox-Agent/internal/skills"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
 
@@ -65,6 +66,7 @@ const defaultTokenBudget = 8000
 // expected; it is empty for standalone packet compilation.
 func Compile(root string, item *state.WorkItem, skill, stage string, budget int, outputPath string) (*Packet, error) {
 	base := filepath.Join(root, ".ox-agent")
+	skill = skills.NormalizeName(skill)
 	if _, err := os.Stat(filepath.Join(base, "skills", skill, "skill.yaml")); err != nil {
 		return nil, fmt.Errorf("skill %q is not materialized in this project", skill)
 	}

@@ -135,7 +135,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(base, "discussions")); err != nil {
 		t.Fatalf("removing discussions dir: %v", err)
 	}
-	report, err := Repair(root)
+	report, err := Repair(root, false)
 	if err != nil {
 		t.Fatalf("Repair() error = %v", err)
 	}
@@ -159,7 +159,7 @@ func TestRepairDoesNotOverwrite(t *testing.T) {
 	if err := os.WriteFile(custom, []byte("custom: true\n"), 0o644); err != nil {
 		t.Fatalf("writing custom config: %v", err)
 	}
-	if _, err := Repair(root); err != nil {
+	if _, err := Repair(root, false); err != nil {
 		t.Fatalf("Repair() error = %v", err)
 	}
 	data, err := os.ReadFile(custom)
@@ -197,5 +197,108 @@ func TestInitWritesLockAndGitignore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "context", "project.yaml")); err != nil {
 		t.Fatalf("context/project.yaml missing: %v", err)
+	}
+}
+
+// TestInitWritesReadme verifies init seeds the .ox-agent README pointer and
+// Repair restores it when missing.
+func TestInitWritesReadme(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	readme := filepath.Join(Base(root), "README.md")
+	data, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatalf("README.md missing after Init(): %v", err)
+	}
+	if !strings.Contains(string(data), "ox-agent integrate") {
+		t.Fatal("README.md does not point at integrate")
+	}
+	if err := os.Remove(readme); err != nil {
+		t.Fatalf("removing README.md: %v", err)
+	}
+	report, err := Repair(root, false)
+	if err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	if _, err := os.Stat(readme); err != nil {
+		t.Fatalf("README.md not restored by Repair(): %v", err)
+	}
+	found := false
+	for _, seed := range report.SeedsWritten {
+		if seed == "README.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("README.md missing from SeedsWritten: %v", report.SeedsWritten)
+	}
+}
+
+// TestDoctorWarnsUnintegrated verifies doctor warns about missing agent
+// discovery wiring without failing health, and the warning clears after
+// Integrate.
+func TestDoctorWarnsUnintegrated(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	report := Doctor(root)
+	if !report.Healthy() {
+		t.Fatalf("Doctor() unhealthy on fresh init: %+v", report.Checks)
+	}
+	warned := false
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "integrate") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("Doctor() did not warn about missing integration: %v", report.Warnings)
+	}
+	if _, err := Integrate(root); err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	report = Doctor(root)
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "integrate") {
+			t.Fatalf("integration warning persisted after Integrate(): %v", w)
+		}
+	}
+}
+
+// TestRepairSyncRewritesDrift verifies --sync rewrites materialized assets
+// that drifted from the embedded tree while plain repair leaves them.
+func TestRepairSyncRewritesDrift(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	target := filepath.Join(Base(root), "pipelines", "ship.yaml")
+	if err := os.WriteFile(target, []byte("# local edit\n"), 0o644); err != nil {
+		t.Fatalf("corrupting asset: %v", err)
+	}
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair(false) error = %v", err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "# local edit\n" {
+		t.Fatal("Repair(false) overwrote a drifted file")
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(true) error = %v", err)
+	}
+	found := false
+	for _, rel := range report.FilesSynced {
+		if rel == "pipelines/ship.yaml" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pipelines/ship.yaml missing from FilesSynced: %v", report.FilesSynced)
+	}
+	if data, _ := os.ReadFile(target); string(data) == "# local edit\n" {
+		t.Fatal("Repair(true) did not rewrite the drifted file")
 	}
 }

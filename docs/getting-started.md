@@ -28,6 +28,11 @@ schemas, and policy into `.ox-agent/`. `--integrate` symlinks
 `.agents/skills` (and `.claude/skills`) at `.ox-agent/skills` and adds a
 managed block to `AGENTS.md` so coding agents discover the toolkit.
 
+On Windows the `.agents`/`.claude` links are real symlinks — clones need
+Developer Mode (or `git config core.symlinks true` with an elevated clone)
+for them to resolve; without it, agents can still read `.ox-agent/skills`
+directly.
+
 The scaffold commits to git: `.ox-agent/.gitignore` keeps `runtime/` out;
 `.gitattributes` marks the event journal and discussion threads `merge=union`
 so append-only files merge cleanly across branches.

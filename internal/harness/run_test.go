@@ -305,3 +305,19 @@ func TestSpawnCLIResolvesRunDirPlaceholders(t *testing.T) {
 		t.Fatalf("spawned command did not write output.json into the run dir: %v", err)
 	}
 }
+
+// TestCollectRejectsUnknownNextAction verifies an unrecognized
+// next_action.type fails the run instead of silently following the verdict.
+func TestCollectRejectsUnknownNextAction(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "advance-stage"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() with unknown next_action.type succeeded; want error")
+	}
+}

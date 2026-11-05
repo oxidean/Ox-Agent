@@ -14,6 +14,10 @@ overwrite an existing `.ox-agent/` unless `--repair` is passed.
 
 - `ox-agent init --repair` — restore missing scaffold files and directories in
   an existing `.ox-agent/` without touching existing content.
+- `ox-agent init --repair --sync` — additionally rewrite materialized asset
+  files that drifted from the embedded tree (e.g. after a binary upgrade
+  changed official skills, schemas, or pipelines). Project-local skills are
+  never touched.
 - `ox-agent init --integrate` — additionally wire agent-facing access: create
   `.agents/skills` symlinked to `.ox-agent/skills`, `.claude/skills` pointing at
   it, and a managed block in `AGENTS.md`. Idempotent.

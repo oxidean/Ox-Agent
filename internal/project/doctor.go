@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/oxidean/Ox-Agent/internal/assets"
 	"github.com/oxidean/Ox-Agent/internal/buildinfo"
@@ -61,7 +62,7 @@ func Doctor(root string) *DoctorReport {
 		_, err := os.Stat(filepath.Join(base, dir))
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
 	}
-	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml"} {
+	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "README.md", "state/events.ndjson", "context/project.yaml"} {
 		_, err := os.Stat(filepath.Join(base, filepath.FromSlash(seed)))
 		report.add("file "+seed, wrapMissing(err, "missing"), true)
 	}
@@ -74,7 +75,17 @@ func Doctor(root string) *DoctorReport {
 	report.checkGlob(base, "pipelines", "pipeline")
 	report.checkGlob(base, "integrations", "integration")
 	report.checkAssets(base)
+	report.checkIntegration(root)
 	return report
+}
+
+// checkIntegration warns when agent-discovery wiring is absent. Integration
+// is opt-in, so gaps are warnings rather than failed checks.
+func (r *DoctorReport) checkIntegration(root string) {
+	if missing := IntegrationGaps(root); len(missing) > 0 {
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("agent discovery not wired (%s); run 'ox-agent integrate'", strings.Join(missing, ", ")))
+	}
 }
 
 // wrapMissing converts a stat error into a short issue string.
@@ -381,7 +392,7 @@ func (r *DoctorReport) checkAssets(base string) {
 	}
 	r.add("asset lock", nil, false)
 	if len(changed) > 0 {
-		r.Warnings = append(r.Warnings, fmt.Sprintf("locally modified assets (drift): %v", changed))
+		r.Warnings = append(r.Warnings, fmt.Sprintf("locally modified assets (drift): %v — re-materialize with 'ox-agent init --repair --sync'", changed))
 	}
 	if len(unlisted) > 0 {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("local extension files not in lock: %v", unlisted))

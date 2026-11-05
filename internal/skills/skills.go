@@ -20,6 +20,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// NormalizeName resolves a skill reference to its materialized directory
+// name: both "ox-agent/specify" and the bare "specify" resolve to "specify".
+// Packets, events, and manifests use the namespaced form while the on-disk
+// directory is always bare, so every entry point that accepts a skill
+// reference must normalize through here.
+func NormalizeName(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
 // Status classifies a materialized skill directory against the embedded tree.
 type Status string
 

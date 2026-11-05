@@ -37,6 +37,29 @@ tracked by ` + "`assets.lock`" + `. Add extension skills as new directories inst
 ` + markerEnd + `
 `
 
+// IntegrationGaps lists the discovery pieces Integrate would wire that are
+// currently absent: the managed AGENTS.md block and the .agents/.claude
+// skill symlinks. Returns nil when the project is fully integrated.
+func IntegrationGaps(root string) []string {
+	var missing []string
+	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	if err != nil || !strings.Contains(string(data), markerBegin) {
+		missing = append(missing, "AGENTS.md block")
+	}
+	for _, link := range []string{filepath.Join(".agents", "skills"), filepath.Join(".claude", "skills")} {
+		target, err := os.Readlink(filepath.Join(root, link))
+		if err != nil {
+			missing = append(missing, link+" symlink")
+			continue
+		}
+		resolved := filepath.Join(root, filepath.Dir(link), target)
+		if _, err := os.Stat(resolved); err != nil {
+			missing = append(missing, link+" symlink (broken)")
+		}
+	}
+	return missing
+}
+
 // IntegrateReport summarizes what Integrate changed.
 type IntegrateReport struct {
 	Created  []string
