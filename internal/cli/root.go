@@ -45,6 +45,7 @@ func NewRootCmd() *cobra.Command {
 		newUnblockCmd(),
 		newArchiveCmd(),
 		newStateCmd(),
+		newContextCmd(),
 	)
 	return root
 }
