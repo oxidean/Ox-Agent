@@ -1,9 +1,4 @@
 schema_version: 1
-framework:
-  name: ox-agent
-  distribution: standalone
-  binary: ox-agent
-  required_version: '>=0.2.0 <0.3.0'
 project:
   name: ox-agent
   test_command: go test ./...
@@ -11,15 +6,14 @@ workflow:
   default_profile: normal
   profiles:
     normal:
-      - discover
-      - brainstorm
-      - specify
-      - plan
-      - implement
-      - verify
-      - ship
+      - discovery
+      - brainstorming
+      - specification
+      - planning
+      - implementation
+      - verification
+      - shipping
 skills:
-  source: embedded
   enabled:
     - discover-context
     - brainstorm
@@ -34,3 +28,25 @@ skills:
     - progress
     - shipping
     - retrospective
+  stage_skills:
+    discovery:
+      - discover-context
+    brainstorming:
+      - brainstorm
+      - adr
+    specification:
+      - specify
+      - adr
+    planning:
+      - multi-stage-plan
+    implementation:
+      - tdd
+      - implementation
+    verification:
+      - code-review
+      - verify
+    shipping:
+      - shipping
+    retrospective:
+      - retrospective
+      - progress

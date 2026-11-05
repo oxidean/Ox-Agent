@@ -12,7 +12,7 @@ import (
 
 // defaultStages, defaultSkills, and defaultStageSkills seed a new project's
 // config.yaml with the standard lifecycle profile and bundled skill set.
-var defaultStages = []string{"discover", "brainstorm", "specify", "plan", "implement", "verify", "ship"}
+var defaultStages = []string{"discovery", "brainstorming", "specification", "planning", "implementation", "verification", "shipping"}
 
 var defaultSkills = []string{
 	"discover-context", "brainstorm", "specify", "adr", "multi-stage-plan",
@@ -36,12 +36,13 @@ var renameScaffold = os.Rename
 
 // requiredVersion pins the binary range a fresh scaffold declares
 // compatibility with.
-const requiredVersion = ">=0.2.0 <0.3.0"
+const requiredVersion = ">=0.1.0 <0.2.0"
 
 // scaffoldDirs lists the directories every project scaffold provides.
 var scaffoldDirs = []string{
 	"skills", "work/active", "work/archived", "context/standards",
-	"lifecycle", "workflows", "pipelines", "state", "integrations",
+	"context/decisions", "lifecycle", "workflows", "pipelines",
+	"discussions", "state", "state/snapshots", "integrations",
 	"runtime/packets", "runtime/runs", "runtime/cache", "runtime/locks",
 }
 
@@ -109,6 +110,9 @@ func Init(dir string) (err error) {
 	if err := os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644); err != nil {
 		return fmt.Errorf("creating event journal: %w", err)
 	}
+	if err := writeSeeds(base, project); err != nil {
+		return err
+	}
 	if err := renameScaffold(base, finalBase); err != nil {
 		return fmt.Errorf("publishing project scaffold: %w", err)
 	}
@@ -147,4 +151,143 @@ func newStagingDir(root string) (string, error) {
 		return candidate, nil
 	}
 	return "", errors.New("creating temporary scaffold: no unique name available")
+}
+
+// writeSeeds writes generated project files that are not static assets:
+// the .gitignore, the asset lock, and the project context file.
+func writeSeeds(base, project string) error {
+	gitignore := "# Generated ox-agent runtime state; do not commit.\nruntime/\n"
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), []byte(gitignore), 0o644); err != nil {
+		return fmt.Errorf("writing .gitignore: %w", err)
+	}
+	if err := assets.WriteLock(base); err != nil {
+		return err
+	}
+	ctx := struct {
+		SchemaVersion int      `yaml:"schema_version"`
+		Name          string   `yaml:"name"`
+		Standards     []string `yaml:"standards"`
+	}{SchemaVersion: 1, Name: project, Standards: []string{}}
+	if err := writeYAML(filepath.Join(base, "context", "project.yaml"), ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RepairReport summarizes what Repair restored in an existing .ox-agent.
+type RepairReport struct {
+	DirsCreated   []string
+	FilesRestored []string
+	SeedsWritten  []string
+}
+
+// Repair restores missing scaffold directories, missing materialized asset
+// files, and missing generated seed files in an existing project. It never
+// overwrites files that already exist; doctor reports drifted content.
+func Repair(root string) (*RepairReport, error) {
+	base := Base(root)
+	if _, err := os.Stat(base); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%s does not exist; run init without --repair", base)
+		}
+		return nil, err
+	}
+	report := &RepairReport{}
+	for _, dir := range scaffoldDirs {
+		path := filepath.Join(base, dir)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				return nil, fmt.Errorf("creating %s: %w", dir, err)
+			}
+			report.DirsCreated = append(report.DirsCreated, dir)
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	files, err := assets.List("")
+	if err != nil {
+		return nil, err
+	}
+	for _, rel := range files {
+		target := filepath.Join(base, filepath.FromSlash(rel))
+		if _, err := os.Stat(target); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		data, err := assets.ReadFile(rel)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			return nil, err
+		}
+		report.FilesRestored = append(report.FilesRestored, rel)
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	name := filepath.Base(abs)
+	seeds := map[string]func() error{
+		".gitignore": func() error {
+			return os.WriteFile(filepath.Join(base, ".gitignore"), []byte("# Generated ox-agent runtime state; do not commit.\nruntime/\n"), 0o644)
+		},
+		"assets.lock":         func() error { return assets.WriteLock(base) },
+		"state/events.ndjson": func() error { return os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644) },
+		"framework.yaml": func() error {
+			framework := FrameworkConfig{SchemaVersion: 1}
+			framework.Framework.Name = "ox-agent"
+			framework.Framework.Distribution = "standalone"
+			framework.Framework.Binary = "ox-agent"
+			framework.Framework.RequiredVersion = requiredVersion
+			framework.Project.Name = name
+			return writeYAML(filepath.Join(base, "framework.yaml"), framework)
+		},
+		"config.yaml": func() error {
+			settings := Settings{SchemaVersion: 1}
+			settings.Project.Name = name
+			settings.Workflow.DefaultProfile = "normal"
+			settings.Workflow.Profiles = map[string][]string{"normal": defaultStages}
+			settings.Skills.Enabled = defaultSkills
+			settings.Skills.StageSkills = defaultStageSkills
+			return writeYAML(filepath.Join(base, "config.yaml"), settings)
+		},
+		"policy.yaml": func() error {
+			policy := Policy{SchemaVersion: 1}
+			policy.Autonomy.ProfileChanges = "managed"
+			policy.Autonomy.AllowDowngrade = false
+			policy.Approvals.ProductionDeploy = "human"
+			policy.Approvals.DestructiveChange = "human"
+			policy.Approvals.PolicyChange = "human"
+			policy.Budgets.MaxParallelAgents = 4
+			policy.Budgets.MaxChildDepth = 1
+			policy.Budgets.MaxFixCycles = 3
+			return writeYAML(filepath.Join(base, "policy.yaml"), policy)
+		},
+		"context/project.yaml": func() error {
+			ctx := struct {
+				SchemaVersion int      `yaml:"schema_version"`
+				Name          string   `yaml:"name"`
+				Standards     []string `yaml:"standards"`
+			}{SchemaVersion: 1, Name: name, Standards: []string{}}
+			return writeYAML(filepath.Join(base, "context", "project.yaml"), ctx)
+		},
+	}
+	for _, rel := range []string{".gitignore", "assets.lock", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
+		target := filepath.Join(base, filepath.FromSlash(rel))
+		if _, err := os.Stat(target); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err := seeds[rel](); err != nil {
+			return nil, err
+		}
+		report.SeedsWritten = append(report.SeedsWritten, rel)
+	}
+	return report, nil
 }

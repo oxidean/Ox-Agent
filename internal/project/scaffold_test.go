@@ -115,3 +115,87 @@ func TestInitPreservesUnownedStagingDirs(t *testing.T) {
 		t.Fatalf(".ox-agent scaffold missing: %v", err)
 	}
 }
+
+// TestRepairRestoresMissingPieces verifies --repair fills deleted scaffold
+// dirs, assets, and seed files without touching existing content.
+func TestRepairRestoresMissingPieces(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	for _, rel := range []string{
+		"skills/adr/SKILL.md", "config.yaml", ".gitignore",
+		"state/events.ndjson", "context/project.yaml", "assets.lock",
+	} {
+		if err := os.Remove(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("removing %s: %v", rel, err)
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(base, "discussions")); err != nil {
+		t.Fatalf("removing discussions dir: %v", err)
+	}
+	report, err := Repair(root)
+	if err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	if len(report.DirsCreated) == 0 || len(report.FilesRestored) == 0 || len(report.SeedsWritten) == 0 {
+		t.Fatalf("incomplete repair report: %+v", report)
+	}
+	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions"} {
+		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s not restored: %v", rel, err)
+		}
+	}
+}
+
+// TestRepairDoesNotOverwrite verifies --repair preserves locally modified files.
+func TestRepairDoesNotOverwrite(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	custom := filepath.Join(Base(root), "config.yaml")
+	if err := os.WriteFile(custom, []byte("custom: true\n"), 0o644); err != nil {
+		t.Fatalf("writing custom config: %v", err)
+	}
+	if _, err := Repair(root); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	data, err := os.ReadFile(custom)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if string(data) != "custom: true\n" {
+		t.Fatalf("custom config overwritten: %s", data)
+	}
+}
+
+// TestInitWritesLockAndGitignore verifies init emits the asset lock and
+// .gitignore covering the runtime directory.
+func TestInitWritesLockAndGitignore(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	gitignore, err := os.ReadFile(filepath.Join(base, ".gitignore"))
+	if err != nil {
+		t.Fatalf("reading .gitignore: %v", err)
+	}
+	if !strings.Contains(string(gitignore), "runtime/") {
+		t.Fatalf(".gitignore missing runtime entry: %s", gitignore)
+	}
+	if _, err := os.Stat(filepath.Join(base, "assets.lock")); err != nil {
+		t.Fatalf("assets.lock missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "lifecycle", "workflow.yaml")); err != nil {
+		t.Fatalf("lifecycle asset missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "integrations", "manual.yaml")); err != nil {
+		t.Fatalf("integration asset missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "context", "project.yaml")); err != nil {
+		t.Fatalf("context/project.yaml missing: %v", err)
+	}
+}

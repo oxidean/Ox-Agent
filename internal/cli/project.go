@@ -12,12 +12,33 @@ import (
 // newInitCmd builds the init command, which materializes .ox-agent/.
 func newInitCmd() *cobra.Command {
 	var path string
+	var repair bool
 	cmd := &cobra.Command{
 		Use:     "init",
 		Short:   "Initialize .ox-agent/ in a repository",
 		Args:    cobra.NoArgs,
 		GroupID: "project",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if repair {
+				report, err := project.Repair(path)
+				if err != nil {
+					return err
+				}
+				out := cmd.OutOrStdout()
+				for _, dir := range report.DirsCreated {
+					fmt.Fprintf(out, "created dir: %s\n", dir)
+				}
+				for _, file := range report.FilesRestored {
+					fmt.Fprintf(out, "restored asset: %s\n", file)
+				}
+				for _, file := range report.SeedsWritten {
+					fmt.Fprintf(out, "wrote seed: %s\n", file)
+				}
+				if len(report.DirsCreated)+len(report.FilesRestored)+len(report.SeedsWritten) == 0 {
+					fmt.Fprintln(out, "Nothing to repair")
+				}
+				return nil
+			}
 			if err := project.Init(path); err != nil {
 				return err
 			}
@@ -26,6 +47,7 @@ func newInitCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&path, "path", ".", "directory to initialize")
+	cmd.Flags().BoolVar(&repair, "repair", false, "restore missing scaffold pieces in an existing project")
 	return cmd
 }
 
