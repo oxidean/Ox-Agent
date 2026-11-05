@@ -295,6 +295,12 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// A missing path may sit under a symlinked ancestor (or be a
+			// dangling symlink); confine before MkdirAll so directory
+			// creation cannot escape the project.
+			if err := confinedTarget(resolvedBase, path); err != nil {
+				return nil, err
+			}
 			if err := os.MkdirAll(path, 0o755); err != nil {
 				return nil, fmt.Errorf("creating %s: %w", dir, err)
 			}

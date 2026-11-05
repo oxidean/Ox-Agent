@@ -394,6 +394,34 @@ func TestRepairWritesStayInsideBase(t *testing.T) {
 			t.Fatalf("repair wrote outside the project: %v", entries)
 		}
 	})
+
+	t.Run("symlinked ancestor with missing child", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		outside := t.TempDir()
+		stateDir := filepath.Join(Base(root), "state")
+		if err := os.RemoveAll(stateDir); err != nil {
+			t.Fatalf("removing state dir: %v", err)
+		}
+		if err := os.Symlink(outside, stateDir); err != nil {
+			t.Fatalf("planting dir symlink: %v", err)
+		}
+		// state resolves outside and exists, so the dirs loop skips it;
+		// state/snapshots is missing and must not be created through the
+		// symlink.
+		if _, err := Repair(root, false); err == nil {
+			t.Fatal("Repair(false) created a missing dir through a symlinked ancestor")
+		}
+		entries, err := os.ReadDir(outside)
+		if err != nil {
+			t.Fatalf("reading outside dir: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("repair created directories outside the project: %v", entries)
+		}
+	})
 }
 
 // TestIntegrationGapsWrongTarget verifies IntegrationGaps reports a discovery
