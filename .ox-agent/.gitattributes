@@ -1,0 +1,3 @@
+# Append-only journals merge cleanly across branches with the union driver.
+state/events.ndjson merge=union
+discussions/*.yaml merge=union
