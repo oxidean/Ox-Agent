@@ -269,3 +269,29 @@ func TestArchiveMovesBucket(t *testing.T) {
 		t.Fatal("double archive succeeded; want error")
 	}
 }
+
+// TestReplayFoldsJournal verifies replay summarizes state and history from events.
+func TestReplayFoldsJournal(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "replay me")
+	if err := item.Transition(root, "discovering", "cli", "", ""); err != nil {
+		t.Fatalf("Transition() error = %v", err)
+	}
+	snap, err := Replay(root, item, true)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if snap.State != "discovering" || snap.Events != 2 || len(snap.History) != 2 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	if _, err := os.Stat(snapshotPath(root, "WI-0001")); err != nil {
+		t.Fatalf("snapshot file missing: %v", err)
+	}
+	lines, err := Explain(root, item)
+	if err != nil {
+		t.Fatalf("Explain() error = %v", err)
+	}
+	if len(lines) != 2 || lines[1] == "" {
+		t.Fatalf("explain lines = %v", lines)
+	}
+}
