@@ -350,6 +350,10 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 		}
 	}
 	if len(report.Restored)+len(report.Replaced) > 0 {
+		lockTarget := filepath.Join(base, assets.LockPath)
+		if err := project.ConfinedTarget(resolvedBase, lockTarget); err != nil {
+			return nil, err
+		}
 		if err := assets.WriteLock(base); err != nil {
 			return nil, err
 		}

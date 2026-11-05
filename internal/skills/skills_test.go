@@ -1,8 +1,11 @@
 package skills
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 
 	"github.com/oxidean/Ox-Agent/internal/assets"
@@ -212,5 +215,43 @@ func TestListReportsDeletedSkillDir(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no error finding for deleted skill dir: %+v", findings)
+	}
+}
+
+// TestUpdateDoesNotWriteThroughSymlinkedLock verifies the asset-lock write is
+// confined like the asset writes: a symlinked lock pointing outside the
+// project is replaced by a real file, and the outside target is untouched.
+func TestUpdateDoesNotWriteThroughSymlinkedLock(t *testing.T) {
+	root := initProject(t)
+	base := project.Base(root)
+
+	outside := filepath.Join(t.TempDir(), "stolen.lock")
+	if err := os.WriteFile(outside, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(base, assets.LockPath)
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, lock); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skipf("symlink privilege unavailable: %v", err)
+		}
+		t.Fatalf("planting symlink: %v", err)
+	}
+	drifted := filepath.Join(base, "skills", "adr", "SKILL.md")
+	if err := os.WriteFile(drifted, []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Update(root, true); err != nil {
+		t.Fatalf("Update(--yes): %v", err)
+	}
+	if data, _ := os.ReadFile(outside); string(data) != "keep me\n" {
+		t.Fatal("update wrote through the symlinked lock to an outside file")
+	}
+	info, err := os.Lstat(lock)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("symlinked lock was not replaced by a real lock file")
 	}
 }
