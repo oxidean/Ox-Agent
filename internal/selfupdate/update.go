@@ -212,6 +212,14 @@ func installAtomic(target string, binary []byte) error {
 			os.Remove(tmpPath)
 			return fmt.Errorf("moving current binary aside: %w", err)
 		}
+		if err := os.Rename(tmpPath, target); err != nil {
+			os.Remove(tmpPath)
+			if rerr := os.Rename(old, target); rerr != nil {
+				return fmt.Errorf("installing update: %w (restoring original also failed: %v; binary remains at %s)", err, rerr, old)
+			}
+			return fmt.Errorf("installing update: %w", err)
+		}
+		return nil
 	}
 	if err := os.Rename(tmpPath, target); err != nil {
 		os.Remove(tmpPath)

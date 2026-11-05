@@ -273,3 +273,25 @@ func TestDispatchRejectsAPIAdapter(t *testing.T) {
 		t.Fatalf("run artifacts written despite rejected adapter: %v", entries)
 	}
 }
+
+// TestSpawnCLIResolvesRunDirPlaceholders verifies {packet}/{output}/{run_dir}
+// expand to paths under the real run directory so the spawned command (whose
+// working directory is the project root, not .ox-agent) can reach them.
+func TestSpawnCLIResolvesRunDirPlaceholders(t *testing.T) {
+	root, item := initProject(t)
+	integrations := filepath.Join(root, ".ox-agent", "integrations")
+	if err := os.WriteFile(filepath.Join(integrations, "copy.yaml"), []byte(
+		"name: copy\nadapter: spawn-cli\ncommand: 'cp \"{packet}\" \"{output}\"'\ntimeout_seconds: 30\n"), 0o644); err != nil {
+		t.Fatalf("writing spawn integration: %v", err)
+	}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "copy"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	if run.Adapter != "spawn-cli" {
+		t.Fatalf("run adapter = %s", run.Adapter)
+	}
+	if _, err := os.Stat(filepath.Join(run.Dir, "output.json")); err != nil {
+		t.Fatalf("spawned command did not write output.json into the run dir: %v", err)
+	}
+}

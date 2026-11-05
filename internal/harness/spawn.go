@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,9 +22,9 @@ func (r *Run) spawn(ctx context.Context, root string, integration *Integration) 
 		timeout = 10 * time.Minute
 	}
 	replacer := strings.NewReplacer(
-		"{packet}", r.PacketPath,
-		"{output}", r.PacketPath[:len(r.PacketPath)-len("packet.json")]+"output.json",
-		"{run_dir}", strings.TrimSuffix(r.PacketPath, "/packet.json"),
+		"{packet}", filepath.Join(r.Dir, "packet.json"),
+		"{output}", filepath.Join(r.Dir, "output.json"),
+		"{run_dir}", r.Dir,
 		"{work_item}", r.WorkItemID,
 		"{skill}", r.Skill,
 		"{stage}", r.Stage,
