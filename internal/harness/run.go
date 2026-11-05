@@ -265,23 +265,43 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 }
 
 // collectedSkills returns the skills with a collected run for the work item
-// at the given stage.
+// at the given stage. Only the latest run per skill counts: a skill that
+// collected once but was later retried is unresolved until its newest run
+// collects.
 func collectedSkills(root, itemID, stage string) map[string]bool {
 	collected := map[string]bool{}
 	entries, err := os.ReadDir(runsDir(root))
 	if err != nil {
 		return collected
 	}
+	latest := map[string]*Run{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		run, err := LoadRun(root, entry.Name())
-		if err == nil && run.WorkItemID == itemID && run.Stage == stage && run.Status == "collected" {
-			collected[run.Skill] = true
+		if err == nil && run.WorkItemID == itemID && run.Stage == stage && laterRun(run, latest[run.Skill]) {
+			latest[run.Skill] = run
+		}
+	}
+	for skill, run := range latest {
+		if run.Status == "collected" {
+			collected[skill] = true
 		}
 	}
 	return collected
+}
+
+// laterRun reports whether run is more recent than current, ordering by
+// creation time with the run ID as the same-second tie-break.
+func laterRun(run, current *Run) bool {
+	if current == nil {
+		return true
+	}
+	if run.CreatedAt != current.CreatedAt {
+		return run.CreatedAt > current.CreatedAt
+	}
+	return run.RunID > current.RunID
 }
 
 // stageComplete reports whether every skill mapped to the work item's current

@@ -249,6 +249,58 @@ func TestUnblockLeavesEscalatedSkillRedispatchable(t *testing.T) {
 	}
 }
 
+// TestLatestRunOutcomeWins verifies completion checks consider only the
+// newest run per skill: a skill that collected once but was re-dispatched
+// and escalated to rework is unresolved again after unblock.
+func TestLatestRunOutcomeWins(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify", "adr"}}
+
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	retry, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("re-Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "needs human decision"}
+	writeOutput(t, root, retry.RunID, out)
+	if _, _, err := Collect(root, retry.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := item.Unblock(root, "cli", "human resolved the question"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable despite older collected run", skill, err)
+	}
+	complete, err := stageComplete(root, item)
+	if err != nil {
+		t.Fatalf("stageComplete() error = %v", err)
+	}
+	if complete {
+		t.Fatal("stage reported complete while specify's latest run is unresolved")
+	}
+}
+
 // TestCollectBlocksOnBlockedVerdict verifies a blocked skill output blocks
 // the work item.
 func TestCollectBlocksOnBlockedVerdict(t *testing.T) {
