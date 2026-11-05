@@ -178,8 +178,9 @@ func TestCollectRetryLeavesSkillRedispatchable(t *testing.T) {
 }
 
 // TestCollectEscalateBeatsRetry verifies a rework verdict combined with an
-// escalate action blocks the work item instead of classifying the run as
-// retry — blocking outcomes take priority.
+// escalate action blocks the work item while keeping the run unresolved:
+// the run is recorded as retry so the skill stays dispatchable once the
+// item is unblocked.
 func TestCollectEscalateBeatsRetry(t *testing.T) {
 	root, item := initProject(t)
 	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
@@ -194,8 +195,8 @@ func TestCollectEscalateBeatsRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
-	if run.Status != "collected" {
-		t.Fatalf("run status = %s; want collected so applyOutcome runs", run.Status)
+	if run.Status != "retry" {
+		t.Fatalf("run status = %s; want retry so the skill stays unresolved", run.Status)
 	}
 	item, err = state.Resolve(root, item.ID)
 	if err != nil {
@@ -203,6 +204,48 @@ func TestCollectEscalateBeatsRetry(t *testing.T) {
 	}
 	if item.State != "blocked" {
 		t.Fatalf("escalated item state = %s; want blocked", item.State)
+	}
+}
+
+// TestUnblockLeavesEscalatedSkillRedispatchable verifies an escalated rework
+// run does not count as done after the work item is unblocked: the skill
+// stays selectable and the stage is not treated as complete.
+func TestUnblockLeavesEscalatedSkillRedispatchable(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify"}}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "needs human decision"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := item.Unblock(root, "cli", "human resolved the question"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable after unblock", skill, err)
+	}
+	complete, err := stageComplete(root, item)
+	if err != nil {
+		t.Fatalf("stageComplete() error = %v", err)
+	}
+	if complete {
+		t.Fatal("stage reported complete while the escalated skill is unresolved")
 	}
 }
 

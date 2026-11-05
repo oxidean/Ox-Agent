@@ -218,13 +218,20 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	verdict, _ := output["verdict"].(string)
 	next, _ := output["next_action"].(map[string]any)
 	action, _ := next["type"].(string)
+	// Blocking outcomes must reach applyOutcome so the work item
+	// transitions to blocked, even when the run itself must not count
+	// as collected.
+	blocking := status == "blocked" || verdict == "blocked" || action == "escalate"
 	switch {
 	case status == "failed":
 		run.Status = "failed"
 		run.Error, _ = output["summary"].(string)
-	case status == "blocked" || verdict == "blocked" || action == "escalate":
-		// Blocking outcomes must reach applyOutcome so the work item
-		// transitions to blocked — collect like a normal outcome.
+	case blocking && verdict == "needs_rework":
+		// Escalated rework stays unresolved: retry keeps the skill
+		// dispatchable (NextSkill, stageComplete, and pipeline progress
+		// all exclude it) after the item is unblocked.
+		run.Status = "retry"
+	case blocking:
 		run.Status = "collected"
 	case verdict == "needs_rework" || action == "retry":
 		// A rework/retry outcome is finished but not done: the run must not
@@ -249,7 +256,7 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	}); err != nil {
 		return run, output, err
 	}
-	if run.Status == "collected" {
+	if run.Status == "collected" || blocking {
 		if err := applyOutcome(root, item, run, output); err != nil {
 			return run, output, err
 		}
