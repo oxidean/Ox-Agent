@@ -19,7 +19,7 @@ the Sigstore bundle publishes alongside it as `checksums.txt.sigstore.json`:
 
 ```bash
 cosign verify-blob --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp 'https://github\.com/oxidean/Ox-Agent/\\.github/workflows/release\.yml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/oxidean/Ox-Agent/\.github/workflows/release\.yml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 ```
@@ -30,7 +30,7 @@ those against `@refs/heads/<dispatch-branch>`:
 
 ```bash
 cosign verify-blob --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp 'https://github\.com/oxidean/Ox-Agent/\\.github/workflows/release\.yml@refs/heads/main' \
+  --certificate-identity-regexp 'https://github\.com/oxidean/Ox-Agent/\.github/workflows/release\.yml@refs/heads/main' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
 ```
