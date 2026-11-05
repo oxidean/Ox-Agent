@@ -305,3 +305,56 @@ func TestSpawnCLIResolvesRunDirPlaceholders(t *testing.T) {
 		t.Fatalf("spawned command did not write output.json into the run dir: %v", err)
 	}
 }
+
+// TestCollectRejectsUnknownNextAction verifies collect fails a run whose
+// output declares an out-of-contract next_action.type — schema validation
+// catches it before any outcome is applied.
+func TestCollectRejectsUnknownNextAction(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "bogus_action"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err == nil {
+		t.Fatal("Collect() accepted an unknown next_action.type; want error")
+	}
+	if run.Status != "failed" {
+		t.Fatalf("run status = %s, want failed", run.Status)
+	}
+}
+
+// TestApplyOutcomeRejectsUnknownAction verifies the defense-in-depth check:
+// even if schema validation were bypassed, an unknown next_action.type cannot
+// ride a pass verdict into a stage advance.
+func TestApplyOutcomeRejectsUnknownAction(t *testing.T) {
+	root, item := initProject(t)
+	run := &Run{RunID: "run_test", Skill: "ox-agent/specify", Stage: "specification"}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "bogus_action"}
+	if err := applyOutcome(root, item, run, out); err == nil {
+		t.Fatal("applyOutcome() accepted unknown next_action.type; want error")
+	}
+	if item.CurrentStage != "intake" {
+		t.Fatalf("work item advanced on bogus action: stage = %s", item.CurrentStage)
+	}
+}
+
+// TestCollectRejectsMissingActionType verifies next_action without a type
+// fails schema validation.
+func TestCollectRejectsMissingActionType(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted next_action without type; want error")
+	}
+}

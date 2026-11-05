@@ -206,8 +206,32 @@ func writeSeeds(base, project string) error {
 	if err := writeYAML(filepath.Join(base, "context", "project.yaml"), ctx); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(base, "README.md"), []byte(scaffoldReadme), 0o644); err != nil {
+		return fmt.Errorf("writing README.md: %w", err)
+	}
 	return nil
 }
+
+// scaffoldReadme orients humans and agents landing in .ox-agent without
+// harness integration — it is the in-tree pointer a bare init leaves behind.
+const scaffoldReadme = `# .ox-agent — project state managed by ox-agent
+
+This directory is the project-local AI-SDLC runtime for ` + "`ox-agent`" + `. Work items,
+skills, contracts, and the event journal live here.
+
+- ` + "`framework.yaml`" + `, ` + "`config.yaml`" + `, ` + "`policy.yaml`" + ` — the project's contract files; these are yours to edit.
+- ` + "`skills/`" + `, ` + "`schemas/`" + `, ` + "`workflows/`" + `, ` + "`pipelines/`" + `, ` + "`lifecycle/`" + `, ` + "`integrations/`" + ` —
+  materialized assets tracked by ` + "`assets.lock`" + `; do not edit in place. Add
+  extension skills as new directories under ` + "`skills/`" + `.
+- ` + "`work/`" + `, ` + "`state/`" + `, ` + "`discussions/`" + ` — live project state; committed so context
+  travels through PRs. ` + "`state/events.ndjson`" + ` is the append-only journal.
+- ` + "`runtime/`" + ` — generated packets and runs; gitignored.
+
+` + "`ox-agent doctor`" + ` validates this setup. ` + "`ox-agent integrate`" + ` wires it into
+agent harnesses (a managed ` + "`AGENTS.md`" + ` block plus ` + "`/.agents/skills`" + ` and
+` + "`/.claude/skills`" + ` links) so the materialized skills are discoverable during
+agentic work — without it, nothing outside this directory advertises the toolkit.
+`
 
 // RepairReport summarizes what Repair restored in an existing .ox-agent.
 type RepairReport struct {
@@ -274,7 +298,10 @@ func Repair(root string) (*RepairReport, error) {
 		".gitattributes": func() error {
 			return os.WriteFile(filepath.Join(base, ".gitattributes"), []byte("# The append-only event journal merges cleanly across branches with the union driver.\nstate/events.ndjson merge=union\n"), 0o644)
 		},
-		"assets.lock":         func() error { return assets.WriteLock(base) },
+		"assets.lock": func() error { return assets.WriteLock(base) },
+		"README.md": func() error {
+			return os.WriteFile(filepath.Join(base, "README.md"), []byte(scaffoldReadme), 0o644)
+		},
 		"state/events.ndjson": func() error { return os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644) },
 		"framework.yaml": func() error {
 			framework := FrameworkConfig{SchemaVersion: 1}
@@ -315,7 +342,7 @@ func Repair(root string) (*RepairReport, error) {
 			return writeYAML(filepath.Join(base, "context", "project.yaml"), ctx)
 		},
 	}
-	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
+	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "README.md", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		if _, err := os.Stat(target); err == nil {
 			continue

@@ -47,7 +47,24 @@
       "type": "array"
     },
     "next_action": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "advance_stage",
+            "retry",
+            "escalate",
+            "complete"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
     }
   }
 }

@@ -7,6 +7,20 @@ description: Record asynchronous agent discussions, summarize relevant conclusio
 
 Record asynchronous agent discussions, summarize relevant conclusions, and promote decisions without losing provenance.
 
+## Invocation contract
+
+- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`) and the schema it must satisfy (`output.schema`).
+- Write exactly one JSON object to `output.path`. `ox-agent` schema-validates it on collection, journals the outcome, and applies your declared `next_action`.
+- `next_action.type` must be one of `advance_stage` (unit of work done — move to the next stage), `retry` (needs another pass), `escalate` (blocked — needs a human), or `complete` (stage/pipeline finished). Always include a `reason`.
+
+## Consumes
+
+- the open thread under `discussions/` named by the packet context.
+
+## Produces
+
+- a summarized position suitable for `ox-agent discuss add`/`summarize`; key points in `findings`, no state writes outside the thread.
+
 ## Operating rules
 
 - Load only the current work-item packet and referenced artifacts.

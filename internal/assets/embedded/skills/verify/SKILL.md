@@ -7,6 +7,20 @@ description: Verify tests, traceability, policy compliance, rollback readiness, 
 
 Verify tests, traceability, policy compliance, rollback readiness, and operational requirements before shipping.
 
+## Invocation contract
+
+- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`) and the schema it must satisfy (`output.schema`).
+- Write exactly one JSON object to `output.path`. `ox-agent` schema-validates it on collection, journals the outcome, and applies your declared `next_action`.
+- `next_action.type` must be one of `advance_stage` (unit of work done — move to the next stage), `retry` (needs another pass), `escalate` (blocked — needs a human), or `complete` (stage/pipeline finished). Always include a `reason`.
+
+## Consumes
+
+- `project.test_command`, the spec's acceptance criteria, and `changed_paths` to verify.
+
+## Produces
+
+- verification results in `findings` (command, outcome, evidence) and a `pass`/`needs_rework` `verdict`.
+
 ## Operating rules
 
 - Load only the current work-item packet and referenced artifacts.

@@ -7,6 +7,20 @@ description: Turn a work-item intent into a detailed, testable specification wit
 
 Turn a work-item intent into a detailed, testable specification with explicit scope, contracts, and acceptance criteria.
 
+## Invocation contract
+
+- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`) and the schema it must satisfy (`output.schema`).
+- Write exactly one JSON object to `output.path`. `ox-agent` schema-validates it on collection, journals the outcome, and applies your declared `next_action`.
+- `next_action.type` must be one of `advance_stage` (unit of work done — move to the next stage), `retry` (needs another pass), `escalate` (blocked — needs a human), or `complete` (stage/pipeline finished). Always include a `reason`.
+
+## Consumes
+
+- the chosen brainstorm direction and relevant standards/decisions.
+
+## Produces
+
+- a spec artifact (path in `artifacts`) with acceptance criteria a `verify` run can check.
+
 ## Operating rules
 
 - Load only the current work-item packet and referenced artifacts.

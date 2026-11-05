@@ -27,6 +27,10 @@ ox-agent init --integrate   # optional: wire .agents/skills + AGENTS.md
 schemas, and policy into `.ox-agent/`. `--integrate` symlinks
 `.agents/skills` (and `.claude/skills`) at `.ox-agent/skills` and adds a
 managed block to `AGENTS.md` so coding agents discover the toolkit.
+Without `--integrate` nothing outside `.ox-agent/` advertises the toolkit —
+`doctor` warns when no integration is detected. On Windows, symlink creation
+needs Developer Mode or an elevated shell; `integrate` reports a warning and
+leaves the rest of the wiring in place when it cannot link.
 
 The scaffold commits to git: `.ox-agent/.gitignore` keeps `runtime/` out;
 `.gitattributes` marks the event journal and discussion threads `merge=union`

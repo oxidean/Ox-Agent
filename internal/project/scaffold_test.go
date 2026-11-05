@@ -125,7 +125,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	}
 	base := Base(root)
 	for _, rel := range []string{
-		"skills/adr/SKILL.md", "config.yaml", ".gitignore",
+		"skills/adr/SKILL.md", "config.yaml", ".gitignore", "README.md",
 		"state/events.ndjson", "context/project.yaml", "assets.lock",
 	} {
 		if err := os.Remove(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
@@ -142,7 +142,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	if len(report.DirsCreated) == 0 || len(report.FilesRestored) == 0 || len(report.SeedsWritten) == 0 {
 		t.Fatalf("incomplete repair report: %+v", report)
 	}
-	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions"} {
+	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "README.md"} {
 		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s not restored: %v", rel, err)
 		}
@@ -197,5 +197,54 @@ func TestInitWritesLockAndGitignore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "context", "project.yaml")); err != nil {
 		t.Fatalf("context/project.yaml missing: %v", err)
+	}
+}
+
+// TestInitWritesReadme verifies the scaffold leaves an in-tree pointer doc so
+// a bare init is still discoverable inside .ox-agent/ itself.
+func TestInitWritesReadme(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(Base(root), "README.md"))
+	if err != nil {
+		t.Fatalf("README.md missing: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "ox-agent integrate") {
+		t.Fatal("README.md does not point at integrate")
+	}
+}
+
+// TestDoctorWarnsWithoutIntegration verifies doctor nudges toward `integrate`
+// when neither an AGENTS.md managed block nor .agents/skills exists — a bare
+// init is otherwise invisible to agents scanning standard discovery paths.
+func TestDoctorWarnsWithoutIntegration(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	report := Doctor(root)
+	found := false
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "ox-agent integrate") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no integration warning on bare init: %v", report.Warnings)
+	}
+	if _, err := Integrate(root); err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	report = Doctor(root)
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "ox-agent integrate") {
+			t.Fatalf("integration warning persists after integrate: %v", report.Warnings)
+		}
+	}
+	if !report.Healthy() {
+		t.Fatalf("doctor unhealthy after integrate: %+v", report.Checks)
 	}
 }

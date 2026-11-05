@@ -319,6 +319,13 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 	if reason == "" {
 		reason = summary
 	}
+	// The output schema constrains next_action.type; reject unknown values
+	// here too so an out-of-contract action can never ride a pass verdict.
+	switch action {
+	case "", "advance_stage", "retry", "escalate", "complete":
+	default:
+		return fmt.Errorf("unknown next_action.type %q", action)
+	}
 	switch {
 	case status == "blocked" || verdict == "blocked" || action == "escalate":
 		if item.State != "blocked" {

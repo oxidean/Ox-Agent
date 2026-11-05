@@ -7,6 +7,20 @@ description: Record compact, structured progress updates and derive resumable wo
 
 Record compact, structured progress updates and derive resumable work-item status from lifecycle events.
 
+## Invocation contract
+
+- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`) and the schema it must satisfy (`output.schema`).
+- Write exactly one JSON object to `output.path`. `ox-agent` schema-validates it on collection, journals the outcome, and applies your declared `next_action`.
+- `next_action.type` must be one of `advance_stage` (unit of work done — move to the next stage), `retry` (needs another pass), `escalate` (blocked — needs a human), or `complete` (stage/pipeline finished). Always include a `reason`.
+
+## Consumes
+
+- `state/events.ndjson` and work-item `index.json` files — read via `ox-agent events`/`status`/`state replay`, never invented.
+
+## Produces
+
+- a progress summary (`summary` + `findings`) naming blockers, completed stages, and the next legal actions.
+
 ## Operating rules
 
 - Load only the current work-item packet and referenced artifacts.
