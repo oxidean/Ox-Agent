@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -49,8 +50,12 @@ func Append(root string, event Event) error {
 	return nil
 }
 
-// ReadEvents parses every entry in the project event journal. A missing
-// journal reads as empty; malformed lines report their line number.
+// ReadEvents parses every entry in the project event journal in timestamp
+// order. The journal merges with the union driver across branches, which can
+// interleave cross-branch appends out of chronological order; readers sort by
+// the recorded timestamp so replay, snapshots, and LastEventID stay correct
+// regardless of file position. A missing journal reads as empty; malformed
+// lines report their line number.
 func ReadEvents(root string) ([]Event, error) {
 	data, err := os.ReadFile(journalPath(root))
 	if err != nil {
@@ -70,5 +75,13 @@ func ReadEvents(root string) ([]Event, error) {
 		}
 		events = append(events, event)
 	}
+	sort.SliceStable(events, func(i, j int) bool {
+		ti, errI := time.Parse(time.RFC3339, events[i].Timestamp)
+		tj, errJ := time.Parse(time.RFC3339, events[j].Timestamp)
+		if errI != nil || errJ != nil {
+			return events[i].Timestamp < events[j].Timestamp
+		}
+		return ti.Before(tj)
+	})
 	return events, nil
 }

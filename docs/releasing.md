@@ -35,6 +35,10 @@ cosign verify-blob --bundle checksums.txt.sigstore.json \
   checksums.txt
 ```
 
+Republishing a tag only produces a signature bundle when the tag's tree carries
+the signing configuration — `v0.0.1` predates it, so republishing that tag
+rebuilds unsigned artifacts.
+
 ## Release workflow
 
 Create an annotated `v*.*.*` tag on the commit to release and push it:

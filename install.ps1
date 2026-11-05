@@ -6,8 +6,14 @@ if (-not $version) {
   # api.github.com JSON endpoint and its unauthenticated rate limit.
   try {
     $response = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -Method Head -UseBasicParsing
-    $finalUri = $response.BaseResponse.ResponseUri
-    if ($null -eq $finalUri) { $finalUri = $response.BaseResponse.RequestMessage.RequestUri }
+    # ResponseUri exists only on some hosts; probe via PSObject so the access
+    # stays safe under caller-enabled strict mode, then fall back to the
+    # final request URI.
+    $finalUri = $null
+    if ($null -ne $response.BaseResponse -and $response.BaseResponse.PSObject.Properties['ResponseUri']) {
+      $finalUri = $response.BaseResponse.ResponseUri
+    }
+    if ($null -eq $finalUri -and $null -ne $response.BaseResponse.RequestMessage) { $finalUri = $response.BaseResponse.RequestMessage.RequestUri }
     if ($finalUri -and $finalUri.AbsoluteUri -match '/tag/([^/]+)$') { $version = $Matches[1] }
   } catch { }
 }
