@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 		newDiscussCmd(),
 		newUpdateCmd(),
 		newUninstallCmd(),
+		newEvalCmd(),
 	)
 	return root
 }
