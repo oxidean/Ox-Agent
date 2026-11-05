@@ -34,6 +34,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddGroup(
 		&cobra.Group{ID: "project", Title: "Project commands:"},
 		&cobra.Group{ID: "work", Title: "Work items:"},
+		&cobra.Group{ID: "admin", Title: "Administration:"},
 	)
 	root.AddCommand(
 		newInitCmd(),
@@ -51,6 +52,9 @@ func NewRootCmd() *cobra.Command {
 		newIntegrateCmd(),
 		newReviewCmd(),
 		newShipCmd(),
+		newDiscussCmd(),
+		newUpdateCmd(),
+		newUninstallCmd(),
 	)
 	return root
 }
