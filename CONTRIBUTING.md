@@ -14,8 +14,11 @@ go vet ./...
 go build ./cmd/ox-agent
 ```
 
-The CLI embeds the asset tree under `cmd/ox-agent/assets/`. When changing
-skills, schemas, workflows, or pipelines, update the embedded assets and test a
+The CLI embeds the asset tree under `internal/assets/embedded/`, mirrored from
+the canonical `skills/`, `schemas/`, `workflows/`, and `pipelines/` trees. Run
+`./scripts/check-assets.sh` after touching either side — CI rejects drift. When
+changing skills, schemas, workflows, or pipelines, update the embedded assets
+and test a
 fresh temporary project:
 
 ```bash
@@ -34,8 +37,9 @@ work-item state.
 
 ## Adding a skill
 
-Official skill assets live under `cmd/ox-agent/assets/skills/` in the standalone
-binary distribution and are mirrored from the canonical `skills/` definitions.
+Official skill assets live under `internal/assets/embedded/skills/` in the
+standalone binary distribution and are mirrored from the canonical `skills/`
+definitions by `./scripts/sync-assets.sh`.
 Every skill must provide:
 
 - `skill.yaml` metadata
@@ -65,8 +69,8 @@ before installing a binary.
 Tag the commit to release on `main` with an annotated `v*.*.*` tag and push it:
 
 ```bash
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
 ```
 
 The tag triggers `.github/workflows/release.yml`, which builds the Go binary,

@@ -3,6 +3,6 @@ framework:
   name: ox-agent
   distribution: standalone
   binary: ox-agent
-  required_version: '>=0.2.0 <0.3.0'
+  required_version: '>=0.1.0 <0.2.0'
 project:
   name: ox-agent

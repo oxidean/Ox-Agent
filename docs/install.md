@@ -17,8 +17,8 @@ Install a specific release:
 
 ```bash
 curl -fsSL \
-  https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.sh \
-  | OX_AGENT_VERSION=v0.2.0 bash
+  https://github.com/oxidean/Ox-Agent/releases/download/v0.1.0/install.sh \
+  | OX_AGENT_VERSION=v0.1.0 bash
 ```
 
 The default destination is `~/.local/bin`. Set `OX_AGENT_INSTALL_DIR` to use a
@@ -29,8 +29,8 @@ different user-owned directory. Add the destination to `PATH` if necessary.
 Run the PowerShell installer from a release checkout or downloaded release:
 
 ```powershell
-$env:OX_AGENT_VERSION = "v0.2.0"
-irm https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.ps1 | iex
+$env:OX_AGENT_VERSION = "v0.1.0"
+irm https://github.com/oxidean/Ox-Agent/releases/download/v0.1.0/install.ps1 | iex
 ```
 
 ## Verify
@@ -48,7 +48,14 @@ extract `ox-agent`, and place it in a directory on `PATH`.
 
 ## Upgrade and uninstall
 
-The update command is planned. Until it is available, install a newer release
-over the existing binary after verifying its checksum. To uninstall, remove
-the binary from the directory where it was installed. Project-local
-`.ox-agent/` directories are not removed by uninstalling the global binary.
+```bash
+ox-agent update --check     # report installed vs latest
+ox-agent update             # verify checksum and replace the binary
+ox-agent update --version v0.1.0
+ox-agent uninstall --yes
+```
+
+`update` downloads the release archive, verifies its SHA-256 digest against
+the published `checksums.txt`, and atomically replaces the running binary.
+`uninstall` removes the binary only — project-local `.ox-agent/` directories
+are never touched.
