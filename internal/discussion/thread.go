@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -89,7 +90,10 @@ func nextID(root string) int {
 
 // Load reads a thread by id (with or without the d- prefix).
 func Load(root, id string) (*Thread, error) {
-	if id[0] != 'd' {
+	if id == "" {
+		return nil, fmt.Errorf("discussion id is required")
+	}
+	if !strings.HasPrefix(id, "d-") {
 		id = "d-" + id
 	}
 	data, err := os.ReadFile(path(root, id))

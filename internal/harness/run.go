@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/pipeline"
+	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
 
@@ -102,19 +105,7 @@ func NextSkill(root string, item *state.WorkItem, stage string, skills map[strin
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no skills mapped to stage %q", stage)
 	}
-	collected := map[string]bool{}
-	entries, err := os.ReadDir(runsDir(root))
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			run, err := LoadRun(root, entry.Name())
-			if err == nil && run.WorkItemID == item.ID && run.Stage == stage && run.Status == "collected" {
-				collected[run.Skill] = true
-			}
-		}
-	}
+	collected := collectedSkills(root, item.ID, stage)
 	for _, skill := range candidates {
 		if !collected["ox-agent/"+skill] && !collected[skill] {
 			return skill, nil
@@ -125,19 +116,26 @@ func NextSkill(root string, item *state.WorkItem, stage string, skills map[strin
 
 // Dispatch compiles the packet and creates a pending run. For manual
 // integrations the operator completes the run offline and collects it later.
-func Dispatch(root string, item *state.WorkItem, req DispatchRequest) (*Run, error) {
+func Dispatch(ctx context.Context, root string, item *state.WorkItem, req DispatchRequest) (*Run, error) {
 	integration, err := Resolve(root, req.Integration)
 	if err != nil {
 		return nil, err
 	}
+	switch integration.Adapter {
+	case "manual", "spawn-cli":
+	case "api":
+		return nil, fmt.Errorf("integration %q uses adapter api, which is not implemented yet", integration.Name)
+	default:
+		return nil, fmt.Errorf("integration %q has unknown adapter %q", integration.Name, integration.Adapter)
+	}
 	runID := fmt.Sprintf("run_%d_%06x", time.Now().UnixMilli(), rand.Uint64N(1<<24))
 	rel := "runtime/runs/" + runID
-	runDir := filepath.Join(root, ".ox-agent", filepath.FromSlash(rel))
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return nil, err
-	}
 	packet, err := appctx.Compile(root, item, req.Skill, req.Stage, req.Budget, rel+"/output.json")
 	if err != nil {
+		return nil, err
+	}
+	runDir := filepath.Join(root, ".ox-agent", filepath.FromSlash(rel))
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, err
 	}
 	data, err := packet.Bytes()
@@ -173,11 +171,9 @@ func Dispatch(root string, item *state.WorkItem, req DispatchRequest) (*Run, err
 		return nil, err
 	}
 	if integration.Adapter == "spawn-cli" {
-		if err := run.spawn(root, integration); err != nil {
+		if err := run.spawn(ctx, root, integration); err != nil {
 			return nil, err
 		}
-	} else if integration.Adapter == "api" {
-		return nil, fmt.Errorf("integration %q uses adapter api, which is not implemented yet", integration.Name)
 	}
 	return run, nil
 }
@@ -244,17 +240,78 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		return run, output, err
 	}
 	if run.Status == "collected" {
-		if err := applyOutcome(root, item, output); err != nil {
+		if err := applyOutcome(root, item, run, output); err != nil {
 			return run, output, err
 		}
 	}
 	return run, output, nil
 }
 
+// collectedSkills returns the skills with a collected run for the work item
+// at the given stage.
+func collectedSkills(root, itemID, stage string) map[string]bool {
+	collected := map[string]bool{}
+	entries, err := os.ReadDir(runsDir(root))
+	if err != nil {
+		return collected
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		run, err := LoadRun(root, entry.Name())
+		if err == nil && run.WorkItemID == itemID && run.Stage == stage && run.Status == "collected" {
+			collected[run.Skill] = true
+		}
+	}
+	return collected
+}
+
+// stageComplete reports whether every skill mapped to the work item's current
+// stage has a collected run. Stages with no mapped skills complete on any
+// collected run at that stage.
+func stageComplete(root string, item *state.WorkItem) (bool, error) {
+	settings, err := project.LoadSettings(root)
+	if err != nil {
+		return false, err
+	}
+	collected := collectedSkills(root, item.ID, item.CurrentStage)
+	for _, skill := range settings.Skills.StageSkills[item.CurrentStage] {
+		if !collected["ox-agent/"+skill] && !collected[skill] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// pipelineComplete reports whether every step of the named pipeline has a
+// collected run for the work item.
+func pipelineComplete(root, name string, item *state.WorkItem) (bool, error) {
+	pipe, err := pipeline.Load(root, name)
+	if err != nil {
+		return false, err
+	}
+	progress, err := pipeline.Progress(root, pipe, item)
+	if err != nil {
+		return false, err
+	}
+	if len(progress) == 0 {
+		return false, nil
+	}
+	for _, step := range progress {
+		if step.Status != "done" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // applyOutcome applies the skill's verdict and next_action to the work item:
 // blocked verdicts block the item, rework stays, and pass verdicts advance
-// the stage (surfacing approval requirements to the operator).
-func applyOutcome(root string, item *state.WorkItem, output map[string]any) error {
+// the stage once the stage's unit of work is done — every mapped skill for a
+// single-skill run, or the whole pipeline for a pipeline step. A pass on an
+// incomplete unit leaves the stage so the remaining work stays selectable.
+func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string]any) error {
 	status, _ := output["status"].(string)
 	verdict, _ := output["verdict"].(string)
 	next, _ := output["next_action"].(map[string]any)
@@ -273,7 +330,28 @@ func applyOutcome(root string, item *state.WorkItem, output map[string]any) erro
 	case verdict == "needs_rework" || action == "retry":
 		return nil
 	case action == "advance_stage" || action == "complete" || action == "" || verdict == "pass" || verdict == "pass_with_notes":
-		_, err := item.Advance(root, "ox-agent")
+		if run.Pipeline != "" {
+			complete, err := pipelineComplete(root, run.Pipeline, item)
+			if err != nil {
+				return err
+			}
+			if !complete {
+				return nil
+			}
+			_, err = item.Advance(root, "ox-agent")
+			return err
+		}
+		if run.Stage != item.CurrentStage {
+			return nil
+		}
+		complete, err := stageComplete(root, item)
+		if err != nil {
+			return err
+		}
+		if !complete {
+			return nil
+		}
+		_, err = item.Advance(root, "ox-agent")
 		return err
 	default:
 		return fmt.Errorf("unknown next_action.type %q", action)

@@ -89,6 +89,12 @@ func (item *WorkItem) Transition(root, to, actor, approver, reason string) error
 		return err
 	}
 	from := item.State
+	if to == "archived" {
+		return fmt.Errorf("use archive to move %s to archived", item.ID)
+	}
+	if from == "blocked" && item.BlockedFrom != "" && to != item.BlockedFrom {
+		return fmt.Errorf("%s is blocked from %s; unblock it or archive it", item.ID, item.BlockedFrom)
+	}
 	gate, ok := life.Find(from, to)
 	if !ok {
 		targets := life.LegalTargets(from)

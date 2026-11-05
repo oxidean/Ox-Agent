@@ -295,3 +295,41 @@ func TestReplayFoldsJournal(t *testing.T) {
 		t.Fatalf("explain lines = %v", lines)
 	}
 }
+
+// TestTransitionRejectsArchived verifies the archived state is only reachable
+// through Archive so the bucket move always happens.
+func TestTransitionRejectsArchived(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "no raw archive")
+	if err := item.Transition(root, "archived", "cli", "", ""); err == nil {
+		t.Fatal("transition to archived succeeded; want rejection via Archive")
+	}
+	if item.State != "intake" {
+		t.Fatalf("state mutated on rejected transition: %s", item.State)
+	}
+	if item.bucket() != "active" {
+		t.Fatalf("bucket moved on rejected transition: %s", item.bucket())
+	}
+}
+
+// TestBlockedTransitionReturnsToBlockedFrom verifies a blocked item can only
+// transition back to its recorded blocked_from state (or be archived).
+func TestBlockedTransitionReturnsToBlockedFrom(t *testing.T) {
+	root := initProject(t)
+	item := startItem(t, root, "blocked lanes")
+	if err := item.Transition(root, "blocked", "cli", "", ""); err != nil {
+		t.Fatalf("blocking transition error = %v", err)
+	}
+	if err := item.Transition(root, "shipping", "cli", "", ""); err == nil {
+		t.Fatal("blocked → shipping succeeded; want rejection to blocked_from only")
+	}
+	if item.State != "blocked" {
+		t.Fatalf("state mutated on rejected transition: %s", item.State)
+	}
+	if err := item.Transition(root, item.BlockedFrom, "cli", "", ""); err != nil {
+		t.Fatalf("blocked → blocked_from error = %v", err)
+	}
+	if item.State != "intake" {
+		t.Fatalf("state = %s after unblock transition, want intake", item.State)
+	}
+}

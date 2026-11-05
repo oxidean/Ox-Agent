@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -28,8 +29,8 @@ const repo = "oxidean/Ox-Agent"
 var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 // Check reports the latest published release tag without changing anything.
-func Check() (string, error) {
-	req, err := http.NewRequest(http.MethodHead, "https://github.com/"+repo+"/releases/latest", nil)
+func Check(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://github.com/"+repo+"/releases/latest", nil)
 	if err != nil {
 		return "", err
 	}
@@ -52,11 +53,11 @@ func Check() (string, error) {
 // Update downloads the release asset for the current platform, verifies its
 // checksum, and atomically replaces the running binary. It reports false
 // when the binary already runs the target version.
-func Update(targetVersion string) (bool, string, error) {
+func Update(ctx context.Context, targetVersion string) (bool, string, error) {
 	version := targetVersion
 	if version == "" || version == "latest" {
 		var err error
-		version, err = Check()
+		version, err = Check(ctx)
 		if err != nil {
 			return false, "", err
 		}
@@ -74,7 +75,7 @@ func Update(targetVersion string) (bool, string, error) {
 	}
 	asset := archiveName(version)
 	base := "https://github.com/" + repo + "/releases/download/" + version + "/"
-	checksums, err := fetchChecksums(base + "checksums.txt")
+	checksums, err := fetchChecksums(ctx, base+"checksums.txt")
 	if err != nil {
 		return false, "", err
 	}
@@ -82,7 +83,7 @@ func Update(targetVersion string) (bool, string, error) {
 	if !ok {
 		return false, "", fmt.Errorf("no checksum published for %s", asset)
 	}
-	payload, err := download(base + asset)
+	payload, err := download(ctx, base+asset)
 	if err != nil {
 		return false, "", err
 	}
@@ -111,8 +112,8 @@ func archiveName(version string) string {
 }
 
 // fetchChecksums downloads and parses checksums.txt into name→digest.
-func fetchChecksums(url string) (map[string]string, error) {
-	payload, err := download(url)
+func fetchChecksums(ctx context.Context, url string) (map[string]string, error) {
+	payload, err := download(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +128,12 @@ func fetchChecksums(url string) (map[string]string, error) {
 }
 
 // download fetches a URL with a hard size cap.
-func download(url string) ([]byte, error) {
-	resp, err := httpClient.Get(url)
+func download(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("downloading %s: %w", url, err)
 	}
@@ -199,6 +204,14 @@ func installAtomic(target string, binary []byte) error {
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
 		os.Remove(tmpPath)
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		old := target + ".old"
+		_ = os.Remove(old)
+		if err := os.Rename(target, old); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("moving current binary aside: %w", err)
+		}
 	}
 	if err := os.Rename(tmpPath, target); err != nil {
 		os.Remove(tmpPath)

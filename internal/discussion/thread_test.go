@@ -54,3 +54,11 @@ func TestThreadLifecycle(t *testing.T) {
 		t.Fatalf("List() = %v threads, %v", len(threads), err)
 	}
 }
+
+// TestLoadRejectsEmptyID verifies an empty thread reference errors instead of
+// panicking on the id[0] index.
+func TestLoadRejectsEmptyID(t *testing.T) {
+	if _, err := Load(t.TempDir(), ""); err == nil {
+		t.Fatal("Load() with empty id succeeded; want error")
+	}
+}

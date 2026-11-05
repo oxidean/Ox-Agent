@@ -17,8 +17,8 @@ Install a specific release:
 
 ```bash
 curl -fsSL \
-  https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.sh \
-  | OX_AGENT_VERSION=v0.2.0 bash
+  https://github.com/oxidean/Ox-Agent/releases/download/v0.1.0/install.sh \
+  | OX_AGENT_VERSION=v0.1.0 bash
 ```
 
 The default destination is `~/.local/bin`. Set `OX_AGENT_INSTALL_DIR` to use a
@@ -29,8 +29,8 @@ different user-owned directory. Add the destination to `PATH` if necessary.
 Run the PowerShell installer from a release checkout or downloaded release:
 
 ```powershell
-$env:OX_AGENT_VERSION = "v0.2.0"
-irm https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.ps1 | iex
+$env:OX_AGENT_VERSION = "v0.1.0"
+irm https://github.com/oxidean/Ox-Agent/releases/download/v0.1.0/install.ps1 | iex
 ```
 
 ## Verify
@@ -51,7 +51,7 @@ extract `ox-agent`, and place it in a directory on `PATH`.
 ```bash
 ox-agent update --check     # report installed vs latest
 ox-agent update             # verify checksum and replace the binary
-ox-agent update --version v0.2.0
+ox-agent update --version v0.1.0
 ox-agent uninstall --yes
 ```
 

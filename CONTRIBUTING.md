@@ -69,8 +69,8 @@ before installing a binary.
 Tag the commit to release on `main` with an annotated `v*.*.*` tag and push it:
 
 ```bash
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
 ```
 
 The tag triggers `.github/workflows/release.yml`, which builds the Go binary,

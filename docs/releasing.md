@@ -20,8 +20,8 @@ GoReleaser creates archives for supported platforms and architectures, plus
 Create an annotated `v*.*.*` tag on the commit to release and push it:
 
 ```bash
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
 ```
 
 The tag triggers `.github/workflows/release.yml`. The workflow checks out the
@@ -31,8 +31,8 @@ republish an existing tag. GoReleaser does not replace existing release
 assets, so delete the published release first (the tag is kept):
 
 ```bash
-gh release delete v0.2.0 --yes
-gh workflow run release.yml -f tag=v0.2.0
+gh release delete v0.1.0 --yes
+gh workflow run release.yml -f tag=v0.1.0
 ```
 
 The previous npm/GitHub Packages release process is retired.

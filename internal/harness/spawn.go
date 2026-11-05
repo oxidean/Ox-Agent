@@ -12,7 +12,7 @@ import (
 // spawn runs a spawn-cli integration's command template with the packet and
 // output paths substituted, then leaves the run pending for collection when
 // the command produced no output yet.
-func (r *Run) spawn(root string, integration *Integration) error {
+func (r *Run) spawn(ctx context.Context, root string, integration *Integration) error {
 	if integration.Command == "" {
 		return fmt.Errorf("integration %q has no command template", integration.Name)
 	}
@@ -29,7 +29,7 @@ func (r *Run) spawn(root string, integration *Integration) error {
 		"{stage}", r.Stage,
 	)
 	command := replacer.Replace(integration.Command)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	proc := exec.CommandContext(ctx, "sh", "-c", command)
 	proc.Dir = root

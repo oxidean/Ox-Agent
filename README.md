@@ -42,8 +42,8 @@ Install a specific version:
 
 ```bash
 curl -fsSL \
-  https://github.com/oxidean/Ox-Agent/releases/download/v0.2.0/install.sh \
-  | OX_AGENT_VERSION=v0.2.0 bash
+  https://github.com/oxidean/Ox-Agent/releases/download/v0.1.0/install.sh \
+  | OX_AGENT_VERSION=v0.1.0 bash
 ```
 
 Verify the installation:
@@ -145,7 +145,7 @@ Available in the standalone distribution:
 
 Next:
 
-- `spawn-cli` and API harness adapters.
+- API harness adapters.
 - Signed release metadata.
 - Automated discussion summarization.
 - Live harness-backed eval generation.
@@ -177,7 +177,7 @@ binary resolves and validates them without requiring a source checkout.
 ```bash
 ox-agent update --check        # report installed vs latest
 ox-agent update                # verify checksum and replace the binary
-ox-agent update --version v0.2.0
+ox-agent update --version v0.1.0
 ox-agent uninstall --yes
 ```
 

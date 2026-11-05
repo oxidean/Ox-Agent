@@ -20,14 +20,14 @@ func newUpdateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			if checkOnly {
-				latest, err := selfupdate.Check()
+				latest, err := selfupdate.Check(cmd.Context())
 				if err != nil {
 					return err
 				}
 				fmt.Fprintf(out, "installed: %s\nlatest:    %s\n", buildinfo.Version, latest)
 				return nil
 			}
-			updated, resolved, err := selfupdate.Update(version)
+			updated, resolved, err := selfupdate.Update(cmd.Context(), version)
 			if err != nil {
 				return err
 			}

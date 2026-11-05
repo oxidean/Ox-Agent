@@ -55,7 +55,7 @@ Archive a work item, or return a `blocked` item to the state recorded in
 ### `ox-agent run <work-item>`
 
 Dispatch the skill mapped to the work item's current stage through the
-configured harness integration (`--integration`, `--skill`, `--stage`,
+configured harness integration (`--harness`, `--skill`, `--stage`,
 `--budget` to override). With `--pipeline <name>`, dispatch every ready
 pipeline step instead, bounded by `policy.budgets.max_parallel_agents`.
 
@@ -109,12 +109,13 @@ Snapshots are written under `.ox-agent/state/snapshots/` and journal
 
 ### `ox-agent context index`
 
-Build the context index over `.ox-agent/context/`, skills, and work items.
+Build the context index over `.ox-agent/context/` and `.ox-agent/discussions/`.
 
 ### `ox-agent context compile <work-item>`
 
-Compile a token-budgeted context packet for the work item's current stage and
-write it under `runtime/packets/`. Journals `context.compiled`.
+Compile a token-budgeted context packet for `--skill` at the work item's
+current stage. Prints to stdout, or writes to the `.ox-agent`-relative path
+given by `-o/--output`. Journals `context.compiled`.
 
 ## Administration
 

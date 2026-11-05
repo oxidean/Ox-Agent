@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func validOutput(skill string) map[string]any {
 // collects a valid output, advancing the work item.
 func TestDispatchCollectRoundtrip(t *testing.T) {
 	root, item := initProject(t)
-	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -103,7 +104,7 @@ func TestDispatchCollectRoundtrip(t *testing.T) {
 // run and journals skill.failed.
 func TestCollectRejectsInvalidOutput(t *testing.T) {
 	root, item := initProject(t)
-	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -126,7 +127,7 @@ func TestNextSkillSkipsCollected(t *testing.T) {
 	if err != nil || skill != "specify" {
 		t.Fatalf("NextSkill() = %q, %v; want specify", skill, err)
 	}
-	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -144,7 +145,7 @@ func TestNextSkillSkipsCollected(t *testing.T) {
 // the work item.
 func TestCollectBlocksOnBlockedVerdict(t *testing.T) {
 	root, item := initProject(t)
-	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -162,5 +163,113 @@ func TestCollectBlocksOnBlockedVerdict(t *testing.T) {
 	}
 	if item.State != "blocked" || item.BlockedFrom == "" {
 		t.Fatalf("item = %+v, want blocked", item)
+	}
+}
+
+// TestCollectKeepsStageUntilAllSkillsCollected verifies a passing collect on a
+// multi-skill stage leaves the stage so remaining skills stay selectable, and
+// the stage advances only once the last skill collects.
+func TestCollectKeepsStageUntilAllSkillsCollected(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify", "adr"}}
+
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.CurrentStage != "specification" {
+		t.Fatalf("stage advanced early to %q with adr uncollected", item.CurrentStage)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "adr" {
+		t.Fatalf("NextSkill() = %q, %v; want adr", skill, err)
+	}
+
+	run, err = Dispatch(context.Background(), root, item, DispatchRequest{Skill: "adr", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("adr"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.CurrentStage != "planning" {
+		t.Fatalf("stage = %q after last skill collected, want planning", item.CurrentStage)
+	}
+}
+
+// TestPipelineAdvancesOnceOnCompletion verifies pipeline steps do not advance
+// the stage individually; the stage moves once when the pipeline completes.
+func TestPipelineAdvancesOnceOnCompletion(t *testing.T) {
+	root, item := initProject(t)
+	dispatch := func(skill, stepID string) *Run {
+		t.Helper()
+		run, err := Dispatch(context.Background(), root, item, DispatchRequest{
+			Skill: skill, Stage: "verification", Pipeline: "review", StepID: stepID})
+		if err != nil {
+			t.Fatalf("Dispatch(%s) error = %v", stepID, err)
+		}
+		return run
+	}
+	first := dispatch("code-review", "review")
+	writeOutput(t, root, first.RunID, validOutput("code-review"))
+	if _, _, err := Collect(root, first.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err := state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.CurrentStage != "intake" {
+		t.Fatalf("stage moved to %q mid-pipeline; want intake until pipeline completes", item.CurrentStage)
+	}
+
+	second := dispatch("verify", "verify")
+	writeOutput(t, root, second.RunID, validOutput("verify"))
+	if _, _, err := Collect(root, second.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.CurrentStage != "discovery" {
+		t.Fatalf("stage = %q after pipeline completion, want discovery (single advance)", item.CurrentStage)
+	}
+}
+
+// TestDispatchRejectsAPIAdapter verifies the unimplemented api adapter fails
+// before any run artifacts are written.
+func TestDispatchRejectsAPIAdapter(t *testing.T) {
+	root, item := initProject(t)
+	integrations := filepath.Join(root, ".ox-agent", "integrations")
+	if err := os.WriteFile(filepath.Join(integrations, "api.yaml"), []byte(
+		"name: api\nadapter: api\n"), 0o644); err != nil {
+		t.Fatalf("writing api integration: %v", err)
+	}
+	_, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "api"})
+	if err == nil {
+		t.Fatal("Dispatch() with api adapter succeeded; want error")
+	}
+	entries, readErr := os.ReadDir(runsDir(root))
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("run artifacts written despite rejected adapter: %v", entries)
 	}
 }

@@ -55,7 +55,7 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 			req := harness.DispatchRequest{Skill: skill, Stage: stage, Integration: integration, Budget: budget}
-			run, err := harness.Dispatch(root, item, req)
+			run, err := harness.Dispatch(cmd.Context(), root, item, req)
 			if err != nil {
 				var gate *state.ApprovalRequiredError
 				if errors.As(err, &gate) {
@@ -192,6 +192,12 @@ func runPipeline(cmd *cobra.Command, root string, item *state.WorkItem, name, in
 	if limit <= 0 {
 		limit = 1
 	}
+	inFlight := 0
+	for _, status := range progress {
+		if status.Status == "pending" {
+			inFlight++
+		}
+	}
 	dispatched, pending, waiting, done := 0, 0, 0, 0
 	for _, status := range progress {
 		switch status.Status {
@@ -204,12 +210,12 @@ func runPipeline(cmd *cobra.Command, root string, item *state.WorkItem, name, in
 			waiting++
 			fmt.Fprintf(out, "waiting:  %s (needs %v)\n", status.Step.ID, status.Step.DependsOn)
 		case "ready":
-			if dispatched < limit {
+			if inFlight+dispatched < limit {
 				stage := status.Step.Stage
 				if stage == "" {
 					stage = item.CurrentStage
 				}
-				run, err := harness.Dispatch(root, item, harness.DispatchRequest{
+				run, err := harness.Dispatch(cmd.Context(), root, item, harness.DispatchRequest{
 					Skill: status.Step.Skill, Stage: stage, Integration: integration,
 					Pipeline: pipe.Name, StepID: status.Step.ID, Budget: budget,
 				})
