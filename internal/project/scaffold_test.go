@@ -217,6 +217,92 @@ func TestInitWritesReadme(t *testing.T) {
 	}
 }
 
+// TestRepairConfinesWritesToProject verifies Repair cannot be redirected by a
+// symlink planted inside .ox-agent: a valid symlinked asset is preserved, a
+// dangling symlinked asset is replaced by a real file, and a symlinked parent
+// directory fails the repair instead of redirecting writes outside the
+// project.
+func TestRepairConfinesWritesToProject(t *testing.T) {
+	t.Run("valid symlinked asset is preserved", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		base := Base(root)
+		outside := filepath.Join(t.TempDir(), "victim.txt")
+		if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
+			t.Fatalf("writing outside file: %v", err)
+		}
+		target := filepath.Join(base, "skills", "adr", "SKILL.md")
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("removing asset: %v", err)
+		}
+		if err := os.Symlink(outside, target); err != nil {
+			t.Fatalf("planting symlink: %v", err)
+		}
+		if _, err := Repair(root); err != nil {
+			t.Fatalf("Repair() error = %v", err)
+		}
+		info, err := os.Lstat(target)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("valid symlinked asset was replaced; want preserved")
+		}
+	})
+
+	t.Run("dangling symlinked asset is replaced", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		base := Base(root)
+		outside := filepath.Join(t.TempDir(), "victim.txt")
+		target := filepath.Join(base, "skills", "adr", "SKILL.md")
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("removing asset: %v", err)
+		}
+		if err := os.Symlink(outside, target); err != nil {
+			t.Fatalf("planting symlink: %v", err)
+		}
+		if _, err := Repair(root); err != nil {
+			t.Fatalf("Repair() error = %v", err)
+		}
+		if _, err := os.Stat(outside); !os.IsNotExist(err) {
+			t.Fatal("repair wrote through the dangling symlink to an outside file")
+		}
+		info, err := os.Lstat(target)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatal("dangling symlinked asset was not replaced by a real file")
+		}
+	})
+
+	t.Run("symlinked parent dir fails repair", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		base := Base(root)
+		outside := t.TempDir()
+		skillsDir := filepath.Join(base, "skills")
+		marker := filepath.Join(skillsDir, "adr", "SKILL.md")
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatalf("reading asset for restore: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outside, "SKILL.md"), data, 0o644); err != nil {
+			t.Fatalf("staging outside dir: %v", err)
+		}
+		if err := os.RemoveAll(skillsDir); err != nil {
+			t.Fatalf("removing skills dir: %v", err)
+		}
+		if err := os.Symlink(outside, skillsDir); err != nil {
+			t.Fatalf("symlinking skills dir: %v", err)
+		}
+		if _, err := Repair(root); err == nil {
+			t.Fatal("Repair() succeeded through a symlinked parent dir; want refusal")
+		}
+	})
+}
+
 // TestDoctorWarnsWithoutIntegration verifies doctor nudges toward `integrate`
 // when neither an AGENTS.md managed block nor .agents/skills exists — a bare
 // init is otherwise invisible to agents scanning standard discovery paths.

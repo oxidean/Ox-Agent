@@ -89,8 +89,9 @@ A run ends in one of three statuses:
 - `collected` — the output was applied. Collected runs count toward skill
   selection, stage completion, and pipeline progress.
 - `retry` — the output signalled unfinished work (`verdict: needs_rework`,
-  `next_action.type: retry`, or an escalated rework). The skill stays
-  dispatchable and does not count as done.
+  `next_action.type: retry`, or a blocked run that also requested rework or
+  retry). The skill stays dispatchable and does not count as done; a blocking
+  outcome still transitions the work item to `blocked`.
 - `failed` — schema validation failed or the skill reported `status: failed`.
 
 Completion checks use only the latest run per skill or pipeline step: a

@@ -226,8 +226,8 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	case status == "failed":
 		run.Status = "failed"
 		run.Error, _ = output["summary"].(string)
-	case blocking && verdict == "needs_rework":
-		// Escalated rework stays unresolved: retry keeps the skill
+	case blocking && (verdict == "needs_rework" || action == "retry"):
+		// Blocking rework or retry stays unresolved: retry keeps the skill
 		// dispatchable (NextSkill, stageComplete, and pipeline progress
 		// all exclude it) after the item is unblocked.
 		run.Status = "retry"

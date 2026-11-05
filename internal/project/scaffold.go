@@ -233,6 +233,42 @@ agent harnesses (a managed ` + "`AGENTS.md`" + ` block plus ` + "`/.agents/skill
 agentic work — without it, nothing outside this directory advertises the toolkit.
 `
 
+// ConfinedTarget verifies that writing target stays inside resolvedBase: a
+// dangling symlink at target itself is removed rather than written through,
+// and the deepest existing ancestor of target's directory must resolve under
+// resolvedBase. Repair and skills-update writes must pass through this so a
+// symlink planted inside .ox-agent cannot redirect writes (or MkdirAll)
+// outside the project. Callers that preserve existing files must Stat-skip
+// before confining so valid symlinks are never reached here.
+func ConfinedTarget(resolvedBase, target string) error {
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("removing symlinked path %s: %w", target, err)
+		}
+	}
+	ancestor := filepath.Dir(target)
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return fmt.Errorf("no existing ancestor for %s", target)
+		}
+		ancestor = parent
+	}
+	resolved, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", ancestor, err)
+	}
+	if resolved != resolvedBase && !strings.HasPrefix(resolved, resolvedBase+string(os.PathSeparator)) {
+		return fmt.Errorf("%s resolves outside %s; refusing to write", target, resolvedBase)
+	}
+	return nil
+}
+
 // RepairReport summarizes what Repair restored in an existing .ox-agent.
 type RepairReport struct {
 	DirsCreated   []string
@@ -252,9 +288,19 @@ func Repair(root string) (*RepairReport, error) {
 		return nil, err
 	}
 	report := &RepairReport{}
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// A missing path may sit under a symlinked ancestor (or be a
+			// dangling symlink); confine before MkdirAll so directory
+			// creation cannot escape the project.
+			if err := ConfinedTarget(resolvedBase, path); err != nil {
+				return nil, err
+			}
 			if err := os.MkdirAll(path, 0o755); err != nil {
 				return nil, fmt.Errorf("creating %s: %w", dir, err)
 			}
@@ -276,6 +322,9 @@ func Repair(root string) (*RepairReport, error) {
 		}
 		data, err := assets.ReadFile(rel)
 		if err != nil {
+			return nil, err
+		}
+		if err := ConfinedTarget(resolvedBase, target); err != nil {
 			return nil, err
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -347,6 +396,9 @@ func Repair(root string) (*RepairReport, error) {
 		if _, err := os.Stat(target); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err := ConfinedTarget(resolvedBase, target); err != nil {
 			return nil, err
 		}
 		if err := seeds[rel](); err != nil {

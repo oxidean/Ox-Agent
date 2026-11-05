@@ -311,6 +311,10 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 		return nil, err
 	}
 	report := &UpdateReport{}
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
 	for _, rel := range files {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		want, err := assets.ReadFile(rel)
@@ -322,6 +326,9 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 		case err == nil && bytes.Equal(got, want):
 			continue
 		case os.IsNotExist(err):
+			if err := project.ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
+			}
 			if err := write(target, want); err != nil {
 				return nil, err
 			}
@@ -332,6 +339,9 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 			if !overwrite {
 				report.Skipped = append(report.Skipped, rel)
 				continue
+			}
+			if err := project.ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
 			}
 			if err := write(target, want); err != nil {
 				return nil, err

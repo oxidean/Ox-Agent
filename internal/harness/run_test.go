@@ -249,6 +249,56 @@ func TestUnblockLeavesEscalatedSkillRedispatchable(t *testing.T) {
 	}
 }
 
+// TestUnblockPreservesBlockedRetry verifies a blocked run that also
+// requested retry does not count as done after the work item is unblocked:
+// the run records retry, the blocked transition still applies, and the
+// skill stays selectable.
+func TestUnblockPreservesBlockedRetry(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify"}}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["next_action"] = map[string]any{"type": "retry", "reason": "missing spec detail, needs another pass"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" {
+		t.Fatalf("run status = %s; want retry so the skill stays unresolved", run.Status)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.State != "blocked" {
+		t.Fatalf("blocked output item state = %s; want blocked", item.State)
+	}
+	if err := item.Unblock(root, "cli", "human supplied the detail"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable after unblock", skill, err)
+	}
+	complete, err := stageComplete(root, item)
+	if err != nil {
+		t.Fatalf("stageComplete() error = %v", err)
+	}
+	if complete {
+		t.Fatal("stage reported complete while the blocked retry is unresolved")
+	}
+}
+
 // TestLatestRunOutcomeWins verifies completion checks consider only the
 // newest run per skill: a skill that collected once but was re-dispatched
 // and escalated to rework is unresolved again after unblock.
