@@ -123,10 +123,8 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 	}
 	switch integration.Adapter {
 	case "manual", "spawn-cli":
-	case "api":
-		return nil, fmt.Errorf("integration %q uses adapter api, which is not implemented yet", integration.Name)
 	default:
-		return nil, fmt.Errorf("integration %q has unknown adapter %q", integration.Name, integration.Adapter)
+		return nil, fmt.Errorf("integration %q has unknown adapter %q (supported adapters: manual, spawn-cli)", integration.Name, integration.Adapter)
 	}
 	runID := fmt.Sprintf("run_%d_%06x", time.Now().UnixMilli(), rand.Uint64N(1<<24))
 	rel := "runtime/runs/" + runID

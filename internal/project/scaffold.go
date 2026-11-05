@@ -7,7 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"strconv"
+	"strings"
+
 	"github.com/oxidean/Ox-Agent/internal/assets"
+	"github.com/oxidean/Ox-Agent/internal/buildinfo"
+	"golang.org/x/mod/semver"
 )
 
 // defaultStages, defaultSkills, and defaultStageSkills seed a new project's
@@ -34,9 +39,29 @@ var defaultStageSkills = map[string][]string{
 // renameScaffold publishes a fully staged scaffold; a var so tests can inject failures.
 var renameScaffold = os.Rename
 
-// requiredVersion pins the binary range a fresh scaffold declares
-// compatibility with.
-const requiredVersion = ">=0.1.0 <0.2.0"
+// fallbackRequiredVersion pins the binary range a scaffold declares when the
+// running binary's version cannot be parsed (dev builds).
+const fallbackRequiredVersion = ">=0.1.0 <0.2.0"
+
+// requiredVersionRange derives the >=X.Y.0 <X.(Y+1).0 compatibility range a
+// fresh scaffold pins from the running binary's minor line. The pin moves
+// with the binary so scaffolds never declare a range the toolchain fails.
+func requiredVersionRange() string {
+	v := "v" + strings.TrimPrefix(buildinfo.Version, "v")
+	if !semver.IsValid(v) {
+		return fallbackRequiredVersion
+	}
+	mm := strings.TrimPrefix(semver.MajorMinor(v), "v")
+	parts := strings.SplitN(mm, ".", 2)
+	if len(parts) != 2 {
+		return fallbackRequiredVersion
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fallbackRequiredVersion
+	}
+	return fmt.Sprintf(">=%s.%d.0 <%s.%d.0", parts[0], minor, parts[0], minor+1)
+}
 
 // scaffoldDirs lists the directories every project scaffold provides.
 var scaffoldDirs = []string{
@@ -99,7 +124,7 @@ func Init(dir string) (err error) {
 	framework.Framework.Name = "ox-agent"
 	framework.Framework.Distribution = "standalone"
 	framework.Framework.Binary = "ox-agent"
-	framework.Framework.RequiredVersion = requiredVersion
+	framework.Framework.RequiredVersion = requiredVersionRange()
 	framework.Project.Name = project
 	if err := writeYAML(filepath.Join(base, "framework.yaml"), framework); err != nil {
 		return err
@@ -159,6 +184,10 @@ func writeSeeds(base, project string) error {
 	gitignore := "# Generated ox-agent runtime state; do not commit.\nruntime/\n"
 	if err := os.WriteFile(filepath.Join(base, ".gitignore"), []byte(gitignore), 0o644); err != nil {
 		return fmt.Errorf("writing .gitignore: %w", err)
+	}
+	gitattributes := "# Append-only journals merge cleanly across branches with the union driver.\nstate/events.ndjson merge=union\ndiscussions/*.yaml merge=union\n"
+	if err := os.WriteFile(filepath.Join(base, ".gitattributes"), []byte(gitattributes), 0o644); err != nil {
+		return fmt.Errorf("writing .gitattributes: %w", err)
 	}
 	if err := assets.WriteLock(base); err != nil {
 		return err
@@ -236,6 +265,9 @@ func Repair(root string) (*RepairReport, error) {
 		".gitignore": func() error {
 			return os.WriteFile(filepath.Join(base, ".gitignore"), []byte("# Generated ox-agent runtime state; do not commit.\nruntime/\n"), 0o644)
 		},
+		".gitattributes": func() error {
+			return os.WriteFile(filepath.Join(base, ".gitattributes"), []byte("# Append-only journals merge cleanly across branches with the union driver.\nstate/events.ndjson merge=union\ndiscussions/*.yaml merge=union\n"), 0o644)
+		},
 		"assets.lock":         func() error { return assets.WriteLock(base) },
 		"state/events.ndjson": func() error { return os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644) },
 		"framework.yaml": func() error {
@@ -243,7 +275,7 @@ func Repair(root string) (*RepairReport, error) {
 			framework.Framework.Name = "ox-agent"
 			framework.Framework.Distribution = "standalone"
 			framework.Framework.Binary = "ox-agent"
-			framework.Framework.RequiredVersion = requiredVersion
+			framework.Framework.RequiredVersion = requiredVersionRange()
 			framework.Project.Name = name
 			return writeYAML(filepath.Join(base, "framework.yaml"), framework)
 		},
@@ -277,7 +309,7 @@ func Repair(root string) (*RepairReport, error) {
 			return writeYAML(filepath.Join(base, "context", "project.yaml"), ctx)
 		},
 	}
-	for _, rel := range []string{".gitignore", "assets.lock", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
+	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		if _, err := os.Stat(target); err == nil {
 			continue

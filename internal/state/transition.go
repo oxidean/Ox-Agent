@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -127,6 +128,12 @@ func (item *WorkItem) Transition(root, to, actor, approver, reason string) error
 	if gate != "" {
 		data["gate"] = gate
 		data["approved_by"] = approver
+	}
+	if to == "shipped" {
+		if branch, commit := gitHead(root); branch != "" || commit != "" {
+			data["git_branch"] = branch
+			data["git_commit"] = commit
+		}
 	}
 	if err := Append(root, Event{
 		Type:       "work_item.transitioned",
@@ -295,4 +302,23 @@ func (item *WorkItem) Advance(root, actor string) (string, error) {
 		return "", err
 	}
 	return next, nil
+}
+
+// gitHead returns the current branch and short commit of the repository
+// containing root, or empty strings outside a git work tree. Recorded on
+// shipped transitions so the journal carries provenance for what was merged.
+func gitHead(root string) (branch, commit string) {
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return "", ""
+	}
+	branch = strings.TrimSpace(string(out))
+	if branch == "HEAD" {
+		branch = "" // detached HEAD: commit still identifies the ship point
+	}
+	sha, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
+	if err == nil {
+		commit = strings.TrimSpace(string(sha))
+	}
+	return branch, commit
 }

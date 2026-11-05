@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -256,9 +257,10 @@ func TestPipelineAdvancesOnceOnCompletion(t *testing.T) {
 	}
 }
 
-// TestDispatchRejectsAPIAdapter verifies the unimplemented api adapter fails
-// before any run artifacts are written.
-func TestDispatchRejectsAPIAdapter(t *testing.T) {
+// TestDispatchRejectsUnknownAdapter verifies an adapter outside the supported
+// set fails before any run artifacts are written. Protocol adapters are added
+// per consumer (named integrations), never as generic placeholders.
+func TestDispatchRejectsUnknownAdapter(t *testing.T) {
 	root, item := initProject(t)
 	integrations := filepath.Join(root, ".ox-agent", "integrations")
 	if err := os.WriteFile(filepath.Join(integrations, "api.yaml"), []byte(
@@ -268,6 +270,9 @@ func TestDispatchRejectsAPIAdapter(t *testing.T) {
 	_, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "api"})
 	if err == nil {
 		t.Fatal("Dispatch() with api adapter succeeded; want error")
+	}
+	if !strings.Contains(err.Error(), "unknown adapter") {
+		t.Fatalf("Dispatch() error = %q, want unknown adapter", err)
 	}
 	entries, readErr := os.ReadDir(runsDir(root))
 	if readErr == nil && len(entries) != 0 {

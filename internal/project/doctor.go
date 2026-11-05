@@ -61,7 +61,7 @@ func Doctor(root string) *DoctorReport {
 		_, err := os.Stat(filepath.Join(base, dir))
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
 	}
-	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", "assets.lock", "state/events.ndjson", "context/project.yaml"} {
+	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml"} {
 		_, err := os.Stat(filepath.Join(base, filepath.FromSlash(seed)))
 		report.add("file "+seed, wrapMissing(err, "missing"), true)
 	}
