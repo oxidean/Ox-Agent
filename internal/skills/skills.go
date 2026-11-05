@@ -156,7 +156,17 @@ func List(root string) ([]*Skill, error) {
 		manifestPath := filepath.Join(base, entry.Name(), "skill.yaml")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
-			continue // not a skill directory
+			embFiles, embedded := emb[entry.Name()]
+			if !embedded {
+				continue // project-local directory without a manifest
+			}
+			out = append(out, &Skill{
+				Dir:         entry.Name(),
+				Enabled:     enabled[entry.Name()],
+				Status:      statusOf(base, entry.Name(), embFiles),
+				ManifestErr: fmt.Errorf("reading skill.yaml: %w", err),
+			})
+			continue
 		}
 		skill := &Skill{Dir: entry.Name(), Enabled: enabled[entry.Name()]}
 		var m manifest

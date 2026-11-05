@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -76,12 +77,26 @@ func ReadEvents(root string) ([]Event, error) {
 		events = append(events, event)
 	}
 	sort.SliceStable(events, func(i, j int) bool {
-		ti, errI := time.Parse(time.RFC3339, events[i].Timestamp)
-		tj, errJ := time.Parse(time.RFC3339, events[j].Timestamp)
-		if errI != nil || errJ != nil {
-			return events[i].Timestamp < events[j].Timestamp
-		}
-		return ti.Before(tj)
+		return eventOrderKey(events[i]) < eventOrderKey(events[j])
 	})
 	return events, nil
+}
+
+// eventOrderKey returns a millisecond ordering key for an event. The
+// millisecond value embedded in evt_<millis>_<suffix> ids is the primary
+// key so same-second events order by creation sequence rather than by
+// journal position after a union merge; the second-precision timestamp is
+// the fallback for events without a parseable id.
+func eventOrderKey(event Event) int64 {
+	if rest, ok := strings.CutPrefix(event.EventID, "evt_"); ok {
+		if i := strings.IndexByte(rest, '_'); i > 0 {
+			if ms, err := strconv.ParseInt(rest[:i], 10, 64); err == nil {
+				return ms
+			}
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, event.Timestamp); err == nil {
+		return t.UnixMilli()
+	}
+	return 0
 }

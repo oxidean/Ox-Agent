@@ -133,3 +133,46 @@ func TestCheckFindings(t *testing.T) {
 		t.Fatal("missing output schema not flagged as error")
 	}
 }
+
+// TestListReportsMissingManifest verifies an embedded skill directory that
+// loses its skill.yaml still surfaces in List and Check instead of being
+// silently skipped.
+func TestListReportsMissingManifest(t *testing.T) {
+	root := initProject(t)
+	manifest := filepath.Join(project.Base(root), "skills", "verify", "skill.yaml")
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var verify *Skill
+	for _, skill := range list {
+		if skill.Dir == "verify" {
+			verify = skill
+		}
+	}
+	if verify == nil {
+		t.Fatal("embedded skill missing from List after losing skill.yaml")
+	}
+	if verify.ManifestErr == nil {
+		t.Fatal("ManifestErr not set for missing skill.yaml")
+	}
+	if verify.Status != StatusIncomplete {
+		t.Fatalf("status = %q, want incomplete", verify.Status)
+	}
+	findings, err := Check(root)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	found := false
+	for _, f := range findings {
+		if f.Skill == "verify" && f.Level == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no error finding for missing manifest: %+v", findings)
+	}
+}
