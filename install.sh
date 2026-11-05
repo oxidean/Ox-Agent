@@ -13,7 +13,7 @@ case "$os_name:$arch" in
   *) echo "Unsupported platform: $os_name/$arch" >&2; exit 1 ;;
 esac
 if [[ "$version" == "latest" ]]; then
-  version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | awk -F'"' '/"tag_name"/ { print $4; exit }')"
+  version="$(curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" | sed -n 's|.*/tag/||p' || true)"
 fi
 [[ -n "$version" ]] || { echo "Could not determine Ox-Agent version" >&2; exit 1; }
 archive="ox-agent_${version#v}_${target}.tar.gz"
