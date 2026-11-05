@@ -247,15 +247,23 @@ func TestDoctorWarnsWithoutIntegration(t *testing.T) {
 	if !report.Healthy() {
 		t.Fatalf("doctor unhealthy after integrate: %+v", report.Checks)
 	}
+	// The remaining assertions manipulate the managed link directly; on hosts
+	// where Integrate could not create it (Windows without Developer Mode)
+	// there is nothing to resolve and nothing meaningful to assert.
+	link := filepath.Join(root, ".agents", "skills")
+	if _, err := os.Lstat(link); err != nil {
+		t.Log("managed link unavailable; skipping link-resolution assertions")
+		return
+	}
 	// A .agents/skills link that does not resolve to .ox-agent/skills is not
 	// wiring: with no AGENTS.md block, doctor warns again.
-	if err := os.Remove(filepath.Join(root, ".agents", "skills")); err != nil {
+	if err := os.Remove(link); err != nil {
 		t.Fatalf("removing managed link: %v", err)
 	}
 	if err := os.Remove(filepath.Join(root, "AGENTS.md")); err != nil {
 		t.Fatalf("removing AGENTS.md: %v", err)
 	}
-	if err := os.Symlink("../elsewhere", filepath.Join(root, ".agents", "skills")); err != nil {
+	if err := os.Symlink("../elsewhere", link); err != nil {
 		t.Fatalf("creating foreign link: %v", err)
 	}
 	report = Doctor(root)
@@ -269,10 +277,10 @@ func TestDoctorWarnsWithoutIntegration(t *testing.T) {
 		t.Fatalf("no integration warning on foreign link: %v", report.Warnings)
 	}
 	// A link resolving to .ox-agent/skills counts even without AGENTS.md.
-	if err := os.Remove(filepath.Join(root, ".agents", "skills")); err != nil {
+	if err := os.Remove(link); err != nil {
 		t.Fatalf("removing foreign link: %v", err)
 	}
-	if err := os.Symlink(filepath.Join("..", ".ox-agent", "skills"), filepath.Join(root, ".agents", "skills")); err != nil {
+	if err := os.Symlink(filepath.Join("..", ".ox-agent", "skills"), link); err != nil {
 		t.Fatalf("creating managed link: %v", err)
 	}
 	report = Doctor(root)
