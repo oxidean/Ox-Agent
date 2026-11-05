@@ -14,8 +14,8 @@ func TestInitDoctor(t *testing.T) {
 	if err := Init(root); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if err := Doctor(root); err != nil {
-		t.Fatalf("Doctor() error = %v", err)
+	if report := Doctor(root); !report.Healthy() {
+		t.Fatalf("Doctor() unhealthy: %+v", report.Checks)
 	}
 }
 

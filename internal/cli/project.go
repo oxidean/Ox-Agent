@@ -51,9 +51,10 @@ func newInitCmd() *cobra.Command {
 	return cmd
 }
 
-// newDoctorCmd builds the doctor command, which validates the project layout.
+// newDoctorCmd builds the doctor command, reporting every project finding.
 func newDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	var fix bool
+	cmd := &cobra.Command{
 		Use:     "doctor",
 		Short:   "Validate the local Ox-Agent setup",
 		Args:    cobra.NoArgs,
@@ -63,13 +64,49 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := project.Doctor(root); err != nil {
-				return err
+			out := cmd.OutOrStdout()
+			report := project.Doctor(root)
+			if fix && !report.Healthy() {
+				if _, err := project.Repair(root); err != nil {
+					return err
+				}
+				fmt.Fprintln(out, "repair applied; re-checking")
+				report = project.Doctor(root)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Ox-Agent doctor: healthy (binary %s)\n", buildinfo.Version)
+			for _, check := range report.Checks {
+				if check.OK {
+					fmt.Fprintf(out, "ok   %s\n", check.Name)
+				} else {
+					suffix := ""
+					if check.Fixable {
+						suffix = " (fixable with --fix)"
+					}
+					fmt.Fprintf(out, "FAIL %s: %s%s\n", check.Name, check.Detail, suffix)
+				}
+			}
+			for _, warning := range report.Warnings {
+				fmt.Fprintf(out, "warn %s\n", warning)
+			}
+			if !report.Healthy() {
+				return fmt.Errorf("doctor found %d issue(s)", countFailures(report))
+			}
+			fmt.Fprintf(out, "Ox-Agent doctor: healthy (binary %s)\n", buildinfo.Version)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&fix, "fix", false, "repair fixable findings, then re-check")
+	return cmd
+}
+
+// countFailures tallies failed checks in a doctor report.
+func countFailures(report *project.DoctorReport) int {
+	failures := 0
+	for _, check := range report.Checks {
+		if !check.OK {
+			failures++
+		}
+	}
+	return failures
 }
 
 // newVersionCmd builds the version command, printing the bare version.

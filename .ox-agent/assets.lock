@@ -2,7 +2,7 @@
   "schema_version": 1,
   "files": {
     "integrations/manual.yaml": "sha256:09025877c9efd93692853931df8f78f85609f463009a375f2d95a532b8864159",
-    "lifecycle/workflow.yaml": "sha256:ac2ce9b59269885814a1d6b4789c9724fa1823cea5922151b5d5def95cf4014d",
+    "lifecycle/workflow.yaml": "sha256:2bd1823cd5b3adf6f32dee12faf2fcfa8d0eeea493c26bcca297bdeb87d74443",
     "pipelines/plan.yaml": "sha256:8a9feab695ec2d28078e7a97ca76ecbebb20bb33a9f824543921c03c865c7d44",
     "schemas/assets-lock.schema.json": "sha256:b7c25c77ccbe3dc1ff9cbc93da145cf2777fd49569595fb0a621defbe7b99736",
     "schemas/config.schema.json": "sha256:ee454a6bbb33ea4f3eb4e8cdbc4c56f06aabbc32f053e879d2d6a23da2c70420",
@@ -87,6 +87,6 @@
     "skills/verify/schemas/input.schema.json": "sha256:4db6f9b6d39abc33ad773c7d84b8b5ca69c632593b58e9fe7c3bf02c22261495",
     "skills/verify/schemas/output.schema.json": "sha256:55e1993014ac2e14bb6711f1268cab05d7604206f005d1b9908c4c063bbb00de",
     "skills/verify/skill.yaml": "sha256:e97f39c6c9b8ede028a0235027ea16aa1bed301e6e4bfce6eaba421c27838acb",
-    "workflows/normal.yaml": "sha256:cc7da69fc715e638d73567fef1af5495de638a1128ad519b20d0383ec0bc53b2"
+    "workflows/normal.yaml": "sha256:ca3869b5e736b3bcedd45c0988e30273bfca0a6efd6415e8dff4851d55685c8b"
   }
 }

@@ -9,6 +9,7 @@ states:
   - verifying
   - shipping
   - shipped
+  - retrospecting
   - blocked
   - archived
 transitions:
@@ -31,6 +32,8 @@ transitions:
   - from: shipping
     to: shipped
     gate: human
+  - from: shipped
+    to: retrospecting
   - from: "*"
     to: blocked
   - from: blocked

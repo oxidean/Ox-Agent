@@ -20,9 +20,6 @@ type Lifecycle struct {
 	} `yaml:"transitions"`
 }
 
-// terminalStates cannot leave through any transition, including wildcards.
-var terminalStates = map[string]bool{"shipped": true, "archived": true}
-
 // stageToState maps profile stages (nouns) onto lifecycle states (gerunds).
 var stageToState = map[string]string{
 	"discovery":      "discovering",
@@ -32,6 +29,7 @@ var stageToState = map[string]string{
 	"implementation": "implementing",
 	"verification":   "verifying",
 	"shipping":       "shipping",
+	"retrospective":  "retrospecting",
 }
 
 // stateToStage is the inverse of stageToState.
@@ -58,16 +56,38 @@ func LoadLifecycle(root string) (*Lifecycle, error) {
 }
 
 // Find reports whether the transition from→to is legal and returns the gate
-// required on the edge, if any. A "*" endpoint matches any non-terminal state.
+// required on the edge, if any. A "*" endpoint is constrained by target:
+// nothing leaves archived, and shipped items cannot become blocked.
 func (l *Lifecycle) Find(from, to string) (gate string, ok bool) {
 	for _, tr := range l.Transitions {
-		fromOK := tr.From == from || (tr.From == "*" && !terminalStates[from] && from != tr.To)
-		toOK := tr.To == to || (tr.To == "*" && !terminalStates[to] && to != tr.From)
+		fromOK := tr.From == from || (tr.From == "*" && wildcardFrom(from, to))
+		toOK := tr.To == to || (tr.To == "*" && wildcardTo(to))
 		if fromOK && toOK && from != to {
 			return tr.Gate, true
 		}
 	}
 	return "", false
+}
+
+// wildcardFrom reports whether a "*" source edge may leave from.
+func wildcardFrom(from, to string) bool {
+	if from == "archived" {
+		return false
+	}
+	if to == "blocked" && from == "shipped" {
+		return false
+	}
+	return true
+}
+
+// wildcardTo reports whether a "*" target edge may enter to. Wildcard targets
+// only reach ordinary in-flight states, not terminal or side states.
+func wildcardTo(to string) bool {
+	switch to {
+	case "blocked", "shipped", "archived":
+		return false
+	}
+	return true
 }
 
 // LegalTargets lists the states reachable from from in one transition.

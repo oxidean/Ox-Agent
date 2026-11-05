@@ -12,7 +12,7 @@ import (
 
 // defaultStages, defaultSkills, and defaultStageSkills seed a new project's
 // config.yaml with the standard lifecycle profile and bundled skill set.
-var defaultStages = []string{"discovery", "brainstorming", "specification", "planning", "implementation", "verification", "shipping"}
+var defaultStages = []string{"discovery", "brainstorming", "specification", "planning", "implementation", "verification", "shipping", "retrospective"}
 
 var defaultSkills = []string{
 	"discover-context", "brainstorm", "specify", "adr", "multi-stage-plan",
@@ -115,24 +115,6 @@ func Init(dir string) (err error) {
 	}
 	if err := renameScaffold(base, finalBase); err != nil {
 		return fmt.Errorf("publishing project scaffold: %w", err)
-	}
-	return nil
-}
-
-// Doctor verifies that root contains a valid Ox-Agent project layout.
-func Doctor(root string) error {
-	base := Base(root)
-	framework, err := LoadFramework(root)
-	if err != nil {
-		return fmt.Errorf("reading .ox-agent/framework.yaml: %w", err)
-	}
-	if framework.SchemaVersion != 1 || framework.Framework.Name != "ox-agent" {
-		return errors.New("unsupported or invalid Ox-Agent framework configuration")
-	}
-	for _, file := range []string{"framework.yaml", "config.yaml", "policy.yaml", "state/events.ndjson", "work/active", "skills", "workflows", "pipelines"} {
-		if _, err := os.Stat(filepath.Join(base, file)); err != nil {
-			return fmt.Errorf("missing .ox-agent/%s: %w", file, err)
-		}
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ workflow:
       - implementation
       - verification
       - shipping
+      - retrospective
 skills:
   enabled:
     - discover-context
