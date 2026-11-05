@@ -143,6 +143,40 @@ func TestNextSkillSkipsCollected(t *testing.T) {
 	}
 }
 
+// TestCollectRetryLeavesSkillRedispatchable verifies a needs_rework/retry
+// output finishes the run without counting it as done: the skill stays
+// selectable for another pass and the work item does not advance.
+func TestCollectRetryLeavesSkillRedispatchable(t *testing.T) {
+	root, item := initProject(t)
+	skills := map[string][]string{"specification": {"specify", "adr"}}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "retry", "reason": "gaps found"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" {
+		t.Fatalf("run status = %s; want retry", run.Status)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable", skill, err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.CurrentStage != "intake" {
+		t.Fatalf("stage advanced on retry: %s", item.CurrentStage)
+	}
+}
+
 // TestCollectBlocksOnBlockedVerdict verifies a blocked skill output blocks
 // the work item.
 func TestCollectBlocksOnBlockedVerdict(t *testing.T) {

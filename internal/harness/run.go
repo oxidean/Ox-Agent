@@ -216,9 +216,16 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
 	status, _ := output["status"].(string)
 	verdict, _ := output["verdict"].(string)
+	next, _ := output["next_action"].(map[string]any)
+	action, _ := next["type"].(string)
 	if status == "failed" {
 		run.Status = "failed"
 		run.Error, _ = output["summary"].(string)
+	} else if verdict == "needs_rework" || action == "retry" {
+		// A rework/retry outcome is finished but not done: the run must not
+		// count for skill selection or pipeline progress so another pass
+		// stays dispatchable.
+		run.Status = "retry"
 	} else {
 		run.Status = "collected"
 	}
@@ -233,7 +240,7 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		Type:       eventType,
 		WorkItemID: item.ID,
 		Actor:      "ox-agent",
-		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict},
+		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action},
 	}); err != nil {
 		return run, output, err
 	}

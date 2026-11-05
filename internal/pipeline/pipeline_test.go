@@ -88,6 +88,16 @@ func TestProgressTracksSteps(t *testing.T) {
 	if status["specify"] != "ready" {
 		t.Fatalf("specify should be ready once deps done: %v", status)
 	}
+	// A retry-status run is finished but not done: the step returns to
+	// ready so another pass can be dispatched.
+	seedRun(t, root, "run_d", item.ID, "plan", "specify", "retry")
+	progress, _ = Progress(root, pipe, item)
+	for _, s := range progress {
+		status[s.Step.ID] = s.Status
+	}
+	if status["specify"] != "ready" {
+		t.Fatalf("retry step should stay ready, got %s", status["specify"])
+	}
 }
 
 // TestLoadRejectsBadDeps verifies pipeline loading rejects unknown depends_on.

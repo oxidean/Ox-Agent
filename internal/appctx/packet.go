@@ -158,7 +158,7 @@ func collectedRuns(root, workItemID string) ([]PriorOutput, error) {
 			Skill      string `json:"skill"`
 			Status     string `json:"status"`
 		}
-		if json.Unmarshal(data, &run) != nil || run.WorkItemID != workItemID || run.Status != "collected" {
+		if json.Unmarshal(data, &run) != nil || run.WorkItemID != workItemID || (run.Status != "collected" && run.Status != "retry") {
 			continue
 		}
 		priors = append(priors, PriorOutput{
