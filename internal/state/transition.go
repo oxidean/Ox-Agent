@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -308,7 +309,11 @@ func (item *WorkItem) Advance(root, actor string) (string, error) {
 // containing root, or empty strings outside a git work tree. Recorded on
 // shipped transitions so the journal carries provenance for what was merged.
 func gitHead(root string) (branch, commit string) {
-	out, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	// Git can block on credential helpers or filesystem stalls; bound both
+	// lookups so provenance collection never hangs a shipped transition.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return "", ""
 	}
@@ -316,7 +321,7 @@ func gitHead(root string) (branch, commit string) {
 	if branch == "HEAD" {
 		branch = "" // detached HEAD: commit still identifies the ship point
 	}
-	sha, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
+	sha, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--short", "HEAD").Output()
 	if err == nil {
 		commit = strings.TrimSpace(string(sha))
 	}

@@ -60,7 +60,13 @@ func requiredVersionRange() string {
 	if err != nil {
 		return fallbackRequiredVersion
 	}
-	return fmt.Sprintf(">=%s.%d.0 <%s.%d.0", parts[0], minor, parts[0], minor+1)
+	floor := fmt.Sprintf("%s.%d.0", parts[0], minor)
+	if semver.Prerelease(v) != "" {
+		// A prerelease binary predates its minor's .0 release; floor the
+		// range at the running version so it satisfies its own pin.
+		floor = strings.TrimPrefix(v, "v")
+	}
+	return fmt.Sprintf(">=%s <%s.%d.0", floor, parts[0], minor+1)
 }
 
 // scaffoldDirs lists the directories every project scaffold provides.
@@ -185,7 +191,7 @@ func writeSeeds(base, project string) error {
 	if err := os.WriteFile(filepath.Join(base, ".gitignore"), []byte(gitignore), 0o644); err != nil {
 		return fmt.Errorf("writing .gitignore: %w", err)
 	}
-	gitattributes := "# Append-only journals merge cleanly across branches with the union driver.\nstate/events.ndjson merge=union\ndiscussions/*.yaml merge=union\n"
+	gitattributes := "# The append-only event journal merges cleanly across branches with the union driver.\nstate/events.ndjson merge=union\n"
 	if err := os.WriteFile(filepath.Join(base, ".gitattributes"), []byte(gitattributes), 0o644); err != nil {
 		return fmt.Errorf("writing .gitattributes: %w", err)
 	}
@@ -266,7 +272,7 @@ func Repair(root string) (*RepairReport, error) {
 			return os.WriteFile(filepath.Join(base, ".gitignore"), []byte("# Generated ox-agent runtime state; do not commit.\nruntime/\n"), 0o644)
 		},
 		".gitattributes": func() error {
-			return os.WriteFile(filepath.Join(base, ".gitattributes"), []byte("# Append-only journals merge cleanly across branches with the union driver.\nstate/events.ndjson merge=union\ndiscussions/*.yaml merge=union\n"), 0o644)
+			return os.WriteFile(filepath.Join(base, ".gitattributes"), []byte("# The append-only event journal merges cleanly across branches with the union driver.\nstate/events.ndjson merge=union\n"), 0o644)
 		},
 		"assets.lock":         func() error { return assets.WriteLock(base) },
 		"state/events.ndjson": func() error { return os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644) },

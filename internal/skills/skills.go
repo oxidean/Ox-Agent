@@ -97,13 +97,13 @@ func statusOf(base, dir string, embFiles []string) Status {
 	if len(embFiles) == 0 {
 		return StatusProject
 	}
-	status := StatusCurrent
+	var missing, modified bool
 	for _, rel := range embFiles {
 		target := filepath.Join(base, dir, filepath.FromSlash(strings.TrimPrefix(rel, "skills/"+dir+"/")))
 		got, err := os.ReadFile(target)
 		if err != nil {
-			if os.IsNotExist(err) && status == StatusCurrent {
-				status = StatusIncomplete
+			if os.IsNotExist(err) {
+				missing = true
 			}
 			continue
 		}
@@ -112,10 +112,19 @@ func statusOf(base, dir string, embFiles []string) Status {
 			continue
 		}
 		if !bytes.Equal(got, want) {
-			return StatusModified
+			modified = true
 		}
 	}
-	return status
+	// Missing files outrank modifications: an incomplete skill is an error,
+	// drift alone is only a warning.
+	switch {
+	case missing:
+		return StatusIncomplete
+	case modified:
+		return StatusModified
+	default:
+		return StatusCurrent
+	}
 }
 
 // List scans .ox-agent/skills and reports every directory containing a
