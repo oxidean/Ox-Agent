@@ -46,17 +46,30 @@ func IntegrationGaps(root string) []string {
 	if err != nil || !strings.Contains(string(data), markerBegin) {
 		missing = append(missing, "AGENTS.md block")
 	}
+	// Both discovery links are expected to resolve to the materialized
+	// skill tree; a link that points at any other existing directory leaves
+	// agents scanning the wrong skills while looking wired.
+	want, wantErr := filepath.EvalSymlinks(filepath.Join(root, ".ox-agent", "skills"))
 	for _, link := range []string{filepath.Join(".agents", "skills"), filepath.Join(".claude", "skills")} {
 		target, err := os.Readlink(filepath.Join(root, link))
 		if err != nil {
 			missing = append(missing, link+" symlink")
 			continue
 		}
-		resolved := filepath.Join(root, filepath.Dir(link), target)
+		resolved := target
+		if !filepath.IsAbs(target) {
+			resolved = filepath.Join(root, filepath.Dir(link), target)
+		}
 		if _, err := os.Stat(resolved); err != nil {
 			missing = append(missing, link+" symlink (broken)")
+			continue
+		}
+		got, err := filepath.EvalSymlinks(resolved)
+		if err == nil && wantErr == nil && got != want {
+			missing = append(missing, link+" symlink (wrong target)")
 		}
 	}
+
 	return missing
 }
 

@@ -233,6 +233,40 @@ func writeSeeds(base, project string) error {
 }
 
 // RepairReport summarizes what Repair restored in an existing .ox-agent.
+// confinedTarget verifies that writing target stays inside resolvedBase: a
+// symlink at target itself is removed rather than written through, and the
+// deepest existing ancestor of target's directory must resolve under
+// resolvedBase. Repair writes must pass through this so a symlink planted
+// inside .ox-agent cannot redirect writes (or MkdirAll) outside the project.
+func confinedTarget(resolvedBase, target string) error {
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("removing symlinked path %s: %w", target, err)
+		}
+	}
+	ancestor := filepath.Dir(target)
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return fmt.Errorf("no existing ancestor for %s", target)
+		}
+		ancestor = parent
+	}
+	resolved, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", ancestor, err)
+	}
+	if resolved != resolvedBase && !strings.HasPrefix(resolved, resolvedBase+string(os.PathSeparator)) {
+		return fmt.Errorf("%s resolves outside %s; refusing to write", target, resolvedBase)
+	}
+	return nil
+}
+
 type RepairReport struct {
 	DirsCreated   []string
 	FilesRestored []string
@@ -254,6 +288,10 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 		return nil, err
 	}
 	report := &RepairReport{}
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -273,6 +311,9 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		data, err := assets.ReadFile(rel)
 		if err != nil {
+			return nil, err
+		}
+		if err := confinedTarget(resolvedBase, target); err != nil {
 			return nil, err
 		}
 		disk, err := os.ReadFile(target)
@@ -354,6 +395,9 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	}
 	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "README.md", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
 		target := filepath.Join(base, filepath.FromSlash(rel))
+		if err := confinedTarget(resolvedBase, target); err != nil {
+			return nil, err
+		}
 		if _, err := os.Stat(target); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
@@ -363,6 +407,12 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			return nil, err
 		}
 		report.SeedsWritten = append(report.SeedsWritten, rel)
+	}
+	// Refresh the lock so it describes the running binary's embedded
+	// manifest; a stale lock would keep doctor warning about drift that a
+	// sync has already corrected.
+	if err := assets.WriteLock(base); err != nil {
+		return nil, err
 	}
 	return report, nil
 }

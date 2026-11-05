@@ -1,11 +1,14 @@
 package project
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/oxidean/Ox-Agent/internal/assets"
 )
 
 // TestInitDoctor verifies init produces a scaffold doctor accepts.
@@ -300,5 +303,132 @@ func TestRepairSyncRewritesDrift(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(target); string(data) == "# local edit\n" {
 		t.Fatal("Repair(true) did not rewrite the drifted file")
+	}
+}
+
+// TestRepairSyncRefreshesLock verifies a successful sync rewrites assets.lock
+// so doctor stops warning about drift the sync already corrected.
+func TestRepairSyncRefreshesLock(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("LoadLock() error = %v", err)
+	}
+	for rel := range lock.Files {
+		lock.Files[rel] = "sha256:stale"
+		break
+	}
+	out, _ := json.MarshalIndent(lock, "", "  ")
+	if err := os.WriteFile(filepath.Join(base, assets.LockPath), out, 0o644); err != nil {
+		t.Fatalf("staleness injection: %v", err)
+	}
+	if _, err := Repair(root, true); err != nil {
+		t.Fatalf("Repair(true) error = %v", err)
+	}
+	missing, changed, _, err := assets.CheckLock(base)
+	if err != nil {
+		t.Fatalf("CheckLock() error = %v", err)
+	}
+	if len(missing) > 0 || len(changed) > 0 {
+		t.Fatalf("lock still stale after Repair(true): missing=%v changed=%v", missing, changed)
+	}
+}
+
+// TestRepairWritesStayInsideBase verifies repair never writes through a
+// symlink planted inside .ox-agent: a symlinked asset file is replaced by a
+// real file, and a symlinked parent directory fails the repair outright
+// instead of redirecting writes outside the project.
+func TestRepairWritesStayInsideBase(t *testing.T) {
+	t.Run("symlinked asset file", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		outside := filepath.Join(t.TempDir(), "victim.txt")
+		if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
+			t.Fatalf("writing outside file: %v", err)
+		}
+		target := filepath.Join(Base(root), "skills", "adr", "SKILL.md")
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("removing asset: %v", err)
+		}
+		if err := os.Symlink(outside, target); err != nil {
+			t.Fatalf("planting symlink: %v", err)
+		}
+		if _, err := Repair(root, true); err != nil {
+			t.Fatalf("Repair(true) error = %v", err)
+		}
+		if data, _ := os.ReadFile(outside); string(data) != "keep me" {
+			t.Fatal("repair wrote through the symlink to an outside file")
+		}
+		info, err := os.Lstat(target)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatal("symlinked asset was not replaced by a real file")
+		}
+	})
+
+	t.Run("symlinked parent dir", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		outside := t.TempDir()
+		if err := os.RemoveAll(filepath.Join(Base(root), "skills")); err != nil {
+			t.Fatalf("removing skills dir: %v", err)
+		}
+		if err := os.Symlink(outside, filepath.Join(Base(root), "skills")); err != nil {
+			t.Fatalf("planting dir symlink: %v", err)
+		}
+		if _, err := Repair(root, true); err == nil {
+			t.Fatal("Repair(true) succeeded through a symlinked parent dir")
+		}
+		entries, err := os.ReadDir(outside)
+		if err != nil {
+			t.Fatalf("reading outside dir: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("repair wrote outside the project: %v", entries)
+		}
+	})
+}
+
+// TestIntegrationGapsWrongTarget verifies IntegrationGaps reports a discovery
+// link that resolves to an existing directory other than the materialized
+// skill tree.
+func TestIntegrationGapsWrongTarget(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if _, err := Integrate(root); err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	if gaps := IntegrationGaps(root); len(gaps) != 0 {
+		t.Fatalf("unexpected gaps after Integrate(): %v", gaps)
+	}
+	foreign := filepath.Join(root, "elsewhere")
+	if err := os.MkdirAll(foreign, 0o755); err != nil {
+		t.Fatalf("creating foreign dir: %v", err)
+	}
+	link := filepath.Join(root, ".agents", "skills")
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("removing link: %v", err)
+	}
+	if err := os.Symlink(foreign, link); err != nil {
+		t.Fatalf("repointing link: %v", err)
+	}
+	gaps := IntegrationGaps(root)
+	found := false
+	for _, g := range gaps {
+		if strings.Contains(g, ".agents") && strings.Contains(g, "wrong target") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("foreign link not reported as a gap: %v", gaps)
 	}
 }
