@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -39,6 +40,9 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
 
       - name: Release binary artifacts
         uses: goreleaser/goreleaser-action@v6

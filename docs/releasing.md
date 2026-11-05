@@ -14,6 +14,15 @@ go build ./cmd/ox-agent
 
 GoReleaser creates archives for supported platforms and architectures, plus
 `checksums.txt`. The shell installer verifies the checksum before installation.
+`checksums.txt` is signed keylessly with cosign during the release workflow;
+the Sigstore bundle publishes alongside it as `checksums.txt.sigstore.json`:
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/oxidean/Ox-Agent/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
 
 ## Release workflow
 
