@@ -6,10 +6,10 @@ Ox-Agent is a globally installed Go CLI that executes the skills, workflows, and
 pipelines defined by each repository's `.ox-agent/` directory. Project state,
 standards, work items, and decisions remain local and version-controlled.
 
-> The standalone Go distribution is the active migration target. The current
-> binary foundation provides repository initialization, validation, work-item
-> creation, status, embedded skills, and release-based installation. Full agent
-> orchestration is being built incrementally.
+> The standalone Go distribution is the active line. The binary provides
+> initialization, validation, work-item lifecycle, state replay, context-packet
+> compilation, harness execution, pipelines, discussions, self-update, and
+> release-based installation.
 
 ## Why Ox-Agent?
 
@@ -70,8 +70,9 @@ ox-agent status
 directory. The globally installed binary materializes the official skills,
 workflows, pipelines, and schemas into `.ox-agent/`.
 
-`start` currently creates work-item scaffolding. It does not yet dispatch agents
-or execute the requested change.
+`run` dispatches the stage-mapped skill through a configured harness
+integration — the manual adapter works with any agent. `run collect` validates
+the recorded output and applies its next action.
 
 ## Repository-local layout
 
@@ -105,32 +106,49 @@ work     = what happened
 
 ```text
 ox-agent version                    Show the installed binary version
-ox-agent init                       Initialize .ox-agent/
-ox-agent doctor                     Validate the local Ox-Agent setup
+ox-agent init [--repair|--integrate] Initialize or repair .ox-agent/
+ox-agent doctor [--fix]             Validate the local Ox-Agent setup
 ox-agent start <title>              Create a work item
-ox-agent status                     List active work items
+ox-agent status [work-item]         List or inspect work items
+ox-agent transition <wi> <state>    Move along a legal lifecycle edge
+ox-agent advance <wi>               Advance to the next profile stage
+ox-agent run <wi> [--pipeline p]    Dispatch stage skills or a pipeline
+ox-agent run collect <run-id>       Validate and apply a run's output
+ox-agent review <wi> / ship <wi>    Pipeline shortcuts
+ox-agent discuss open|add|...       Durable discussion threads
+ox-agent state replay|explain|events Inspect the event journal
+ox-agent context index|compile      Context index and packets
+ox-agent eval <skill> [--emit]      Score skill eval cases
+ox-agent update [--check]           Self-update the binary
+ox-agent uninstall --yes            Remove the binary
 ```
+
+See [`docs/cli.md`](docs/cli.md) for the full reference.
 
 The global binary is the only required runtime. It should not be installed in
 `node_modules`, `.ox-agent`, or a project-specific vendor directory.
 
 ## Current status
 
-Available in the standalone foundation:
+Available in the standalone distribution:
 
-- Global Go binary with `version`, `init`, `doctor`, `start`, and `status`.
-- Embedded official skills, schemas, workflows, and pipelines.
-- Repository-local `.ox-agent/` materialization.
-- Cross-platform release packaging and checksum-based installation.
+- Work-item lifecycle with legal transitions, gates, blocking, and archiving.
+- Append-only event journal with replay, explain, and snapshots.
+- Schema-validated doctor with `--fix` repair.
+- Context indexing and token-budgeted packet compilation.
+- Harness dispatch/collect through the manual adapter, with the contract
+  enforced on both sides.
+- Pipeline DAG execution honoring `policy.budgets.max_parallel_agents`.
+- Durable discussion threads with compacted summaries.
+- Skill evaluations scored against output schemas and quality assertions.
+- Checksum-verified self-update and uninstall.
 
 Next:
 
-- `update`, install/uninstall controls, and signed release metadata.
-- State replay, legal transitions, profiles, and gates.
-- Context-packet compilation and token budgets.
-- Durable discussions and automated summaries.
-- Structured skill execution and local/Hermes harness adapters.
-- TDD, review, verification, shipping, and retrospective pipelines.
+- `spawn-cli` and API harness adapters.
+- Signed release metadata.
+- Automated discussion summarization.
+- Live harness-backed eval generation.
 
 ## Skills and workflows
 
@@ -156,16 +174,15 @@ binary resolves and validates them without requiring a source checkout.
 
 ## Updates
 
-The planned update flow is:
-
 ```bash
-ox-agent update
-ox-agent update --check
+ox-agent update --check        # report installed vs latest
+ox-agent update                # verify checksum and replace the binary
 ox-agent update --version v0.2.0
+ox-agent uninstall --yes
 ```
 
-Updates will verify release checksums or signatures and replace the global
-binary atomically while preserving every repository's `.ox-agent/` state.
+Updates verify release checksums and replace the global binary atomically
+while preserving every repository's `.ox-agent/` state.
 
 ## Documentation
 

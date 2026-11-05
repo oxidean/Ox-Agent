@@ -48,7 +48,14 @@ extract `ox-agent`, and place it in a directory on `PATH`.
 
 ## Upgrade and uninstall
 
-The update command is planned. Until it is available, install a newer release
-over the existing binary after verifying its checksum. To uninstall, remove
-the binary from the directory where it was installed. Project-local
-`.ox-agent/` directories are not removed by uninstalling the global binary.
+```bash
+ox-agent update --check     # report installed vs latest
+ox-agent update             # verify checksum and replace the binary
+ox-agent update --version v0.2.0
+ox-agent uninstall --yes
+```
+
+`update` downloads the release archive, verifies its SHA-256 digest against
+the published `checksums.txt`, and atomically replaces the running binary.
+`uninstall` removes the binary only — project-local `.ox-agent/` directories
+are never touched.
