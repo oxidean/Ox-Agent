@@ -177,6 +177,35 @@ func TestCollectRetryLeavesSkillRedispatchable(t *testing.T) {
 	}
 }
 
+// TestCollectEscalateBeatsRetry verifies a rework verdict combined with an
+// escalate action blocks the work item instead of classifying the run as
+// retry — blocking outcomes take priority.
+func TestCollectEscalateBeatsRetry(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "needs human decision"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "collected" {
+		t.Fatalf("run status = %s; want collected so applyOutcome runs", run.Status)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.State != "blocked" {
+		t.Fatalf("escalated item state = %s; want blocked", item.State)
+	}
+}
+
 // TestCollectBlocksOnBlockedVerdict verifies a blocked skill output blocks
 // the work item.
 func TestCollectBlocksOnBlockedVerdict(t *testing.T) {
