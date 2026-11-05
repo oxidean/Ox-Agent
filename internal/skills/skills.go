@@ -148,27 +148,37 @@ func List(root string) ([]*Skill, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []*Skill
+	// Candidate skills are the union of on-disk directories and embedded
+	// skill names, so a deleted bundled skill still surfaces as incomplete.
+	names := map[string]bool{}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+		if entry.IsDir() {
+			names[entry.Name()] = true
 		}
-		manifestPath := filepath.Join(base, entry.Name(), "skill.yaml")
+	}
+	for name := range emb {
+		if name != "" {
+			names[name] = true
+		}
+	}
+	var out []*Skill
+	for name := range names {
+		manifestPath := filepath.Join(base, name, "skill.yaml")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
-			embFiles, embedded := emb[entry.Name()]
-			if !embedded {
+			embFiles, embedded := emb[name]
+			if !embedded && os.IsNotExist(err) {
 				continue // project-local directory without a manifest
 			}
 			out = append(out, &Skill{
-				Dir:         entry.Name(),
-				Enabled:     enabled[entry.Name()],
-				Status:      statusOf(base, entry.Name(), embFiles),
+				Dir:         name,
+				Enabled:     enabled[name],
+				Status:      statusOf(base, name, embFiles),
 				ManifestErr: fmt.Errorf("reading skill.yaml: %w", err),
 			})
 			continue
 		}
-		skill := &Skill{Dir: entry.Name(), Enabled: enabled[entry.Name()]}
+		skill := &Skill{Dir: name, Enabled: enabled[name]}
 		var m manifest
 		if err := yaml.Unmarshal(data, &m); err != nil {
 			skill.ManifestErr = fmt.Errorf("parsing skill.yaml: %w", err)
@@ -183,7 +193,7 @@ func List(root string) ([]*Skill, error) {
 				skill.CompatOK = ok
 			}
 		}
-		skill.Status = statusOf(base, entry.Name(), emb[entry.Name()])
+		skill.Status = statusOf(base, name, emb[name])
 		out = append(out, skill)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Dir < out[j].Dir })

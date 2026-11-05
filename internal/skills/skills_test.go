@@ -176,3 +176,41 @@ func TestListReportsMissingManifest(t *testing.T) {
 		t.Fatalf("no error finding for missing manifest: %+v", findings)
 	}
 }
+
+// TestListReportsDeletedSkillDir verifies an embedded skill whose whole
+// directory was deleted still surfaces as incomplete with an error finding.
+func TestListReportsDeletedSkillDir(t *testing.T) {
+	root := initProject(t)
+	if err := os.RemoveAll(filepath.Join(project.Base(root), "skills", "retrospective")); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var retro *Skill
+	for _, skill := range list {
+		if skill.Dir == "retrospective" {
+			retro = skill
+		}
+	}
+	if retro == nil {
+		t.Fatal("deleted embedded skill missing from List")
+	}
+	if retro.Status != StatusIncomplete {
+		t.Fatalf("status = %q, want incomplete", retro.Status)
+	}
+	findings, err := Check(root)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	found := false
+	for _, f := range findings {
+		if f.Skill == "retrospective" && f.Level == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no error finding for deleted skill dir: %+v", findings)
+	}
+}
