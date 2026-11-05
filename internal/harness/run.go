@@ -24,10 +24,22 @@ type Run struct {
 	Adapter       string `json:"adapter"`
 	Status        string `json:"status"`
 	PacketPath    string `json:"packet_path"`
+	Pipeline      string `json:"pipeline,omitempty"`
+	StepID        string `json:"step_id,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	CollectedAt   string `json:"collected_at,omitempty"`
 	Error         string `json:"error,omitempty"`
 	Dir           string `json:"-"`
+}
+
+// DispatchRequest describes one skill invocation to dispatch.
+type DispatchRequest struct {
+	Skill       string
+	Stage       string
+	Integration string
+	Pipeline    string
+	StepID      string
+	Budget      int
 }
 
 // runsDir returns the runtime/runs directory under root.
@@ -113,8 +125,8 @@ func NextSkill(root string, item *state.WorkItem, stage string, skills map[strin
 
 // Dispatch compiles the packet and creates a pending run. For manual
 // integrations the operator completes the run offline and collects it later.
-func Dispatch(root string, item *state.WorkItem, skill, stage, integrationName string, budget int) (*Run, error) {
-	integration, err := Resolve(root, integrationName)
+func Dispatch(root string, item *state.WorkItem, req DispatchRequest) (*Run, error) {
+	integration, err := Resolve(root, req.Integration)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +136,7 @@ func Dispatch(root string, item *state.WorkItem, skill, stage, integrationName s
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, err
 	}
-	packet, err := appctx.Compile(root, item, skill, stage, budget, rel+"/output.json")
+	packet, err := appctx.Compile(root, item, req.Skill, req.Stage, req.Budget, rel+"/output.json")
 	if err != nil {
 		return nil, err
 	}
@@ -140,10 +152,12 @@ func Dispatch(root string, item *state.WorkItem, skill, stage, integrationName s
 		RunID:         runID,
 		WorkItemID:    item.ID,
 		Skill:         packet.Skill,
-		Stage:         stage,
+		Stage:         req.Stage,
 		Adapter:       integration.Adapter,
 		Status:        "pending",
 		PacketPath:    rel + "/packet.json",
+		Pipeline:      req.Pipeline,
+		StepID:        req.StepID,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 		Dir:           runDir,
 	}
@@ -154,7 +168,7 @@ func Dispatch(root string, item *state.WorkItem, skill, stage, integrationName s
 		Type:       "skill.invoked",
 		WorkItemID: item.ID,
 		Actor:      "ox-agent",
-		Data:       map[string]any{"run_id": runID, "skill": packet.Skill, "stage": stage, "adapter": integration.Adapter},
+		Data:       map[string]any{"run_id": runID, "skill": packet.Skill, "stage": req.Stage, "adapter": integration.Adapter, "pipeline": req.Pipeline, "step_id": req.StepID},
 	}); err != nil {
 		return nil, err
 	}

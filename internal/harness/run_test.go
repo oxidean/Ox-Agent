@@ -60,7 +60,7 @@ func validOutput(skill string) map[string]any {
 // collects a valid output, advancing the work item.
 func TestDispatchCollectRoundtrip(t *testing.T) {
 	root, item := initProject(t)
-	run, err := Dispatch(root, item, "specify", "specification", "", 0)
+	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestDispatchCollectRoundtrip(t *testing.T) {
 // run and journals skill.failed.
 func TestCollectRejectsInvalidOutput(t *testing.T) {
 	root, item := initProject(t)
-	run, err := Dispatch(root, item, "specify", "specification", "", 0)
+	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestNextSkillSkipsCollected(t *testing.T) {
 	if err != nil || skill != "specify" {
 		t.Fatalf("NextSkill() = %q, %v; want specify", skill, err)
 	}
-	run, err := Dispatch(root, item, "specify", "specification", "", 0)
+	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestNextSkillSkipsCollected(t *testing.T) {
 // the work item.
 func TestCollectBlocksOnBlockedVerdict(t *testing.T) {
 	root, item := initProject(t)
-	run, err := Dispatch(root, item, "specify", "specification", "", 0)
+	run, err := Dispatch(root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}

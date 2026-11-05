@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/oxidean/Ox-Agent/internal/harness"
+	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 	"github.com/spf13/cobra"
@@ -13,7 +14,7 @@ import (
 // newRunCmd builds the run command group: skill dispatch, output
 // collection, and pending-run listing.
 func newRunCmd() *cobra.Command {
-	var stage, skill, integration string
+	var stage, skill, integration, pipelineName string
 	var budget int
 	cmd := &cobra.Command{
 		Use:   "run <work-item>",
@@ -30,6 +31,9 @@ func newRunCmd() *cobra.Command {
 			}
 			if item.State == "blocked" {
 				return fmt.Errorf("%s is blocked (from %s); unblock it first", item.ID, item.BlockedFrom)
+			}
+			if pipelineName != "" {
+				return runPipeline(cmd, root, item, pipelineName, integration, budget)
 			}
 			if item.CurrentStage == "intake" {
 				if _, err := item.Advance(root, "ox-agent"); err != nil {
@@ -50,7 +54,8 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 			}
-			run, err := harness.Dispatch(root, item, skill, stage, integration, budget)
+			req := harness.DispatchRequest{Skill: skill, Stage: stage, Integration: integration, Budget: budget}
+			run, err := harness.Dispatch(root, item, req)
 			if err != nil {
 				var gate *state.ApprovalRequiredError
 				if errors.As(err, &gate) {
@@ -75,6 +80,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&skill, "skill", "", "skill override (default: first pending stage skill)")
 	cmd.Flags().StringVar(&integration, "harness", "", "integration name (default: project default)")
 	cmd.Flags().IntVar(&budget, "budget", 0, "token budget for the compiled packet")
+	cmd.Flags().StringVar(&pipelineName, "pipeline", "", "execute the named pipeline instead of a single stage skill")
 	cmd.AddCommand(newRunCollectCmd(), newRunPendingCmd())
 	return cmd
 }
@@ -164,4 +170,122 @@ func printIntegrateReport(cmd *cobra.Command, report *project.IntegrateReport) {
 	if len(report.Created)+len(report.Updated) == 0 && len(report.Warnings) == 0 {
 		fmt.Fprintln(out, "Already integrated")
 	}
+}
+
+// runPipeline dispatches every ready step of a pipeline up to the policy's
+// parallel-agent budget, or reports progress when nothing is dispatchable.
+func runPipeline(cmd *cobra.Command, root string, item *state.WorkItem, name, integration string, budget int) error {
+	pipe, err := pipeline.Load(root, name)
+	if err != nil {
+		return err
+	}
+	progress, err := pipeline.Progress(root, pipe, item)
+	if err != nil {
+		return err
+	}
+	policy, err := project.LoadPolicy(root)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	limit := policy.Budgets.MaxParallelAgents
+	if limit <= 0 {
+		limit = 1
+	}
+	dispatched, pending, waiting, done := 0, 0, 0, 0
+	for _, status := range progress {
+		switch status.Status {
+		case "done":
+			done++
+		case "pending":
+			pending++
+			fmt.Fprintf(out, "pending:  %s (%s)\n", status.Step.ID, status.RunID)
+		case "waiting":
+			waiting++
+			fmt.Fprintf(out, "waiting:  %s (needs %v)\n", status.Step.ID, status.Step.DependsOn)
+		case "ready":
+			if dispatched < limit {
+				stage := status.Step.Stage
+				if stage == "" {
+					stage = item.CurrentStage
+				}
+				run, err := harness.Dispatch(root, item, harness.DispatchRequest{
+					Skill: status.Step.Skill, Stage: stage, Integration: integration,
+					Pipeline: pipe.Name, StepID: status.Step.ID, Budget: budget,
+				})
+				if err != nil {
+					return err
+				}
+				dispatched++
+				fmt.Fprintf(out, "dispatched: %s → %s (%s)\n", status.Step.ID, run.RunID, status.Step.Skill)
+			} else {
+				fmt.Fprintf(out, "queued:   %s (parallel budget %d)\n", status.Step.ID, limit)
+			}
+		}
+	}
+	if dispatched == 0 && pending == 0 && done == len(progress) {
+		if err := recordPipelineComplete(root, pipe, item); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "pipeline %s complete (%d steps)\n", pipe.Name, done)
+	}
+	return nil
+}
+
+// recordPipelineComplete journals pipeline.completed once per work item.
+func recordPipelineComplete(root string, pipe *pipeline.Pipeline, item *state.WorkItem) error {
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if event.Type == "pipeline.completed" && event.Data["pipeline"] == pipe.Name {
+			return nil
+		}
+	}
+	return state.Append(root, state.Event{
+		Type:       "pipeline.completed",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"pipeline": pipe.Name},
+	})
+}
+
+// newReviewCmd builds the review shortcut — the review pipeline.
+func newReviewCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "review <work-item>",
+		Short:   "Run the review pipeline for a work item",
+		Args:    cobra.ExactArgs(1),
+		GroupID: "work",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runNamedPipeline(cmd, args[0], "review")
+		},
+	}
+}
+
+// newShipCmd builds the ship shortcut — the ship pipeline.
+func newShipCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "ship <work-item>",
+		Short:   "Run the ship pipeline for a work item",
+		Args:    cobra.ExactArgs(1),
+		GroupID: "work",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runNamedPipeline(cmd, args[0], "ship")
+		},
+	}
+}
+
+// runNamedPipeline resolves the work item and runs a named pipeline.
+func runNamedPipeline(cmd *cobra.Command, ref, name string) error {
+	root, err := project.Find(".")
+	if err != nil {
+		return err
+	}
+	item, err := state.Resolve(root, ref)
+	if err != nil {
+		return err
+	}
+	return runPipeline(cmd, root, item, name, "", 0)
 }
