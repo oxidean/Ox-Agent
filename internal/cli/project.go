@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -40,7 +41,15 @@ func newInitCmd() *cobra.Command {
 				return nil
 			}
 			if err := project.Init(path); err != nil {
-				return err
+				if !integrate || !errors.Is(err, project.ErrAlreadyInitialized) {
+					return err
+				}
+				report, intErr := project.Integrate(path)
+				if intErr != nil {
+					return intErr
+				}
+				printIntegrateReport(cmd, report)
+				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Initialized %s\n", filepath.Join(path, ".ox-agent"))
 			if integrate {

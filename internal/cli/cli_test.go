@@ -80,3 +80,18 @@ func TestUnknownCommand(t *testing.T) {
 		t.Fatal("unknown command succeeded; want error")
 	}
 }
+
+// TestInitIntegrateOnExisting verifies --integrate runs on an initialized
+// project instead of failing the non-destructive check.
+func TestInitIntegrateOnExisting(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runCLI(t, "init", "--path", dir); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	if _, err := runCLI(t, "init", "--path", dir); err == nil {
+		t.Fatal("bare init on an existing project succeeded")
+	}
+	if _, err := runCLI(t, "init", "--path", dir, "--integrate"); err != nil {
+		t.Fatalf("init --integrate on existing project error = %v", err)
+	}
+}

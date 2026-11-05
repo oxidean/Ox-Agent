@@ -47,10 +47,28 @@ var scaffoldDirs = []string{
 }
 
 // Init materializes a new .ox-agent project scaffold at dir.
+// AlreadyInitializedError reports that .ox-agent/ already exists.
+type AlreadyInitializedError struct {
+	Path string
+}
+
+// Error implements error.
+func (e *AlreadyInitializedError) Error() string {
+	return fmt.Sprintf("%s already exists; refusing to overwrite it", e.Path)
+}
+
+// Is allows errors.Is(err, ErrAlreadyInitialized) checks.
+func (e *AlreadyInitializedError) Is(target error) bool {
+	return target == ErrAlreadyInitialized
+}
+
+// ErrAlreadyInitialized matches any AlreadyInitializedError.
+var ErrAlreadyInitialized = &AlreadyInitializedError{}
+
 func Init(dir string) (err error) {
 	finalBase := Base(dir)
 	if _, err := os.Stat(finalBase); err == nil {
-		return fmt.Errorf("%s already exists; refusing to overwrite it", finalBase)
+		return fmt.Errorf("%w", &AlreadyInitializedError{Path: finalBase})
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
