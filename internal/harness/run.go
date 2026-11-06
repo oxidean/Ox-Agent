@@ -122,9 +122,9 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 		return nil, err
 	}
 	switch integration.Adapter {
-	case "manual", "spawn-cli":
+	case "manual", "spawn-cli", "webhook":
 	default:
-		return nil, fmt.Errorf("integration %q has unknown adapter %q (supported adapters: manual, spawn-cli)", integration.Name, integration.Adapter)
+		return nil, fmt.Errorf("integration %q has unknown adapter %q (supported adapters: manual, spawn-cli, webhook)", integration.Name, integration.Adapter)
 	}
 	runID := fmt.Sprintf("run_%d_%06x", time.Now().UnixMilli(), rand.Uint64N(1<<24))
 	rel := "runtime/runs/" + runID
@@ -168,8 +168,13 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 	}); err != nil {
 		return nil, err
 	}
-	if integration.Adapter == "spawn-cli" {
+	switch integration.Adapter {
+	case "spawn-cli":
 		if err := run.spawn(ctx, root, integration); err != nil {
+			return nil, err
+		}
+	case "webhook":
+		if err := run.webhook(ctx, root, integration); err != nil {
 			return nil, err
 		}
 	}

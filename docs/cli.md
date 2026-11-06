@@ -70,12 +70,12 @@ The manual adapter writes the packet under `runtime/runs/<id>/packet.json`,
 prints the skill documentation path, and waits for
 `runtime/runs/<id>/output.json`.
 
-Supported adapters are `manual` and `spawn-cli`; new adapters are added per
-concrete consumer, never as generic placeholders. A `spawn-cli` integration
-shells a command template — `{packet}`, `{output}`, and `{run_dir}` expand to
-paths under the run directory — and works for any agent CLI, including remote
-dispatch (`ssh host agent ...`). Example, saved as
-`.ox-agent/integrations/myagent.yaml`:
+Supported adapters are `manual`, `spawn-cli`, and `webhook`; new adapters
+are added per concrete consumer, never as generic placeholders. A `spawn-cli`
+integration shells a command template — `{packet}`, `{output}`, and
+`{run_dir}` expand to paths under the run directory — and works for any
+agent CLI, including remote dispatch (`ssh host agent ...`). Example, saved
+as `.ox-agent/integrations/myagent.yaml`:
 
 ```yaml
 schema_version: 1
@@ -84,6 +84,26 @@ adapter: spawn-cli
 command: "myagent run --packet {packet} --write-output {output}"
 timeout_seconds: 600
 description: Dispatch runs to the myagent CLI.
+```
+
+A `webhook` integration POSTs the packet JSON to an HTTP(S) endpoint — the
+packet contract stays the interface; the adapter owns transport only. In
+`async` mode (default) a 2xx acknowledgement leaves the run pending and the
+remote harness writes `output.json` back through the same file contract. In
+`sync` mode a non-empty 2xx response body is stored as `output.json`; collect
+still schema-validates it, so a malformed response fails as a contract
+violation. A bearer token comes from the environment variable named by
+`token_env` — never from the yaml. Example:
+
+```yaml
+schema_version: 1
+name: fleet
+adapter: webhook
+endpoint: https://agents.internal/ox-agent/dispatch
+mode: async
+token_env: FLEET_TOKEN
+timeout_seconds: 60
+description: Dispatch packets to the managed agent fleet.
 ```
 
 ### `ox-agent run collect <run-id>`
