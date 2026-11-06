@@ -69,11 +69,13 @@ mapped to the current stage is collected, the work item auto-advances;
 `ox-agent advance WI-0001` moves between stages explicitly, and
 `ox-agent transition WI-0001 shipped --by <you>` crosses the human-gated ship
 edge (the journal records your git branch and commit as provenance). Without
-`--by`, the command files a durable approval request instead of failing
-outright — `ox-agent input pending` shows it and
-`ox-agent input respond IN-0001 --by <you> --approve` completes the
-transition. The same request surface catches run escalations, so an
-async-chat agent never has to hold a synchronous prompt open.
+`--by`, the command files a durable approval request and exits non-zero
+with the request handle in the message — `ox-agent input pending` shows
+it and `ox-agent input respond IN-0001 --by <you> --approve` completes
+the transition whenever you answer. Automation should treat that exit as
+"waiting on the human", not a failed request — the same surface catches
+run escalations, so an async-chat agent never has to hold a synchronous
+prompt open.
 
 Loop until shipped:
 

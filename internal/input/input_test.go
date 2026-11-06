@@ -3,6 +3,10 @@ package input
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -292,5 +296,107 @@ func TestWaitTimeoutReportsPending(t *testing.T) {
 	}
 	if got == nil || got.Status != StatusPending {
 		t.Fatalf("Wait() request = %+v, want pending request", got)
+	}
+}
+
+// TestConcurrentStaleReclaimCreates verifies a stale create lock can be
+// reclaimed by exactly one waiter: competing reclaims must not delete a
+// replacement lock, and every concurrent Create lands a unique request.
+func TestConcurrentStaleReclaimCreates(t *testing.T) {
+	root := setup(t)
+	// Plant a stale create lock older than the reclaim window.
+	lockPath := filepath.Join(dir(root), ".create.lock")
+	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("dead-holder\n"), 0o644); err != nil {
+		t.Fatalf("plant lock: %v", err)
+	}
+	stale := time.Now().Add(-2 * lockStaleAfter)
+	if err := os.Chtimes(lockPath, stale, stale); err != nil {
+		t.Fatalf("backdate lock: %v", err)
+	}
+	const n = 8
+	var wg sync.WaitGroup
+	ids := make(chan string, n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req, err := Create(root, Request{Kind: KindClarification, Question: fmt.Sprintf("q%d", i)})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- req.RequestID
+		}(i)
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("Create() error = %v", err)
+	}
+	seen := map[string]bool{}
+	for id := range ids {
+		if seen[id] {
+			t.Fatalf("duplicate request id %s — lock raced", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != n {
+		t.Fatalf("created %d requests, want %d", len(seen), n)
+	}
+}
+
+// TestConcurrentApproveExecutesOnce verifies the request lock serializes
+// lifecycle changes: parallel approvers cannot double-execute the action
+// or double-record the outcome.
+func TestConcurrentApproveExecutesOnce(t *testing.T) {
+	root := setup(t)
+	item, err := state.Start(root, "approval target")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	req, err := Create(root, Request{
+		Kind:       KindApproval,
+		WorkItemID: item.ID,
+		Question:   "ship it?",
+		Action:     &Action{Type: "transition", WorkItemID: item.ID, Target: "discovering"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	const n = 5
+	var wg sync.WaitGroup
+	results := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := Approve(root, req.RequestID, fmt.Sprintf("user%d", i))
+			results <- err
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	succeeded := 0
+	for err := range results {
+		if err == nil {
+			succeeded++
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("%d approvers succeeded, want exactly 1", succeeded)
+	}
+	transitions := 0
+	for _, e := range eventsOfType(t, root, "work_item.transitioned") {
+		if e.Data["to"] == "discovering" {
+			transitions++
+		}
+	}
+	if transitions != 1 {
+		t.Fatalf("discovering transition executed %d times, want 1", transitions)
 	}
 }

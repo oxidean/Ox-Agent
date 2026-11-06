@@ -166,3 +166,28 @@ func TestCompileIncludesInputs(t *testing.T) {
 		t.Fatalf("input = %+v", got)
 	}
 }
+
+// TestCompileFailsOnUnloadableRequest verifies a corrupt input request
+// fails compilation — it may be the very request the run is waiting on,
+// so the packet must not proceed answerless.
+func TestCompileFailsOnUnloadableRequest(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "corrupt input")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err == nil {
+		t.Fatal("Compile() succeeded with an unloadable request; want error")
+	}
+}

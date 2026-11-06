@@ -926,3 +926,28 @@ func TestRepairSyncDropsModifiedStaleOwnership(t *testing.T) {
 		t.Fatal("retained modification not reported as unlisted extension")
 	}
 }
+
+// TestDoctorIgnoresInputLockFiles verifies request lock files under
+// state/input are not validated as request documents, and that a missing
+// state/input directory reports healthy (git drops empty dirs).
+func TestDoctorIgnoresInputLockFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	for _, name := range []string{".create.lock", "IN-0001.lock"} {
+		if err := os.WriteFile(filepath.Join(inputDir, name), []byte("holder\n"), 0o644); err != nil {
+			t.Fatalf("write lock %s: %v", name, err)
+		}
+	}
+	if report := Doctor(root); !report.Healthy() {
+		t.Fatalf("Doctor flagged lock files: %+v", report.Checks)
+	}
+	if err := os.RemoveAll(inputDir); err != nil {
+		t.Fatalf("remove input dir: %v", err)
+	}
+	if report := Doctor(root); !report.Healthy() {
+		t.Fatalf("Doctor flagged missing state/input: %+v", report.Checks)
+	}
+}

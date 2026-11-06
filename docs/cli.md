@@ -160,6 +160,9 @@ ox-agent input list [--status pending] [--work-item WI-0001]
 ox-agent input respond IN-0001 --by <name> --answer "..."
 ox-agent input respond IN-0001 --by <name> --approve | --reject
 ox-agent input wait IN-0001 [--interval 5s --factor 2 --max-interval 60s --timeout 0]
+# async agents: bound the wait to a turn budget and re-poll next turn —
+# `input wait IN-0001 --timeout 20s` exits 0 with "pending" when the budget
+# lapses; timeout 0 (the default) holds until an answer, for daemons only.
 ox-agent input cancel IN-0001 --by <name>
 ```
 

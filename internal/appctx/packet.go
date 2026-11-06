@@ -139,8 +139,11 @@ func Compile(root string, item *state.WorkItem, skill, stage string, budget int,
 	}
 	packet.Context.PriorOutputs = priors
 	requests, issues := input.List(root)
-	for _, issue := range issues {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", issue)
+	if len(issues) > 0 {
+		// An unloadable request file may be the very request this run is
+		// waiting on — compiling without it would let the skill proceed
+		// answerless. Fail loudly instead of warning.
+		return nil, fmt.Errorf("cannot compile packet — unloadable input requests: %v", issues)
 	}
 	for _, r := range requests {
 		if r.WorkItemID != item.ID {

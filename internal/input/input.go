@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,12 +72,65 @@ type Request struct {
 // IDs can never resolve outside state/input.
 var idPattern = regexp.MustCompile(`^IN-[0-9]+$`)
 
-// createLockStaleAfter bounds how long an orphaned create lock file is
-// honored before a waiting process reclaims it.
-const createLockStaleAfter = 30 * time.Second
+// lockStaleAfter bounds how long an orphaned lock file is honored before a
+// waiting process reclaims it.
+const lockStaleAfter = 30 * time.Second
 
 func dir(root string) string {
 	return filepath.Join(root, ".ox-agent", "state", "input")
+}
+
+// fileLock is an ownership token over a lock path. The token lets release
+// remove only the lock this process created — never a replacement a
+// reclaimer installed after this holder ran past the stale window.
+type fileLock struct {
+	path  string
+	token string
+}
+
+// acquireLock takes an exclusive lockfile. Reclaiming a stale lock goes
+// through an atomic rename-claim rather than a bare remove: competing
+// reclaimers race on the same source path, so only one rename wins — the
+// winner removes the stale file and retries creation, the losers loop back
+// and either find the fresh lock or the (now absent) source. A bare
+// check-then-remove could delete a replacement lock a rival just created.
+func acquireLock(path string) (*fileLock, error) {
+	token := fmt.Sprintf("%d-%d", os.Getpid(), rand.Uint64N(1<<32))
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			if _, werr := fmt.Fprintln(f, token); werr != nil {
+				f.Close()
+				os.Remove(path)
+				return nil, werr
+			}
+			f.Close()
+			return &fileLock{path: path, token: token}, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("acquiring lock %s: %w", path, err)
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
+			reclaim := fmt.Sprintf("%s.reclaim.%s", path, token)
+			if rerr := os.Rename(path, reclaim); rerr == nil {
+				os.Remove(reclaim)
+			}
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for lock %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// release removes the lock only if it still carries this holder's token —
+// a reclaimed-and-replaced lock belongs to its new holder.
+func (l *fileLock) release() {
+	if data, err := os.ReadFile(l.path); err == nil && strings.TrimSpace(string(data)) == l.token {
+		os.Remove(l.path)
+	}
 }
 
 // withLock serializes the dedupe + ID-allocation + save + journal critical
@@ -86,28 +140,24 @@ func withLock(root string, fn func() error) error {
 	if err := os.MkdirAll(dir(root), 0o755); err != nil {
 		return err
 	}
-	lockPath := filepath.Join(dir(root), ".create.lock")
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err == nil {
-			fmt.Fprintf(lock, "pid=%d\n", os.Getpid())
-			lock.Close()
-			defer os.Remove(lockPath)
-			return fn()
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("acquiring input lock: %w", err)
-		}
-		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > createLockStaleAfter {
-			os.Remove(lockPath)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return errors.New("timed out waiting for input create lock")
-		}
-		time.Sleep(10 * time.Millisecond)
+	lock, err := acquireLock(filepath.Join(dir(root), ".create.lock"))
+	if err != nil {
+		return err
 	}
+	defer lock.release()
+	return fn()
+}
+
+// withRequestLock serializes read-modify-write of a single request so
+// concurrent respond/approve/cancel/expiry cannot interleave — the lock
+// file is per-request and independent of the create lock.
+func withRequestLock(root, id string, fn func() error) error {
+	lock, err := acquireLock(filepath.Join(dir(root), id+".lock"))
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	return fn()
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -144,6 +194,11 @@ func Create(root string, req Request) (_ *Request, err error) {
 		if _, err := time.Parse(time.RFC3339, req.ExpiresAt); err != nil {
 			return nil, fmt.Errorf("expires_at must be RFC3339: %w", err)
 		}
+	}
+	// An approval's action names its work item — default the request
+	// scope from it so filtered lists and packet inputs find it.
+	if req.WorkItemID == "" && req.Action != nil {
+		req.WorkItemID = req.Action.WorkItemID
 	}
 	var created *Request
 	err = withLock(root, func() error {
@@ -213,9 +268,32 @@ func nextID(root string) string {
 	}
 }
 
-// Load reads a request, applying lazy expiry: a pending request past its
-// expires_at is marked expired, saved, and journaled once.
+// Load reads a request, applying lazy expiry under the request lock: a
+// pending request past its expires_at is marked expired, saved, and
+// journaled once — concurrent loads cannot double-expire or duplicate the
+// event.
 func Load(root, id string) (*Request, error) {
+	var req *Request
+	err := withRequestLock(root, id, func() error {
+		r, err := loadFile(root, id)
+		if err != nil {
+			return err
+		}
+		if err := r.refreshExpiry(root); err != nil {
+			return err
+		}
+		req = r
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+// loadFile reads and parses a request without expiring it. Callers that
+// mutate (expiry, respond, cancel) must hold the request lock.
+func loadFile(root, id string) (*Request, error) {
 	if !idPattern.MatchString(id) {
 		return nil, fmt.Errorf("invalid request id %q", id)
 	}
@@ -232,9 +310,6 @@ func Load(root, id string) (*Request, error) {
 		return nil, fmt.Errorf("parsing %s: %w", id, err)
 	}
 	req.path = path
-	if err := req.refreshExpiry(root); err != nil {
-		return nil, err
-	}
 	return &req, nil
 }
 
@@ -301,7 +376,9 @@ func FindPendingAction(root, workItemID, actionType, target string) (*Request, e
 }
 
 // refreshExpiry lazily marks a pending request expired once its deadline
-// passes, journaling input.expired on the first observation.
+// passes. Callers must hold the request lock. The event is journaled
+// BEFORE the status save so a crash leaves a retryable pending file;
+// the journaled check dedupes that retry.
 func (r *Request) refreshExpiry(root string) error {
 	if r.Status != StatusPending || r.ExpiresAt == "" {
 		return nil
@@ -313,16 +390,22 @@ func (r *Request) refreshExpiry(root string) error {
 	if err != nil || time.Now().UTC().Before(deadline) {
 		return nil
 	}
-	r.Status = StatusExpired
-	if err := r.save(); err != nil {
+	journaled, err := journaledEvent(root, r.RequestID, "input.expired")
+	if err != nil {
 		return err
 	}
-	return state.Append(root, state.Event{
-		Type:       "input.expired",
-		WorkItemID: r.WorkItemID,
-		Actor:      "ox-agent",
-		Data:       map[string]any{"request_id": r.RequestID},
-	})
+	if !journaled {
+		if err := state.Append(root, state.Event{
+			Type:       "input.expired",
+			WorkItemID: r.WorkItemID,
+			Actor:      "ox-agent",
+			Data:       map[string]any{"request_id": r.RequestID},
+		}); err != nil {
+			return err
+		}
+	}
+	r.Status = StatusExpired
+	return r.save()
 }
 
 func (r *Request) save() error {
@@ -367,14 +450,29 @@ func (r *Request) finish(root, status, actor, answer string) error {
 // request and outcome already exists — the dedupe that makes a retried
 // finish idempotent.
 func journaledOutcome(root, id, outcome string) (bool, error) {
+	return journaledEvent(root, id, "input.answered", outcome)
+}
+
+// journaledEvent reports whether an event of the given type already
+// carries request_id (and outcome, when non-empty) — the dedupe that
+// makes journal-first-then-save retries idempotent.
+func journaledEvent(root, id, eventType string, outcome ...string) (bool, error) {
 	events, err := state.ReadEvents(root)
 	if err != nil {
 		return false, err
 	}
+	wantOutcome := ""
+	if len(outcome) > 0 {
+		wantOutcome = outcome[0]
+	}
 	for _, e := range events {
-		if e.Type == "input.answered" && e.Data["request_id"] == id && e.Data["outcome"] == outcome {
-			return true, nil
+		if e.Type != eventType || e.Data["request_id"] != id {
+			continue
 		}
+		if wantOutcome != "" && e.Data["outcome"] != wantOutcome {
+			continue
+		}
+		return true, nil
 	}
 	return false, nil
 }
@@ -382,15 +480,29 @@ func journaledOutcome(root, id, outcome string) (bool, error) {
 // Respond records a free-text or option answer. Decision answers must
 // match a declared option.
 func Respond(root, id, actor, answer string) (*Request, error) {
-	req, err := Load(root, id)
+	var req *Request
+	err := withRequestLock(root, id, func() (err error) {
+		req, err = loadFile(root, id)
+		if err != nil {
+			return err
+		}
+		if err = req.refreshExpiry(root); err != nil {
+			return err
+		}
+		return respondLocked(root, req, actor, answer)
+	})
 	if err != nil {
 		return nil, err
 	}
+	return req, nil
+}
+
+func respondLocked(root string, req *Request, actor, answer string) error {
 	if req.Status != StatusPending {
-		return nil, fmt.Errorf("input request %s is %s, not pending", id, req.Status)
+		return fmt.Errorf("input request %s is %s, not pending", req.RequestID, req.Status)
 	}
 	if strings.TrimSpace(answer) == "" {
-		return nil, fmt.Errorf("answer is required")
+		return fmt.Errorf("answer is required")
 	}
 	if req.Kind == KindDecision {
 		ok := false
@@ -401,35 +513,47 @@ func Respond(root, id, actor, answer string) (*Request, error) {
 			}
 		}
 		if !ok {
-			return nil, fmt.Errorf("answer must be one of: %s", strings.Join(req.Options, ", "))
+			return fmt.Errorf("answer must be one of: %s", strings.Join(req.Options, ", "))
 		}
 	}
-	if err := req.finish(root, StatusAnswered, actor, answer); err != nil {
-		return nil, err
-	}
-	return req, nil
+	return req.finish(root, StatusAnswered, actor, answer)
 }
 
 // Approve executes the request's pending action through the normal
 // lifecycle path — the human's answer arrives late, so the gated work
 // proceeds exactly as if --by had been passed originally.
 func Approve(root, id, actor string) (*Request, error) {
-	req, err := Load(root, id)
+	var req *Request
+	err := withRequestLock(root, id, func() (err error) {
+		req, err = loadFile(root, id)
+		if err != nil {
+			return err
+		}
+		if err = req.refreshExpiry(root); err != nil {
+			return err
+		}
+		return approveLocked(root, req, actor)
+	})
 	if err != nil {
 		return nil, err
 	}
+	return req, nil
+}
+
+func approveLocked(root string, req *Request, actor string) error {
+	id := req.RequestID
 	if req.Status != StatusPending {
-		return nil, fmt.Errorf("input request %s is %s, not pending", id, req.Status)
+		return fmt.Errorf("input request %s is %s, not pending", id, req.Status)
 	}
 	if req.Kind != KindApproval {
-		return nil, fmt.Errorf("input request %s is %s, not an approval", id, req.Kind)
+		return fmt.Errorf("input request %s is %s, not an approval", id, req.Kind)
 	}
 	if req.Action == nil {
-		return nil, fmt.Errorf("approval request %s has no action to execute", id)
+		return fmt.Errorf("approval request %s has no action to execute", id)
 	}
 	item, err := state.Resolve(root, req.Action.WorkItemID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	reason := "approved via " + id
 	// Idempotent against a prior attempt that executed the action but
@@ -449,24 +573,28 @@ func Approve(root, id, actor string) (*Request, error) {
 		err = fmt.Errorf("unsupported action type %q", req.Action.Type)
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := req.finish(root, StatusApproved, actor, "approved"); err != nil {
-		return nil, err
-	}
-	return req, nil
+	return req.finish(root, StatusApproved, actor, "approved")
 }
 
 // Reject closes an approval request without executing the action.
 func Reject(root, id, actor, reason string) (*Request, error) {
-	req, err := Load(root, id)
+	var req *Request
+	err := withRequestLock(root, id, func() (err error) {
+		req, err = loadFile(root, id)
+		if err != nil {
+			return err
+		}
+		if err = req.refreshExpiry(root); err != nil {
+			return err
+		}
+		if req.Status != StatusPending {
+			return fmt.Errorf("input request %s is %s, not pending", id, req.Status)
+		}
+		return req.finish(root, StatusRejected, actor, reason)
+	})
 	if err != nil {
-		return nil, err
-	}
-	if req.Status != StatusPending {
-		return nil, fmt.Errorf("input request %s is %s, not pending", id, req.Status)
-	}
-	if err := req.finish(root, StatusRejected, actor, reason); err != nil {
 		return nil, err
 	}
 	return req, nil
@@ -474,25 +602,40 @@ func Reject(root, id, actor, reason string) (*Request, error) {
 
 // Cancel withdraws a pending request.
 func Cancel(root, id, actor string) (*Request, error) {
-	req, err := Load(root, id)
+	var req *Request
+	err := withRequestLock(root, id, func() (err error) {
+		req, err = loadFile(root, id)
+		if err != nil {
+			return err
+		}
+		if err = req.refreshExpiry(root); err != nil {
+			return err
+		}
+		if req.Status != StatusPending {
+			return fmt.Errorf("input request %s is %s, not pending", id, req.Status)
+		}
+		// Journal before the terminal save — a crash leaves a retryable
+		// pending file; the journaled check dedupes that retry.
+		journaled, err := journaledEvent(root, req.RequestID, "input.cancelled")
+		if err != nil {
+			return err
+		}
+		if !journaled {
+			if err := state.Append(root, state.Event{
+				Type:       "input.cancelled",
+				WorkItemID: req.WorkItemID,
+				Actor:      actor,
+				Data:       map[string]any{"request_id": req.RequestID},
+			}); err != nil {
+				return err
+			}
+		}
+		req.Status = StatusCancelled
+		req.AnsweredBy = actor
+		req.AnsweredAt = now()
+		return req.save()
+	})
 	if err != nil {
-		return nil, err
-	}
-	if req.Status != StatusPending {
-		return nil, fmt.Errorf("input request %s is %s, not pending", id, req.Status)
-	}
-	req.Status = StatusCancelled
-	req.AnsweredBy = actor
-	req.AnsweredAt = now()
-	if err := req.save(); err != nil {
-		return nil, err
-	}
-	if err := state.Append(root, state.Event{
-		Type:       "input.cancelled",
-		WorkItemID: req.WorkItemID,
-		Actor:      actor,
-		Data:       map[string]any{"request_id": req.RequestID},
-	}); err != nil {
 		return nil, err
 	}
 	return req, nil

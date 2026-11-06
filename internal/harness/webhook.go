@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -27,6 +29,12 @@ func (r *Run) webhook(ctx context.Context, root string, integration *Integration
 	u, err := url.Parse(integration.Endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("integration %q has invalid endpoint %q (must be http or https)", integration.Name, integration.Endpoint)
+	}
+	// Cleartext transport carries the packet — and any bearer token — to
+	// network observers. Restrict http to loopback endpoints; everything
+	// else must be https.
+	if u.Scheme == "http" && !isLoopback(u.Hostname()) {
+		return fmt.Errorf("integration %q endpoint %q uses cleartext http — only loopback http is allowed (use https)", integration.Name, integration.Endpoint)
 	}
 	switch integration.Mode {
 	case "", "async", "sync":
@@ -58,7 +66,20 @@ func (r *Run) webhook(ctx context.Context, root string, integration *Integration
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Redirects that downgrade https→http would resend the packet and
+	// bearer token in cleartext — refuse them outright.
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req.URL.Scheme == "http" && !isLoopback(req.URL.Hostname()) {
+				return fmt.Errorf("refusing redirect to cleartext http endpoint %s", req.URL)
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		r.Status = "failed"
 		r.Error = fmt.Sprintf("webhook dispatch failed: %v", err)
@@ -96,4 +117,16 @@ func truncate(s []byte, n int) string {
 		return string(s)
 	}
 	return string(s[:n]) + "..."
+}
+
+// isLoopback reports whether host resolves locally — localhost names or a
+// loopback IP — the only place cleartext http is acceptable.
+func isLoopback(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

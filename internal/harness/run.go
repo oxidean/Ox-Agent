@@ -272,6 +272,13 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	}
 	if run.Status == "collected" || blocking || needsInput {
 		if err := applyOutcome(root, item, run, output); err != nil {
+			// Restore the run to pending so collect stays retryable: a
+			// failed filing (input request, journal) must not strand the
+			// run — filings dedupe, so the retry reuses them safely.
+			run.Status = "pending"
+			if saveErr := run.save(root); saveErr != nil {
+				return run, output, fmt.Errorf("%w (also failed to restore pending status: %v)", err, saveErr)
+			}
 			return run, output, err
 		}
 	}

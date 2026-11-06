@@ -60,6 +60,12 @@ func Doctor(root string) *DoctorReport {
 
 	for _, dir := range scaffoldDirs {
 		_, err := os.Stat(filepath.Join(base, dir))
+		if dir == "state/input" && os.IsNotExist(err) {
+			// Requests are created on demand; a fresh clone legitimately
+			// lacks the directory — report ok rather than missing.
+			report.add("dir "+dir, nil, true)
+			continue
+		}
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
 	}
 	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml", "README.md"} {
@@ -77,7 +83,7 @@ func Doctor(root string) *DoctorReport {
 	report.checkGlob(base, "workflows", "workflow")
 	report.checkGlob(base, "pipelines", "pipeline")
 	report.checkGlob(base, "integrations", "integration")
-	report.checkGlob(base, "state/input", "input-request")
+	report.checkGlobMissingOK(base, "state/input", "input-request")
 	report.checkAssets(base)
 	report.checkIntegration(root)
 	return report
@@ -292,13 +298,31 @@ func (r *DoctorReport) checkLifecycle(base string) {
 
 // checkGlob validates every *.yaml file in an asset directory against a schema.
 func (r *DoctorReport) checkGlob(base, dir, schema string) {
+	r.checkGlobDir(base, dir, schema, false)
+}
+
+// checkGlobMissingOK tolerates a missing directory (e.g. state/input on a
+// fresh clone — git drops empty dirs) while validating every *.yaml that
+// exists when it is present.
+func (r *DoctorReport) checkGlobMissingOK(base, dir, schema string) {
+	r.checkGlobDir(base, dir, schema, true)
+}
+
+func (r *DoctorReport) checkGlobDir(base, dir, schema string, missingOK bool) {
 	entries, err := os.ReadDir(filepath.Join(base, dir))
 	if err != nil {
+		if missingOK && os.IsNotExist(err) {
+			r.add("schemas "+dir, nil, false)
+			return
+		}
 		r.add("schemas "+dir, err, false)
 		return
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// Only yaml files are schema-bound — lockfiles (.create.lock,
+		// IN-NNNN.lock) and any other runtime residue must not be
+		// validated as request documents.
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
 		}
 		rel := dir + "/" + entry.Name()

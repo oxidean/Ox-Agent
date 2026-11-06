@@ -26,8 +26,9 @@ runtime. Project state, skills, and contracts live under ` + "`.ox-agent/`" + `.
 - Human input is durable, never synchronous. When you need an answer or a
   gated approval, file ` + "`ox-agent input request`" + ` and END THE TURN —
   chat prompts expire before humans see them. Poll with
-  ` + "`ox-agent input pending`" + ` / ` + "`input wait`" + `; answers arrive via
-  ` + "`input respond <id> --by <name>`" + `. Escalated runs and gate hits file
+  ` + "`ox-agent input pending`" + ` / ` + "`input wait --timeout <budget>`" + `;
+  answers arrive via ` + "`input respond <id> --by <name> --answer \"...\"`" + `
+  (approvals: ` + "`--approve|--reject`" + `). Escalated runs and gate hits file
   these requests automatically; a skill asks a
   question with ` + "`next_action.type: await_input`" + ` — the run stays
   dispatchable and the answer lands in the next packet under ` + "`context.inputs`" + `.

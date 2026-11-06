@@ -757,3 +757,48 @@ func TestCollectAwaitInputDedupes(t *testing.T) {
 		t.Fatalf("dedupe ids differ: %s vs %s", first.AwaitingInput, second.AwaitingInput)
 	}
 }
+
+// TestCollectRetryAfterOutcomeFailure verifies a failed outcome filing
+// restores the run to pending so collection retries instead of stranding
+// the run non-collectable.
+func TestCollectRetryAfterOutcomeFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based failure injection is unreliable on Windows")
+	}
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which way?"}
+	writeOutput(t, root, run.RunID, out)
+	// Make request filing fail: read-only input dir.
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(inputDir, 0o555); err != nil {
+		t.Fatalf("chmod ro: %v", err)
+	}
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite filing failure")
+	}
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "pending" {
+		t.Fatalf("run status = %s, want pending (retryable)", reloaded.Status)
+	}
+	if err := os.Chmod(inputDir, 0o755); err != nil {
+		t.Fatalf("chmod rw: %v", err)
+	}
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("retry Collect() error = %v", err)
+	}
+	if got.AwaitingInput == "" {
+		t.Fatal("retried collect did not file the request")
+	}
+}

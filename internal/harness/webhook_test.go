@@ -180,3 +180,30 @@ func TestWebhookRejectsBadConfig(t *testing.T) {
 		t.Fatalf("bad endpoint error = %v", err)
 	}
 }
+
+// TestWebhookRejectsCleartextHTTP verifies non-loopback http endpoints are
+// refused — packets and bearer tokens must not travel in cleartext.
+func TestWebhookRejectsCleartextHTTP(t *testing.T) {
+	root, item := initProject(t)
+	writeIntegration(t, root, "cleartext", "name: cleartext\nadapter: webhook\nendpoint: http://hooks.example.com/run\n")
+	if _, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "cleartext"}); err == nil || !strings.Contains(err.Error(), "cleartext") {
+		t.Fatalf("non-loopback http error = %v, want cleartext refusal", err)
+	}
+}
+
+// TestWebhookBlocksRedirectToHTTP verifies an https→http redirect does not
+// resend the packet and token in cleartext.
+func TestWebhookBlocksRedirectToHTTP(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://hooks.example.com/capture", http.StatusFound)
+	}))
+	defer srv.Close()
+	root, item := initProject(t)
+	writeIntegration(t, root, "redirector", "name: redirector\nadapter: webhook\nendpoint: "+srv.URL+"\n")
+	// httptest serves loopback http — the redirect target is the downgrade
+	// the client must refuse.
+	_, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "redirector"})
+	if err == nil || !strings.Contains(err.Error(), "cleartext") {
+		t.Fatalf("redirect error = %v, want cleartext refusal", err)
+	}
+}

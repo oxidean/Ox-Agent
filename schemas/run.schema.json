@@ -38,6 +38,7 @@
       "enum": [
         "manual",
         "spawn-cli",
+        "webhook",
         "api"
       ]
     },
