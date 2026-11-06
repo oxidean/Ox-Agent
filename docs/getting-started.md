@@ -105,6 +105,11 @@ Drop a directory with a `skill.yaml`, `SKILL.md`, and `schemas/` into
 shows it as `project`, `skills check` contract-validates it, and
 `skills update` never touches it.
 
+`ox-agent update` upgrades the binary and, when run inside a project,
+re-executes the new binary's repair so every ox-agent-owned asset moves to
+the embedded tree that ships with it (use `--binary-only` to skip). For a
+full reconcile without a binary change, run `ox-agent init --repair --sync`.
+
 ## Dispatching to an agent CLI
 
 The `manual` adapter works with anything that can read a file. To dispatch

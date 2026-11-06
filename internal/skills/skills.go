@@ -35,6 +35,15 @@ const (
 	StatusProject Status = "project"
 )
 
+// NormalizeName reduces a skill reference ("ox-agent/x" or "x") to its
+// bare directory name under .ox-agent/skills.
+func NormalizeName(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
 // manifest is the skill.yaml surface List and Check inspect.
 type manifest struct {
 	Name          string `yaml:"name"`

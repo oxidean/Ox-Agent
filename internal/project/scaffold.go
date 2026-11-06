@@ -1,17 +1,21 @@
 package project
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/oxidean/Ox-Agent/internal/assets"
 	"github.com/oxidean/Ox-Agent/internal/buildinfo"
+	"github.com/oxidean/Ox-Agent/internal/contract"
 	"golang.org/x/mod/semver"
 )
 
@@ -273,13 +277,20 @@ func ConfinedTarget(resolvedBase, target string) error {
 type RepairReport struct {
 	DirsCreated   []string
 	FilesRestored []string
+	FilesSynced   []string // drifted asset files rewritten (--sync)
+	FilesRemoved  []string // owned files the binary no longer ships (--sync)
 	SeedsWritten  []string
+	PinUpdated    string // framework.yaml required_version range rewritten to (--sync)
 }
 
 // Repair restores missing scaffold directories, missing materialized asset
-// files, and missing generated seed files in an existing project. It never
-// overwrites files that already exist; doctor reports drifted content.
-func Repair(root string) (*RepairReport, error) {
+// files, and missing generated seed files in an existing project. With sync
+// false it never overwrites files that already exist; doctor reports drifted
+// content. With sync true it reconciles the project against the running
+// binary: drifted asset files are rewritten, files the binary no longer
+// ships are removed when untouched locally, and a required_version pin that
+// excludes the running binary is reset to the binary's derived range.
+func Repair(root string, sync bool) (*RepairReport, error) {
 	base := Base(root)
 	if _, err := os.Stat(base); err != nil {
 		if os.IsNotExist(err) {
@@ -291,6 +302,15 @@ func Repair(root string) (*RepairReport, error) {
 	resolvedBase, err := filepath.EvalSymlinks(base)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
+	// Snapshot the previous lock before any writes so files this binary no
+	// longer ships can be identified as stale owned files. A missing or
+	// corrupt lock leaves no provenance baseline — stale detection skips.
+	var oldLock *assets.Lock
+	if sync {
+		if lock, err := assets.LoadLock(base); err == nil {
+			oldLock = lock
+		}
 	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
@@ -313,27 +333,91 @@ func Repair(root string) (*RepairReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	embedded := make(map[string]bool, len(files))
+	for _, rel := range files {
+		embedded[rel] = true
+	}
 	for _, rel := range files {
 		target := filepath.Join(base, filepath.FromSlash(rel))
-		if _, err := os.Stat(target); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
 		data, err := assets.ReadFile(rel)
 		if err != nil {
 			return nil, err
 		}
-		if err := ConfinedTarget(resolvedBase, target); err != nil {
+		disk, err := os.ReadFile(target)
+		switch {
+		case err == nil:
+			if !sync || bytes.Equal(disk, data) {
+				continue
+			}
+			if err := ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				return nil, err
+			}
+			report.FilesSynced = append(report.FilesSynced, rel)
+		case !os.IsNotExist(err):
 			return nil, err
+		default:
+			if err := ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				return nil, err
+			}
+			report.FilesRestored = append(report.FilesRestored, rel)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return nil, err
+	}
+	// Remove files the old lock owned that this binary no longer ships —
+	// only while the on-disk copy still matches the old lock hash. Locally
+	// modified stale files are kept and surface as unlisted extensions.
+	if oldLock != nil {
+		for rel, wantHash := range oldLock.Files {
+			if embedded[rel] {
+				continue
+			}
+			target := filepath.Join(base, filepath.FromSlash(rel))
+			disk, err := os.ReadFile(target)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			sum := sha256.Sum256(disk)
+			if "sha256:"+hex.EncodeToString(sum[:]) != wantHash {
+				continue
+			}
+			if err := ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
+			}
+			if err := os.Remove(target); err != nil {
+				return nil, err
+			}
+			report.FilesRemoved = append(report.FilesRemoved, rel)
 		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
-			return nil, err
+		sort.Strings(report.FilesRemoved)
+	}
+	// Reconcile the required_version pin with the running binary: a pin
+	// that excludes this binary fails doctor's version gate outright.
+	if sync {
+		if framework, err := LoadFramework(root); err == nil {
+			ok, serr := contract.Satisfies(buildinfo.Version, framework.Framework.RequiredVersion)
+			if serr != nil || !ok {
+				target := filepath.Join(base, "framework.yaml")
+				if err := ConfinedTarget(resolvedBase, target); err != nil {
+					return nil, err
+				}
+				framework.Framework.RequiredVersion = requiredVersionRange()
+				if err := writeYAML(target, framework); err != nil {
+					return nil, err
+				}
+				report.PinUpdated = framework.Framework.RequiredVersion
+			}
 		}
-		report.FilesRestored = append(report.FilesRestored, rel)
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -405,6 +489,16 @@ func Repair(root string) (*RepairReport, error) {
 			return nil, err
 		}
 		report.SeedsWritten = append(report.SeedsWritten, rel)
+	}
+	// Refresh the lock so it describes the running binary's embedded
+	// manifest; its content is deterministic, and a stale or corrupt lock
+	// would keep doctor warning about drift the repair already resolved.
+	lockTarget := filepath.Join(base, assets.LockPath)
+	if err := ConfinedTarget(resolvedBase, lockTarget); err != nil {
+		return nil, err
+	}
+	if err := assets.WriteLock(base); err != nil {
+		return nil, err
 	}
 	return report, nil
 }
