@@ -61,11 +61,14 @@ func LoadLock(base string) (*Lock, error) {
 // CheckLock compares the lock under base with the files on disk. missing are
 // locked files absent on disk; changed are locked files whose digest differs;
 // unlisted are on-disk files in asset directories that the lock does not
-// cover (extension assets added locally — informational, not a failure).
-func CheckLock(base string) (missing, changed, unlisted []string, err error) {
+// cover (extension assets added locally — informational, not a failure);
+// stale are locked files still on disk that the running binary's embedded
+// tree no longer ships (previously owned — 'init --repair --sync' removes
+// them when untouched).
+func CheckLock(base string) (missing, changed, unlisted, stale []string, err error) {
 	lock, err := LoadLock(base)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	for rel, want := range lock.Files {
 		data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
@@ -74,11 +77,27 @@ func CheckLock(base string) (missing, changed, unlisted []string, err error) {
 				missing = append(missing, rel)
 				continue
 			}
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		sum := sha256.Sum256(data)
 		if got := "sha256:" + hex.EncodeToString(sum[:]); got != want {
 			changed = append(changed, rel)
+		}
+	}
+	embedded, err := List("")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	ships := make(map[string]bool, len(embedded))
+	for _, rel := range embedded {
+		ships[rel] = true
+	}
+	for rel := range lock.Files {
+		if ships[rel] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err == nil {
+			stale = append(stale, rel)
 		}
 	}
 	dirs := []string{"skills", "schemas", "workflows", "pipelines", "lifecycle", "integrations"}
@@ -98,5 +117,5 @@ func CheckLock(base string) (missing, changed, unlisted []string, err error) {
 			return nil
 		})
 	}
-	return missing, changed, unlisted, nil
+	return missing, changed, unlisted, stale, nil
 }

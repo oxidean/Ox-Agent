@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -68,8 +69,11 @@ func newUpdateCmd() *cobra.Command {
 			}
 			root, err := project.Find(".")
 			if err != nil {
-				fmt.Fprintln(out, "no .ox-agent project found; asset sync skipped")
-				return nil
+				if errors.Is(err, project.ErrNotFound) {
+					fmt.Fprintln(out, "no .ox-agent project found; asset sync skipped")
+					return nil
+				}
+				return fmt.Errorf("finding project: %w (binary update succeeded; asset sync skipped)", err)
 			}
 			fmt.Fprintln(out, "syncing ox-agent-owned project assets:")
 			if err := repairSync(cmd.Context(), root, out, cmd.ErrOrStderr()); err != nil {

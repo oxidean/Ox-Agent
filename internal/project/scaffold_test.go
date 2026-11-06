@@ -604,3 +604,52 @@ func TestRepairRefreshesCorruptLock(t *testing.T) {
 		t.Fatalf("lock still invalid after repair: %v", err)
 	}
 }
+
+// TestRepairPreservesStaleProvenance verifies a plain (non-sync) repair
+// keeps previously-owned assets identifiable in the refreshed lock so a
+// later --sync can still remove them, and doctor classifies them as stale
+// rather than as local extensions.
+func TestRepairPreservesStaleProvenance(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	plantStaleAsset(t, base, "skills/dropped/SKILL.md", []byte("dropped skill\n"))
+
+	// Non-sync repair refreshes the lock but must not drop the ownership
+	// record for the stale file.
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading lock: %v", err)
+	}
+	if _, ok := lock.Files["skills/dropped/SKILL.md"]; !ok {
+		t.Fatal("non-sync repair dropped prior ownership from the lock")
+	}
+
+	// Doctor reports it as stale, not as an unlisted extension.
+	_, _, unlisted, stale, err := assets.CheckLock(base)
+	if err != nil {
+		t.Fatalf("CheckLock() error = %v", err)
+	}
+	if len(stale) != 1 || stale[0] != "skills/dropped/SKILL.md" {
+		t.Fatalf("stale = %v", stale)
+	}
+	for _, rel := range unlisted {
+		if rel == "skills/dropped/SKILL.md" {
+			t.Fatal("owned stale file reported as unlisted extension")
+		}
+	}
+
+	// A later --sync still removes it.
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if len(report.FilesRemoved) != 1 || report.FilesRemoved[0] != "skills/dropped/SKILL.md" {
+		t.Fatalf("FilesRemoved = %v", report.FilesRemoved)
+	}
+}

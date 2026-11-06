@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -303,14 +304,13 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", base, err)
 	}
-	// Snapshot the previous lock before any writes so files this binary no
-	// longer ships can be identified as stale owned files. A missing or
-	// corrupt lock leaves no provenance baseline — stale detection skips.
+	// Snapshot the previous lock before any writes: it is the provenance
+	// baseline a sync needs to tell previously-owned stale files from local
+	// additions. A missing or corrupt lock leaves no baseline — the merge
+	// below simply has nothing to preserve.
 	var oldLock *assets.Lock
-	if sync {
-		if lock, err := assets.LoadLock(base); err == nil {
-			oldLock = lock
-		}
+	if lock, err := assets.LoadLock(base); err == nil {
+		oldLock = lock
 	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
@@ -374,7 +374,7 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	// Remove files the old lock owned that this binary no longer ships —
 	// only while the on-disk copy still matches the old lock hash. Locally
 	// modified stale files are kept and surface as unlisted extensions.
-	if oldLock != nil {
+	if sync && oldLock != nil {
 		for rel, wantHash := range oldLock.Files {
 			if embedded[rel] {
 				continue
@@ -499,6 +499,35 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	}
 	if err := assets.WriteLock(base); err != nil {
 		return nil, err
+	}
+	// Re-record entries the previous lock owned that this binary no longer
+	// ships but that still exist on disk, so a later --sync can still
+	// remove them (or report them via doctor's stale list) instead of
+	// mistaking them for local extensions.
+	if oldLock != nil {
+		lock, err := assets.LoadLock(base)
+		if err != nil {
+			return nil, err
+		}
+		merged := false
+		for rel, hash := range oldLock.Files {
+			if embedded[rel] {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err == nil {
+				lock.Files[rel] = hash
+				merged = true
+			}
+		}
+		if merged {
+			out, err := json.MarshalIndent(lock, "", "  ")
+			if err != nil {
+				return nil, fmt.Errorf("encoding asset lock: %w", err)
+			}
+			if err := os.WriteFile(lockTarget, append(out, '\n'), 0o644); err != nil {
+				return nil, fmt.Errorf("writing asset lock: %w", err)
+			}
+		}
 	}
 	return report, nil
 }

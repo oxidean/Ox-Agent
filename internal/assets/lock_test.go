@@ -16,7 +16,7 @@ func TestLockRoundTrip(t *testing.T) {
 	if err := WriteLock(base); err != nil {
 		t.Fatalf("WriteLock() error = %v", err)
 	}
-	missing, changed, unlisted, err := CheckLock(base)
+	missing, changed, unlisted, stale, err := CheckLock(base)
 	if err != nil {
 		t.Fatalf("CheckLock() error = %v", err)
 	}
@@ -25,6 +25,9 @@ func TestLockRoundTrip(t *testing.T) {
 	}
 	if len(unlisted) != 0 {
 		t.Fatalf("clean tree reported unlisted files: %v", unlisted)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("clean tree reported stale files: %v", stale)
 	}
 }
 
@@ -53,7 +56,7 @@ func TestCheckLockDetectsDrift(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(extra, "skill.yaml"), []byte("name: local\n"), 0o644); err != nil {
 		t.Fatalf("writing extension file: %v", err)
 	}
-	missing, changed, unlisted, err := CheckLock(base)
+	missing, changed, unlisted, stale, err := CheckLock(base)
 	if err != nil {
 		t.Fatalf("CheckLock() error = %v", err)
 	}
@@ -65,5 +68,8 @@ func TestCheckLockDetectsDrift(t *testing.T) {
 	}
 	if len(unlisted) != 1 || unlisted[0] != "skills/local-skill/skill.yaml" {
 		t.Fatalf("unlisted = %v", unlisted)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("stale = %v", stale)
 	}
 }
