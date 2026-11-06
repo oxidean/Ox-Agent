@@ -508,3 +508,57 @@ action:
 		t.Fatalf("input.scoped events after re-dedupe = %d, want 1", n)
 	}
 }
+
+// TestBackfillRecoveryAfterInterruptedSave verifies a retry after a crash
+// between the input.scoped journal append and the file save: the event is
+// not duplicated and the scope still lands on the file.
+func TestBackfillRecoveryAfterInterruptedSave(t *testing.T) {
+	root := setup(t)
+	item, err := state.Start(root, "interrupted backfill")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `schema_version: 1
+request_id: IN-0001
+kind: approval
+status: pending
+question: ship it?
+created_by: ox-agent
+created_at: "2026-01-01T00:00:00Z"
+action:
+  type: transition
+  work_item_id: ` + item.ID + `
+  target: discovering
+`
+	if err := os.WriteFile(filepath.Join(dir(root), "IN-0001.yaml"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	// Simulate the crash point: input.scoped already journaled, file
+	// still unscoped.
+	if err := state.Append(root, state.Event{
+		Type:       "input.scoped",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"request_id": "IN-0001"},
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	got, err := Create(root, Request{
+		Kind:       KindApproval,
+		WorkItemID: item.ID,
+		Question:   "ship it?",
+		Action:     &Action{Type: "transition", WorkItemID: item.ID, Target: "discovering"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if got.WorkItemID != item.ID {
+		t.Fatalf("WorkItemID = %q, want %q backfilled", got.WorkItemID, item.ID)
+	}
+	if n := len(eventsOfType(t, root, "input.scoped")); n != 1 {
+		t.Fatalf("input.scoped events = %d, want exactly 1 — the retry must not re-journal", n)
+	}
+}
