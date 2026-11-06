@@ -28,7 +28,9 @@ runtime. Project state, skills, and contracts live under ` + "`.ox-agent/`" + `.
   chat prompts expire before humans see them. Poll with
   ` + "`ox-agent input pending`" + ` / ` + "`input wait`" + `; answers arrive via
   ` + "`input respond <id> --by <name>`" + `. Escalated runs and gate hits file
-  these requests automatically.
+  these requests automatically; a skill asks a
+  question with ` + "`next_action.type: await_input`" + ` — the run stays
+  dispatchable and the answer lands in the next packet under ` + "`context.inputs`" + `.
 - Skills are contracts, not free-form prompts: ` + "`.ox-agent/skills/<name>/SKILL.md`" + `
   plus input/output ` + "`schemas/`" + `.
 - Compile the bounded packet (` + "`ox-agent context compile <wi> --skill <s>`" + `)

@@ -498,6 +498,11 @@ func Cancel(root, id, actor string) (*Request, error) {
 	return req, nil
 }
 
+// ErrWaitTimeout reports a Wait that exhausted its Timeout with the
+// request still pending — a normal async condition, not a failure:
+// callers poll again next turn instead of treating it as expired.
+var ErrWaitTimeout = errors.New("input request still pending")
+
 // WaitOptions controls the exponential-backoff poll in Wait.
 type WaitOptions struct {
 	Interval    time.Duration // first poll gap (default 5s)
@@ -531,7 +536,7 @@ func Wait(ctx context.Context, root, id string, opts WaitOptions) (*Request, err
 			return req, nil
 		}
 		if opts.Timeout > 0 && !time.Now().Before(deadline) {
-			return req, fmt.Errorf("timed out waiting for %s", id)
+			return req, fmt.Errorf("%w: %s", ErrWaitTimeout, id)
 		}
 		wait := gap
 		if opts.Timeout > 0 {

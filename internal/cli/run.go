@@ -100,6 +100,9 @@ func newRunCollectCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(out, "%s %s (verdict: %v)\n", run.RunID, run.Status, output["verdict"])
+			if run.AwaitingInput != "" {
+				fmt.Fprintf(out, "  awaiting input: %s — respond with `ox-agent input respond %s --by <name>`\n", run.AwaitingInput, run.AwaitingInput)
+			}
 			return nil
 		},
 	}

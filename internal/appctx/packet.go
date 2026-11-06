@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
@@ -36,6 +37,18 @@ type PacketContext struct {
 	Decisions    []string       `json:"decisions,omitempty"`
 	References   []string       `json:"references,omitempty"`
 	PriorOutputs []PriorOutput  `json:"prior_outputs,omitempty"`
+	Inputs       []PacketInput  `json:"inputs,omitempty"`
+}
+
+// PacketInput carries a human-input request (and its answer when given)
+// into the packet so a re-dispatched skill sees what the human said.
+type PacketInput struct {
+	RequestID  string `json:"request_id"`
+	Kind       string `json:"kind"`
+	Question   string `json:"question"`
+	Status     string `json:"status"`
+	Answer     string `json:"answer,omitempty"`
+	AnsweredBy string `json:"answered_by,omitempty"`
 }
 
 // PriorOutput points at a collected run's output for reuse as context.
@@ -125,6 +138,26 @@ func Compile(root string, item *state.WorkItem, skill, stage string, budget int,
 		return nil, err
 	}
 	packet.Context.PriorOutputs = priors
+	requests, issues := input.List(root)
+	for _, issue := range issues {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", issue)
+	}
+	for _, r := range requests {
+		if r.WorkItemID != item.ID {
+			continue
+		}
+		switch r.Status {
+		case input.StatusPending, input.StatusAnswered, input.StatusApproved, input.StatusRejected:
+			packet.Context.Inputs = append(packet.Context.Inputs, PacketInput{
+				RequestID:  r.RequestID,
+				Kind:       r.Kind,
+				Question:   r.Question,
+				Status:     r.Status,
+				Answer:     r.Answer,
+				AnsweredBy: r.AnsweredBy,
+			})
+		}
+	}
 	_ = state.Append(root, state.Event{
 		Type:       "context.compiled",
 		WorkItemID: item.ID,

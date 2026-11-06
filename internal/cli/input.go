@@ -245,10 +245,17 @@ func newInputWaitCmd() *cobra.Command {
 				MaxInterval: maxInterval,
 				Timeout:     timeout,
 			})
+			out := cmd.OutOrStdout()
 			if err != nil {
+				// A bounded wait expiring is the normal async pattern —
+				// report still-pending instead of failing so agents poll
+				// per turn rather than treating the ask as expired.
+				if errors.Is(err, input.ErrWaitTimeout) && req != nil {
+					fmt.Fprintf(out, "%s %s (still awaiting an answer — poll again next turn)\n", req.RequestID, req.Status)
+					return nil
+				}
 				return err
 			}
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s %s", req.RequestID, req.Status)
 			if req.AnsweredBy != "" {
 				fmt.Fprintf(out, " (by %s)", req.AnsweredBy)

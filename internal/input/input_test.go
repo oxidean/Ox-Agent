@@ -2,7 +2,7 @@ package input
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
@@ -245,8 +245,8 @@ func TestWaitBackoff(t *testing.T) {
 	_, err = Wait(context.Background(), root, "IN-0002", WaitOptions{
 		Interval: 5 * time.Millisecond, MaxInterval: 10 * time.Millisecond, Timeout: 30 * time.Millisecond,
 	})
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("Wait() error = %v, want timeout", err)
+	if !errors.Is(err, ErrWaitTimeout) {
+		t.Fatalf("Wait() error = %v, want ErrWaitTimeout", err)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("wait ran too long: %s", elapsed)
@@ -274,5 +274,23 @@ func TestFindPendingAction(t *testing.T) {
 	}
 	if found, _ := FindPendingAction(root, "WI-0001", "archive", "archived"); found != nil {
 		t.Fatal("different action must not match")
+	}
+}
+
+// TestWaitTimeoutReportsPending verifies a bounded Wait expiring returns
+// the request and the ErrWaitTimeout sentinel — a normal async signal,
+// not a failure — so callers can poll again next turn.
+func TestWaitTimeoutReportsPending(t *testing.T) {
+	root := setup(t)
+	req, err := Create(root, Request{Kind: KindClarification, Question: "still thinking?"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	got, err := Wait(context.Background(), root, req.RequestID, WaitOptions{Interval: time.Millisecond, Timeout: 30 * time.Millisecond})
+	if !errors.Is(err, ErrWaitTimeout) {
+		t.Fatalf("Wait() error = %v, want ErrWaitTimeout", err)
+	}
+	if got == nil || got.Status != StatusPending {
+		t.Fatalf("Wait() request = %+v, want pending request", got)
 	}
 }

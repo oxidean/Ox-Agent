@@ -116,9 +116,11 @@ A run ends in one of three statuses:
 - `collected` — the output was applied. Collected runs count toward skill
   selection, stage completion, and pipeline progress.
 - `retry` — the output signalled unfinished work (`verdict: needs_rework`,
-  `next_action.type: retry`, or a blocked run that also requested rework or
-  retry). The skill stays dispatchable and does not count as done; a blocking
-  outcome still transitions the work item to `blocked`.
+  `next_action.type: retry`, an `await_input` request, or a blocked run that
+  also requested rework or retry). The skill stays dispatchable and does not
+  count as done; a blocking outcome still transitions the work item to
+  `blocked`, while `await_input` leaves it in place and records the filed
+  request on the run (`awaiting_input: IN-NNNN`, echoed by `run collect`).
 - `failed` — schema validation failed or the skill reported `status: failed`.
 
 Completion checks use only the latest run per skill or pipeline step: a
@@ -169,10 +171,15 @@ with the responder recorded as approver, `--reject` declines).
 Requests are filed automatically when they are needed: a `human`-gated
 `transition`/`archive`/`advance`/`run` leaves an approval request naming
 the pending action (`respond IN-.... --by <you> --approve` completes it),
-and a run collected with a blocked/escalated outcome leaves a
-clarification request carrying the reason. `wait` polls with exponential
-backoff so agents never hot-loop or expire a synchronous ask. Requests do
-not expire unless filed with `--ttl`.
+a run collected with a blocked/escalated outcome leaves a clarification
+request carrying the reason, and `next_action.type: await_input` files a
+clarification (or decision, when `next_action.options` is given) without
+blocking the item. `wait` polls with exponential backoff so agents never
+hot-loop or expire a synchronous ask — a bounded `--timeout` expiring
+reports the request as still `pending` rather than failing, so async
+agents can poll once per turn instead of holding a blocking wait.
+Requests do not expire unless filed with `--ttl`. Answered requests are
+folded into later packets under `context.inputs`.
 
 ## State commands
 

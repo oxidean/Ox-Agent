@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
@@ -118,5 +119,50 @@ func TestCompileAcceptsNamespacedSkill(t *testing.T) {
 	}
 	if packet.Skill != "ox-agent/specify" || packet.SkillDir != "skills/specify" {
 		t.Fatalf("packet identity wrong for namespaced ref: %+v", packet)
+	}
+}
+
+// TestCompileIncludesInputs verifies pending and answered input requests
+// for the work item fold into the packet so a re-dispatched skill sees the
+// human's answer.
+func TestCompileIncludesInputs(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "input target")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	req, err := input.Create(root, input.Request{
+		Kind:       input.KindClarification,
+		WorkItemID: item.ID,
+		Question:   "which option?",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := input.Respond(root, req.RequestID, "jesse", "the second one"); err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	// A request for a different work item must not leak into this packet.
+	other, err := state.Start(root, "unrelated")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := input.Create(root, input.Request{Kind: input.KindClarification, WorkItemID: other.ID, Question: "unrelated q"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	packet, err := Compile(root, item, "discover-context", "discovery", 0, "")
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if len(packet.Context.Inputs) != 1 {
+		t.Fatalf("inputs = %v, want exactly the answered request", packet.Context.Inputs)
+	}
+	got := packet.Context.Inputs[0]
+	if got.RequestID != req.RequestID || got.Status != input.StatusAnswered || got.Answer != "the second one" || got.AnsweredBy != "jesse" {
+		t.Fatalf("input = %+v", got)
 	}
 }
