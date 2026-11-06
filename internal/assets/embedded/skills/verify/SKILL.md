@@ -28,3 +28,9 @@ Verify tests, traceability, policy compliance, rollback readiness, and operation
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
 - Promote durable decisions and blockers into the appropriate work-item artifact.
+
+## Evaluation
+
+Self-report quality flags in `eval` (booleans — set each true only when
+genuinely satisfied): `command_run`, `evidence_in_findings`, `criteria_checked`. `preserves_scope` reports that you stayed
+inside the supplied context and constraints.

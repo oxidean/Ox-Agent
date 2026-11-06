@@ -1,12 +1,20 @@
 schema_version: 1
 skill: ox-agent/discussion
 cases:
-  - id: valid-scoped-request
+  - id: summarize-thread
     prompt: >-
-      Record asynchronous agent discussions, summarize relevant conclusions,
-      and promote decisions without losing provenance.
+      Summarize the open discussion thread into positions, conclusions, and
+      remaining open points for discuss add/summarize.
     expected:
       output_schema_valid: true
+      positions_preserved: true
+      summary_compact: true
+  - id: thread-scope
+    prompt: >-
+      Record conclusions without writing state outside the thread files.
+    expected:
+      output_schema_valid: true
+      thread_scoped: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

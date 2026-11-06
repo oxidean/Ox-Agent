@@ -1,12 +1,20 @@
 schema_version: 1
 skill: ox-agent/progress
 cases:
-  - id: valid-scoped-request
+  - id: derive-status
     prompt: >-
-      Record compact, structured progress updates and derive resumable
-      work-item status from lifecycle events.
+      Summarize the work item's state strictly from its journal — completed
+      stages, blockers, and legal next actions.
     expected:
       output_schema_valid: true
+      journal_derived: true
+      next_actions_legal: true
+  - id: compact-status
+    prompt: >-
+      Keep the summary compact enough that a later run can resume from it.
+    expected:
+      output_schema_valid: true
+      compact: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

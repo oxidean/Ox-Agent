@@ -28,3 +28,9 @@ Record compact, structured progress updates and derive resumable work-item statu
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
 - Promote durable decisions and blockers into the appropriate work-item artifact.
+
+## Evaluation
+
+Self-report quality flags in `eval` (booleans — set each true only when
+genuinely satisfied): `journal_derived`, `next_actions_legal`, `compact`. `preserves_scope` reports that you stayed
+inside the supplied context and constraints.

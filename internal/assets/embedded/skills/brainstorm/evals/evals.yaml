@@ -1,12 +1,21 @@
 schema_version: 1
 skill: ox-agent/brainstorm
 cases:
-  - id: valid-scoped-request
+  - id: divergent-directions
     prompt: >-
-      Run structured divergent and convergent analysis for a work item while
-      preserving disagreement and producing decision-ready options.
+      Explore how work-item packets could reach a remote harness, producing
+      distinct candidate directions with tradeoffs.
     expected:
       output_schema_valid: true
+      divergent_options: true
+      tradeoffs_documented: true
+  - id: open-questions
+    prompt: >-
+      Compare two candidate stage orderings for the normal workflow while
+      keeping unresolved disagreements visible.
+    expected:
+      output_schema_valid: true
+      preserves_disagreement: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

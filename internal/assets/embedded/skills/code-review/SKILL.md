@@ -28,3 +28,9 @@ Independently review an implementation against its specification, security bound
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
 - Promote durable decisions and blockers into the appropriate work-item artifact.
+
+## Evaluation
+
+Self-report quality flags in `eval` (booleans — set each true only when
+genuinely satisfied): `reviewed_changed_paths`, `findings_cited`, `severity_ranked`. `preserves_scope` reports that you stayed
+inside the supplied context and constraints.

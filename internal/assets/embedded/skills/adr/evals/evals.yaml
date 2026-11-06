@@ -1,12 +1,21 @@
 schema_version: 1
 skill: ox-agent/adr
 cases:
-  - id: valid-scoped-request
+  - id: record-decision
     prompt: >-
-      Identify and record consequential technical decisions as durable,
-      supersedable architecture decision records.
+      Record a decision to adopt event-sourced state for work items and
+      write it as a durable ADR.
     expected:
       output_schema_valid: true
+      records_decision: true
+      durable_format: true
+  - id: supersede-prior
+    prompt: >-
+      A prior ADR chose file-based locking; record the decision that
+      replaces it with lockfile allocation without contradicting history.
+    expected:
+      output_schema_valid: true
+      supersedes_correctly: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

@@ -28,3 +28,9 @@ Run structured divergent and convergent analysis for a work item while preservin
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
 - Promote durable decisions and blockers into the appropriate work-item artifact.
+
+## Evaluation
+
+Self-report quality flags in `eval` (booleans — set each true only when
+genuinely satisfied): `divergent_options`, `tradeoffs_documented`, `preserves_disagreement`. `preserves_scope` reports that you stayed
+inside the supplied context and constraints.

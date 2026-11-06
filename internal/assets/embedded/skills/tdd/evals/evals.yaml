@@ -1,12 +1,20 @@
 schema_version: 1
 skill: ox-agent/tdd
 cases:
-  - id: valid-scoped-request
+  - id: red-first
     prompt: >-
-      Guide red-green-refactor implementation and produce evidence that
-      behavior is covered by meaningful tests.
+      Drive the change test-first using context.project.test_command and
+      record red-to-green evidence in findings.
     expected:
       output_schema_valid: true
+      red_first: true
+      evidence_recorded: true
+  - id: bounded-paths
+    prompt: >-
+      Keep tests and implementation inside constraints.allowed_paths.
+    expected:
+      output_schema_valid: true
+      within_allowed_paths: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and
