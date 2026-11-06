@@ -184,14 +184,44 @@ given by `-o/--output`. Journals `context.compiled`.
 List every materialized skill under `.ox-agent/skills/` with its version,
 enabled flag, drift status against the embedded distribution
 (`current`/`modified`/`incomplete`/`project`), and binary compatibility.
-Directories the embedded tree does not cover are project-local skills.
+Directories the embedded tree does not cover are project-local skills;
+remote-installed skills show `remote` status and their pinned
+`source@sha` in the SOURCE column.
+
+### `ox-agent skills install <git-url> [--ref r] [--path subdir] [--name n] [--force]`
+
+Fetch a skill package (a directory containing `skill.yaml` + `SKILL.md`)
+from a git remote and materialize it under `.ox-agent/skills/<name>`. The
+manifest is validated against the skill-manifest contract before anything
+is written. Provenance is recorded in `.ox-agent/remote-skills.lock`: the
+source URL, requested `--ref` (branch/tag/commit, default remote HEAD),
+the resolved commit SHA, and a sha256 digest of every installed file — so
+`skills check` and `doctor` verify what was reviewed is what runs.
+
+- Embedded (ox-agent-owned) skill directories can never be shadowed.
+- An existing directory is replaced only when the lock already owns it and
+  `--force` is passed — that re-pins to the newly resolved SHA.
+- Package symlinks resolving outside the package are rejected.
+- Remote skills are never touched by `skills update` (embedded-only);
+  upgrade is `install <same-source> --force`.
+
+Wire the skill into `config.yaml` (`skills.enabled`, `stage_skills`) to use
+it in stages. Review the pinned commit before trusting a remote skill —
+provenance guarantees integrity, not intent.
+
+### `ox-agent skills uninstall <name>`
+
+Remove a remote-installed skill directory and its lock entry. Embedded and
+project-local skills are refused.
 
 ### `ox-agent skills check`
 
 Validate each materialized skill: `skill.yaml` against the manifest schema,
 declared input/output schemas present and compilable, `SKILL.md` present,
-eval suite present, and the `compatibility.ox_agent` pin satisfied by the
-running binary. Exits non-zero on any error finding.
+eval suite present, the `compatibility.ox_agent` pin satisfied by the
+running binary, and remote skills verified against their pinned digests in
+`remote-skills.lock` (drifted or missing files report as findings). Exits
+non-zero on any error finding.
 
 ### `ox-agent skills update [--yes]`
 

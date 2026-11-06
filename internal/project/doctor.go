@@ -70,6 +70,9 @@ func Doctor(root string) *DoctorReport {
 	report.checkFramework(root)
 	report.checkConfig(root)
 	report.checkSchemaFile(base, "policy.yaml", "policy")
+	if _, err := os.Stat(filepath.Join(base, "remote-skills.lock")); err == nil {
+		report.checkSchemaFile(base, "remote-skills.lock", "remote-skills-lock")
+	}
 	report.checkLifecycle(base)
 	report.checkGlob(base, "workflows", "workflow")
 	report.checkGlob(base, "pipelines", "pipeline")
@@ -373,6 +376,15 @@ func (r *DoctorReport) checkAssets(base string) {
 		return
 	}
 	missing, changed, unlisted, stale, err := assets.CheckLock(base)
+	if remote := assets.RemoteFiles(base); len(remote) > 0 {
+		kept := unlisted[:0]
+		for _, rel := range unlisted {
+			if !remote[rel] {
+				kept = append(kept, rel)
+			}
+		}
+		unlisted = kept
+	}
 	if err != nil {
 		r.add("asset lock", err, false)
 		return

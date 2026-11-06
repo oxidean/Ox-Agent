@@ -16,7 +16,8 @@ func newSkillsCmd() *cobra.Command {
 		Short:   "Inspect and maintain the materialized skill set",
 		GroupID: "project",
 	}
-	cmd.AddCommand(newSkillsListCmd(), newSkillsCheckCmd(), newSkillsUpdateCmd())
+	cmd.AddCommand(newSkillsListCmd(), newSkillsCheckCmd(), newSkillsUpdateCmd(),
+		newSkillsInstallCmd(), newSkillsUninstallCmd())
 	return cmd
 }
 
@@ -37,7 +38,7 @@ func newSkillsListCmd() *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "DIR\tVERSION\tENABLED\tSTATUS\tCOMPAT")
+			fmt.Fprintln(w, "DIR\tVERSION\tENABLED\tSTATUS\tCOMPAT\tSOURCE")
 			for _, skill := range skillList {
 				on := "no"
 				if skill.Enabled {
@@ -52,10 +53,17 @@ func newSkillsListCmd() *cobra.Command {
 					compat = "needs " + skill.Compat
 				}
 				status := string(skill.Status)
+				if skill.Source == "remote" {
+					status = "remote"
+				}
 				if skill.ManifestErr != nil {
 					status = "invalid"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", skill.Dir, version, on, status, compat)
+				source := skill.Source
+				if skill.SourceDetail != "" {
+					source = skill.SourceDetail
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", skill.Dir, version, on, status, compat, source)
 			}
 			return w.Flush()
 		},
@@ -135,4 +143,59 @@ func newSkillsUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "overwrite files that drifted from the embedded copy")
 	return cmd
+}
+
+// newSkillsInstallCmd fetches a skill package from a git source and pins it
+// to a resolved commit in remote-skills.lock.
+func newSkillsInstallCmd() *cobra.Command {
+	var ref, path, name string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "install <git-url>",
+		Short: "Install a skill package from a remote git source",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := project.Find(".")
+			if err != nil {
+				return err
+			}
+			entry, err := skills.Install(root, args[0], skills.InstallOptions{
+				Ref: ref, Path: path, Name: name, Force: force,
+			})
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "installed %s -> .ox-agent/skills/%s\n", entry.Name, entry.Dir)
+			fmt.Fprintf(out, "  source: %s\n  pinned: %s\n", entry.Source, entry.SHA)
+			fmt.Fprintln(out, "provenance recorded in .ox-agent/remote-skills.lock — review the pinned commit before trusting the skill")
+			fmt.Fprintln(out, "wire it into config.yaml skills.enabled / stage_skills to use it in stages")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&ref, "ref", "", "branch, tag, or commit to pin (default: remote HEAD)")
+	cmd.Flags().StringVar(&path, "path", "", "subdirectory of the repository containing the skill package")
+	cmd.Flags().StringVar(&name, "name", "", "skill directory name override")
+	cmd.Flags().BoolVar(&force, "force", false, "re-pin over an existing remote install of the same directory")
+	return cmd
+}
+
+// newSkillsUninstallCmd removes a remote-installed skill and its lock entry.
+func newSkillsUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall <skill>",
+		Short: "Remove a remote-installed skill",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := project.Find(".")
+			if err != nil {
+				return err
+			}
+			if err := skills.Uninstall(root, args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "uninstalled %s\n", skills.NormalizeName(args[0]))
+			return nil
+		},
+	}
 }
