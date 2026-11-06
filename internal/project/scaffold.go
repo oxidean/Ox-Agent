@@ -311,6 +311,15 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	var oldLock *assets.Lock
 	if lock, err := assets.LoadLock(base); err == nil {
 		oldLock = lock
+	} else if !os.IsNotExist(err) {
+		// LoadLock surfaces os.ReadFile failures unwrapped and parse
+		// failures wrapped — distinguish them. A corrupt lock has no
+		// baseline to preserve and repair recovers it below, but a real
+		// read failure must not silently discard ownership before the
+		// lock is rewritten.
+		if _, err := os.ReadFile(filepath.Join(base, assets.LockPath)); err != nil {
+			return nil, fmt.Errorf("reading asset lock: %w", err)
+		}
 	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)

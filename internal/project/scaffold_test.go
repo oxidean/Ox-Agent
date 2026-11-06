@@ -653,3 +653,22 @@ func TestRepairPreservesStaleProvenance(t *testing.T) {
 		t.Fatalf("FilesRemoved = %v", report.FilesRemoved)
 	}
 }
+
+// TestRepairReturnsLockReadError verifies a lock that exists but cannot be
+// read fails repair instead of silently discarding provenance.
+func TestRepairReturnsLockReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-bit fixtures are unreliable on Windows")
+	}
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	lockPath := filepath.Join(Base(root), assets.LockPath)
+	if err := os.Chmod(lockPath, 0o000); err != nil {
+		t.Fatalf("chmod lock: %v", err)
+	}
+	if _, err := Repair(root, false); err == nil {
+		t.Fatal("Repair() succeeded with an unreadable lock")
+	}
+}

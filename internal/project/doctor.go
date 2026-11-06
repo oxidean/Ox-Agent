@@ -389,7 +389,7 @@ func (r *DoctorReport) checkAssets(base string) {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("local extension files not in lock: %v", unlisted))
 	}
 	if len(stale) > 0 {
-		r.Warnings = append(r.Warnings, fmt.Sprintf("assets no longer shipped by this binary (run init --repair --sync): %v", stale))
+		r.Warnings = append(r.Warnings, fmt.Sprintf("assets no longer shipped by this binary (init --repair --sync removes unmodified copies; locally modified files are kept): %v", stale))
 	}
 }
 
