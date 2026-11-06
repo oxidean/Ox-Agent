@@ -49,9 +49,12 @@ the release is dispatched rather than triggered by the push.)
 
 Auto-tagging is skipped when the head commit already carries a `v*.*.*` tag
 or when the squash-merge message contains `[skip release]` or `[no-release]`.
-Queued tagging runs are serialized, and a run whose commit does not contain the
-latest release tag no-ops — queued runs may execute out of push order, and this
-guarantees versions only ever increase along `main`'s history.
+Queued tagging runs are serialized, and a run whose commit is an ancestor of
+the latest tagged commit no-ops — queued runs may execute out of push order, and
+this guarantees versions only ever increase along `main`'s history. A release
+tag pushed for a commit outside `main`'s history (e.g. `git tag v0.2.0
+<commit-sha>` on a side branch) does not block auto-tagging; it only advances
+the next version number.
 
 For a minor or major bump, tag `HEAD` manually and push it (manual pushes do
 trigger `release.yml`):
