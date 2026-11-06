@@ -348,6 +348,10 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	for _, rel := range files {
 		embedded[rel] = true
 	}
+	// unowned collects embedded paths whose on-disk content drifted but
+	// no previous lock owned — local extensions protected from sync and
+	// excluded from the refreshed lock below.
+	unowned := make(map[string]bool)
 	for _, rel := range files {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		data, err := assets.ReadFile(rel)
@@ -357,20 +361,23 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 		disk, err := os.ReadFile(target)
 		switch {
 		case err == nil:
-			if !sync || bytes.Equal(disk, data) {
+			if bytes.Equal(disk, data) {
 				continue
 			}
-			// A drifted path the previous lock never owned may be a local
-			// extension colliding with a newly embedded asset; sync
-			// protects it rather than overwriting user content. Without a
-			// usable baseline (missing or corrupt lock) nothing is
-			// provably owned, so every drifted path is protected.
-			if oldLock == nil {
+			// The file drifted from the embedded asset. A drifted path
+			// the previous lock never owned may be a local extension
+			// colliding with a newly embedded asset; protect it rather
+			// than overwriting user content, and drop it from the
+			// refreshed lock below so later syncs keep protecting it.
+			// Without a usable baseline (missing or corrupt lock)
+			// nothing is provably owned, so all drifted paths are
+			// protected the same way.
+			if !lockOwned(oldLock, rel) {
+				unowned[rel] = true
 				report.FilesConflicted = append(report.FilesConflicted, rel)
 				continue
 			}
-			if _, owned := oldLock.Files[rel]; !owned {
-				report.FilesConflicted = append(report.FilesConflicted, rel)
+			if !sync {
 				continue
 			}
 			if err := ConfinedTarget(resolvedBase, target); err != nil {
@@ -524,39 +531,52 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	if err := assets.WriteLock(base); err != nil {
 		return nil, err
 	}
-	// Re-record entries the previous lock owned that this binary no longer
-	// ships but that still exist on disk, so a later --sync can still
-	// remove them (or report them via doctor's stale list) instead of
-	// mistaking them for local extensions.
-	if oldLock != nil {
+	// Adjust the refreshed lock before returning. Drifted paths no lock
+	// ever owned are local extensions — dropping them keeps a later
+	// --sync protecting them instead of treating them as ox-owned.
+	// Entries the previous lock owned that this binary no longer ships
+	// are re-recorded when still on disk so a later --sync can remove
+	// them (or doctor can report them as stale) instead of mistaking
+	// them for local extensions.
+	if len(unowned) > 0 || oldLock != nil {
 		lock, err := assets.LoadLock(base)
 		if err != nil {
 			return nil, err
 		}
-		merged := false
-		for rel, hash := range oldLock.Files {
-			if embedded[rel] {
-				continue
+		adjusted := false
+		for rel := range unowned {
+			if _, ok := lock.Files[rel]; ok {
+				delete(lock.Files, rel)
+				adjusted = true
 			}
-			data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
-			if err != nil {
-				continue
-			}
-			if sync {
-				// A stale file sync kept on disk no longer matches the
-				// recorded hash — it is a local modification, i.e. an
-				// extension, not an owned stale file. Restoring its
-				// entry would keep it flagged stale and let a later
-				// sync delete it if its content ever reverted.
-				sum := sha256.Sum256(data)
-				if "sha256:"+hex.EncodeToString(sum[:]) != hash {
+		}
+		if oldLock != nil {
+			for rel, hash := range oldLock.Files {
+				if embedded[rel] {
 					continue
 				}
+				data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
+				if err != nil {
+					continue
+				}
+				if sync {
+					// A stale file sync kept on disk no longer
+					// matches the recorded hash — it is a local
+					// modification, i.e. an extension, not an
+					// owned stale file. Restoring its entry
+					// would keep it flagged stale and let a
+					// later sync delete it if its content ever
+					// reverted.
+					sum := sha256.Sum256(data)
+					if "sha256:"+hex.EncodeToString(sum[:]) != hash {
+						continue
+					}
+				}
+				lock.Files[rel] = hash
+				adjusted = true
 			}
-			lock.Files[rel] = hash
-			merged = true
 		}
-		if merged {
+		if adjusted {
 			out, err := json.MarshalIndent(lock, "", "  ")
 			if err != nil {
 				return nil, fmt.Errorf("encoding asset lock: %w", err)
@@ -612,4 +632,14 @@ func patchRequiredVersion(path, version string) error {
 		return fmt.Errorf("encoding framework.yaml: %w", err)
 	}
 	return os.WriteFile(path, out, 0o644)
+}
+
+// lockOwned reports whether lock records rel as an ox-agent-owned asset.
+// A nil lock (absent or corrupt baseline) owns nothing.
+func lockOwned(lock *assets.Lock, rel string) bool {
+	if lock == nil {
+		return false
+	}
+	_, ok := lock.Files[rel]
+	return ok
 }

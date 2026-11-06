@@ -735,6 +735,105 @@ func TestRepairSyncProtectsUnownedCollision(t *testing.T) {
 	if string(got) != "local extension\n" {
 		t.Fatal("local file overwritten by sync")
 	}
+	// The refreshed lock must not claim the path, or a later sync would
+	// treat the file as ox-owned and overwrite it.
+	lock, err = assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading refreshed lock: %v", err)
+	}
+	if _, ok := lock.Files["skills/README.md"]; ok {
+		t.Fatal("refreshed lock claimed the unowned file")
+	}
+	_, _, unlisted, _, err := assets.CheckLock(base)
+	if err != nil {
+		t.Fatalf("CheckLock() error = %v", err)
+	}
+	found = false
+	for _, rel := range unlisted {
+		if rel == "skills/README.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unowned file not reported as unlisted extension")
+	}
+	// Repeated repairs — an intervening non-sync repair and a second
+	// sync — keep protecting the file because the lock still lacks it.
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	if _, err := Repair(root, true); err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	got, err = os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading local file: %v", err)
+	}
+	if string(got) != "local extension\n" {
+		t.Fatal("local file overwritten by a later repair")
+	}
+}
+
+// TestRepairSyncProtectsDriftWithoutBaseline verifies --sync protects
+// drifted files when the lock baseline is missing or corrupt — nothing is
+// provably ox-owned, so nothing may be overwritten.
+func TestRepairSyncProtectsDriftWithoutBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, lockPath string)
+	}{
+		{"missing lock", func(t *testing.T, lockPath string) {
+			if err := os.Remove(lockPath); err != nil {
+				t.Fatalf("removing lock: %v", err)
+			}
+		}},
+		{"corrupt lock", func(t *testing.T, lockPath string) {
+			if err := os.WriteFile(lockPath, []byte("not json\n"), 0o644); err != nil {
+				t.Fatalf("corrupting lock: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := Init(root); err != nil {
+				t.Fatalf("Init() error = %v", err)
+			}
+			base := Base(root)
+			target := filepath.Join(base, "skills", "README.md")
+			if err := os.WriteFile(target, []byte("local drift\n"), 0o644); err != nil {
+				t.Fatalf("drifting asset: %v", err)
+			}
+			tc.plant(t, filepath.Join(base, assets.LockPath))
+			report, err := Repair(root, true)
+			if err != nil {
+				t.Fatalf("Repair(sync) error = %v", err)
+			}
+			found := false
+			for _, rel := range report.FilesConflicted {
+				if rel == "skills/README.md" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("drifted file not reported as conflict: %v", report.FilesConflicted)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("reading drifted file: %v", err)
+			}
+			if string(got) != "local drift\n" {
+				t.Fatal("drifted file overwritten without a usable baseline")
+			}
+			// The recovered lock must not claim the protected path.
+			lock, err := assets.LoadLock(base)
+			if err != nil {
+				t.Fatalf("loading recovered lock: %v", err)
+			}
+			if _, ok := lock.Files["skills/README.md"]; ok {
+				t.Fatal("recovered lock claimed the unowned file")
+			}
+		})
+	}
 }
 
 // TestRepairSyncPreservesFrameworkExtensions verifies --sync rewrites only
