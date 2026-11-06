@@ -1,0 +1,100 @@
+name: Tag release
+
+on:
+  push:
+    branches: [main]
+
+# Serialize tagging: concurrent merges must not race for the same next tag.
+concurrency:
+  group: release-tagging
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to tag
+        id: gate
+        run: |
+          if git log -1 --pretty=%B | grep -qiE '\[(skip|no)[ -]release\]'; then
+            echo "skip=commit message opts out" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A stable tag already at HEAD (e.g. pushed manually, or left by a
+          # run that died between tag push and dispatch) is still dispatched
+          # below — tag creation is skipped, the release is not.
+          existing="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
+          if [ -n "$existing" ]; then
+            echo "existing=$existing" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next patch tag
+        id: next
+        if: steps.gate.outputs.skip == '' && steps.gate.outputs.existing == ''
+        run: |
+          git fetch --force origin 'refs/tags/*:refs/tags/*' -q
+          latest="$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1 || true)"
+          if [ -z "$latest" ]; then
+            echo "tag=v0.0.1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Queued runs may execute out of push order. Staleness is judged only
+          # against release tags already on main's history: if HEAD is an
+          # ancestor of the newest on-main tag, a later push already released
+          # this content — tagging it with a higher version would hand a higher
+          # version to older code. Release tags outside main's history (for
+          # example a side-branch tag that contains HEAD) never block tagging;
+          # they only advance the next version via `latest` above.
+          git fetch origin main -q
+          latest_main="$(git tag --merged origin/main -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1 || true)"
+          if [ -n "$latest_main" ]; then
+            latest_main_commit="$(git rev-list -n1 "$latest_main")"
+            if git merge-base --is-ancestor HEAD "$latest_main_commit"; then
+              echo "stale=HEAD is already covered by $latest_main - a newer main commit already owns that release" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "tag=v$(awk -F. '{ $3 += 1; print $1 "." $2 "." $3 }' <<< "${latest#v}")" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.next.outputs.tag != ''
+        run: |
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              tag -a "${{ steps.next.outputs.tag }}" -m "Release ${{ steps.next.outputs.tag }}"
+          git push origin "${{ steps.next.outputs.tag }}"
+
+      # Tags pushed by GITHUB_TOKEN do not trigger `on: push: tags` workflows,
+      # so the release is dispatched explicitly against the tag. Dispatch is
+      # skipped when the tag's release or a release run already exists, which
+      # also makes a rerun after a failed dispatch safe.
+      - name: Dispatch release workflow
+        if: steps.gate.outputs.skip == '' && steps.next.outputs.stale == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.next.outputs.tag || steps.gate.outputs.existing }}
+        run: |
+          if [ -z "$TARGET" ]; then
+            echo "nothing to release"
+            exit 0
+          fi
+          if gh release view "$TARGET" >/dev/null 2>&1; then
+            echo "release $TARGET already published"
+            exit 0
+          fi
+          if [ "$(gh run list --workflow release.yml --branch "$TARGET" --json databaseId --jq 'length')" -gt 0 ]; then
+            echo "release run for $TARGET already started"
+            exit 0
+          fi
+          gh workflow run release.yml --ref "$TARGET" -f tag="$TARGET"
