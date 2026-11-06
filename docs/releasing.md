@@ -41,7 +41,14 @@ rebuilds unsigned artifacts.
 
 ## Release workflow
 
-Create an annotated `v*.*.*` tag on the commit to release and push it:
+Merges to `main` automatically tag the next patch release:
+`.github/workflows/tag-release.yml` computes the next `v*.*.*` patch tag from
+the latest existing tag, pushes it, and dispatches `release.yml` against it.
+(Tags pushed by `GITHUB_TOKEN` do not fire `on: push` workflows, which is why
+the release is dispatched rather than triggered by the push.)
+
+For a minor or major bump — or to release a specific commit — create an
+annotated tag manually and push it:
 
 ```bash
 git tag -a v0.1.0 -m "v0.1.0"
