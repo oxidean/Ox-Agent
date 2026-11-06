@@ -66,15 +66,17 @@ type manifest struct {
 
 // Skill is one materialized skill directory.
 type Skill struct {
-	Dir         string
-	Name        string // manifest name, e.g. ox-agent/specify
-	Version     string
-	Category    string
-	Compat      string // compatibility.ox_agent constraint
-	CompatOK    bool   // constraint satisfied by the running binary
-	Status      Status
-	Enabled     bool  // present in config.yaml skills.enabled
-	ManifestErr error // skill.yaml missing or unparseable
+	Dir          string
+	Name         string // manifest name, e.g. ox-agent/specify
+	Version      string
+	Category     string
+	Compat       string // compatibility.ox_agent constraint
+	CompatOK     bool   // constraint satisfied by the running binary
+	Status       Status
+	Source       string // "embedded", "remote", or "project"
+	SourceDetail string // remote: source@sha
+	Enabled      bool   // present in config.yaml skills.enabled
+	ManifestErr  error  // skill.yaml missing or unparseable
 }
 
 // skillsDir returns the materialized skills directory under root.
@@ -205,6 +207,17 @@ func List(root string) ([]*Skill, error) {
 		skill.Status = statusOf(base, name, emb[name])
 		out = append(out, skill)
 	}
+	remote, _ := assets.LoadRemoteLock(project.Base(root))
+	for _, skill := range out {
+		if entry, ok := remote.Skills[skill.Dir]; ok {
+			skill.Source = "remote"
+			skill.SourceDetail = entry.Source + "@" + short(entry.SHA)
+		} else if _, embedded := emb[skill.Dir]; embedded {
+			skill.Source = "embedded"
+		} else {
+			skill.Source = "project"
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Dir < out[j].Dir })
 	return out, nil
 }
@@ -278,7 +291,11 @@ func Check(root string) ([]Finding, error) {
 			fail(skill, "error", "files missing relative to embedded; run skills update")
 		}
 	}
-	return findings, nil
+	remoteFindings, err := CheckRemote(root)
+	if err != nil {
+		return nil, err
+	}
+	return append(findings, remoteFindings...), nil
 }
 
 // compileSchema loads a JSON schema file and verifies it compiles.

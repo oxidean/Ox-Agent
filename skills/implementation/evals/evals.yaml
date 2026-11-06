@@ -1,12 +1,20 @@
 schema_version: 1
 skill: ox-agent/implementation
 cases:
-  - id: valid-scoped-request
+  - id: bounded-change
     prompt: >-
-      Implement one bounded, approved work-item stage while respecting scope,
-      standards, and file constraints.
+      Implement the approved stage inside constraints.allowed_paths and
+      list every changed file as a changed_paths artifact.
     expected:
       output_schema_valid: true
+      within_allowed_paths: true
+      changes_listed: true
+  - id: failure-edges
+    prompt: >-
+      Note the change's failure modes and edge cases in findings.
+    expected:
+      output_schema_valid: true
+      edge_cases_noted: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

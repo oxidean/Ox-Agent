@@ -16,6 +16,9 @@ type Integration struct {
 	Name           string `yaml:"name"`
 	Adapter        string `yaml:"adapter"`
 	Command        string `yaml:"command"`
+	Endpoint       string `yaml:"endpoint"`
+	Mode           string `yaml:"mode"`
+	TokenEnv       string `yaml:"token_env"`
 	TimeoutSeconds int    `yaml:"timeout_seconds"`
 	Default        bool   `yaml:"default"`
 	Description    string `yaml:"description"`

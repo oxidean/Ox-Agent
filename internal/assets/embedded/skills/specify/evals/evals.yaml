@@ -1,12 +1,20 @@
 schema_version: 1
 skill: ox-agent/specify
 cases:
-  - id: valid-scoped-request
+  - id: write-spec
     prompt: >-
-      Turn a work-item intent into a detailed, testable specification with
-      explicit scope, contracts, and acceptance criteria.
+      Turn the chosen direction into a spec artifact with testable
+      acceptance criteria a verify run can check.
     expected:
       output_schema_valid: true
+      acceptance_criteria_present: true
+      contracts_defined: true
+  - id: explicit-scope
+    prompt: >-
+      State in-scope and out-of-scope explicitly in the spec artifact.
+    expected:
+      output_schema_valid: true
+      scope_explicit: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

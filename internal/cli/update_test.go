@@ -34,6 +34,9 @@ func TestUpdateSyncsProjectAssets(t *testing.T) {
 	calls := stubUpdateSeams(t, true, "v0.2.0", nil, nil)
 	dir := t.TempDir()
 	t.Chdir(dir)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved // Find resolves the root via EvalSymlinks (long names on Windows)
+	}
 	if _, err := runCLI(t, "init"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -148,6 +151,9 @@ func TestUpdateSyncTargetsProjectRoot(t *testing.T) {
 	calls := stubUpdateSeams(t, true, "v0.2.0", nil, nil)
 	dir := t.TempDir()
 	t.Chdir(dir)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved // Find resolves the root via EvalSymlinks (long names on Windows)
+	}
 	if _, err := runCLI(t, "init"); err != nil {
 		t.Fatalf("init: %v", err)
 	}

@@ -277,7 +277,7 @@ func TestReplayFoldsJournal(t *testing.T) {
 	if err := item.Transition(root, "discovering", "cli", "", ""); err != nil {
 		t.Fatalf("Transition() error = %v", err)
 	}
-	snap, err := Replay(root, item, true)
+	snap, err := Replay(root, item, true, true)
 	if err != nil {
 		t.Fatalf("Replay() error = %v", err)
 	}

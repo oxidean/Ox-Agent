@@ -28,3 +28,9 @@ Prepare a verified work item for delivery with release notes, rollout evidence, 
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
 - Promote durable decisions and blockers into the appropriate work-item artifact.
+
+## Evaluation
+
+Self-report quality flags in `eval` (booleans — set each true only when
+genuinely satisfied): `gates_assessed`, `readiness_verdict`, `escalates_for_approval`. `preserves_scope` reports that you stayed
+inside the supplied context and constraints.

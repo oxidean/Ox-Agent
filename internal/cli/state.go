@@ -25,6 +25,7 @@ func newStateCmd() *cobra.Command {
 func newStateReplayCmd() *cobra.Command {
 	var write bool
 	var asJSON bool
+	var full bool
 	cmd := &cobra.Command{
 		Use:   "replay <work-item>",
 		Short: "Fold a work item's events into a state snapshot",
@@ -38,7 +39,7 @@ func newStateReplayCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			snap, err := state.Replay(root, item, write)
+			snap, err := state.Replay(root, item, write, !full)
 			if err != nil {
 				return err
 			}
@@ -60,6 +61,7 @@ func newStateReplayCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&write, "snapshot", false, "persist the snapshot under state/snapshots/")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the full snapshot as JSON")
+	cmd.Flags().BoolVar(&full, "full", false, "fold from the first event, ignoring any stored snapshot")
 	return cmd
 }
 

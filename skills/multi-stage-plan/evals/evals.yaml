@@ -1,12 +1,21 @@
 schema_version: 1
 skill: ox-agent/multi-stage-plan
 cases:
-  - id: valid-scoped-request
+  - id: stage-decomposition
     prompt: >-
-      Decompose an approved specification into small, dependency-aware,
-      testable implementation stages.
+      Decompose the approved spec into small, dependency-aware, testable
+      stages.
     expected:
       output_schema_valid: true
+      stages_bounded: true
+      dependencies_mapped: true
+  - id: gates
+    prompt: >-
+      Give each stage a gate a later verify run can check, with risks and
+      assumptions in findings.
+    expected:
+      output_schema_valid: true
+      gates_defined: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

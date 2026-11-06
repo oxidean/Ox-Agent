@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "work_item_id": "WI-0002",
+  "generated_at": "2026-11-06T12:12:14Z",
+  "state": "shipping",
+  "current_stage": "shipping",
+  "events": 8,
+  "last_event_id": "evt_1793967134753_5ae88a",
+  "history": [
+    {
+      "actor": "cli",
+      "data": {
+        "directory": ".ox-agent/work/active/WI-0002-backlog-closure-snapshot-replay-webhook-adapter",
+        "title": "Backlog closure: snapshot replay, webhook adapter, remote skills install"
+      },
+      "timestamp": "2026-11-06T12:04:11Z",
+      "type": "work_item.created"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "intake",
+        "reason": "recon complete: code paths mapped, issue specs confirmed",
+        "to": "discovering"
+      },
+      "timestamp": "2026-11-06T12:12:04Z",
+      "type": "work_item.transitioned"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "discovering",
+        "reason": "design set per issue specs: webhook=transport-only, remote-skills.lock provenance, snapshot prefix check",
+        "to": "brainstorming"
+      },
+      "timestamp": "2026-11-06T12:12:14Z",
+      "type": "work_item.transitioned"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "brainstorming",
+        "reason": "adapter fields, lock schema, replay semantics, eval keys specified",
+        "to": "specifying"
+      },
+      "timestamp": "2026-11-06T12:12:14Z",
+      "type": "work_item.transitioned"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "specifying",
+        "reason": "commit sequence: replay, webhook, install, evals, changelog+CI",
+        "to": "planning"
+      },
+      "timestamp": "2026-11-06T12:12:14Z",
+      "type": "work_item.transitioned"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "planning",
+        "reason": "all three issues + eval audit + changelog implemented",
+        "to": "implementing"
+      },
+      "timestamp": "2026-11-06T12:12:14Z",
+      "type": "work_item.transitioned"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "implementing",
+        "reason": "go test/vet/build green, live smokes: install/drift/uninstall, webhook sync/async, eval emit-score, replay equivalence",
+        "to": "verifying"
+      },
+      "timestamp": "2026-11-06T12:12:14Z",
+      "type": "work_item.transitioned"
+    },
+    {
+      "actor": "cli",
+      "data": {
+        "from": "verifying",
+        "reason": "ready for PR: 5 commits, issues #10-12 closed",
+        "to": "shipping"
+      },
+      "timestamp": "2026-11-06T12:12:14Z",
+      "type": "work_item.transitioned"
+    }
+  ]
+}

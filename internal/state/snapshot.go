@@ -27,12 +27,28 @@ func snapshotPath(root, id string) string {
 	return filepath.Join(root, ".ox-agent", "state", "snapshots", id+".json")
 }
 
-// Replay folds every journal event for the work item into a Snapshot and,
-// when write is set, persists it to state/snapshots/<id>.json.
-func Replay(root string, item *WorkItem, write bool) (*Snapshot, error) {
+// Replay folds the work item's journal events into a Snapshot and, when
+// write is set, persists it to state/snapshots/<id>.json. With accel set, a
+// persisted snapshot whose last_event_id still marks a verified prefix of
+// the journal (the events before it are exactly the ones it folded) resumes
+// the fold: stored history is reused and only newer events are appended. A
+// missing snapshot, an absent marker, or a prefix count that shifted (e.g. a
+// union merge inserting events ahead of the marker) falls back to a full
+// fold so accelerated and full replays can never silently diverge.
+func Replay(root string, item *WorkItem, write, accel bool) (*Snapshot, error) {
 	events, err := EventsFor(root, item.ID, 0)
 	if err != nil {
 		return nil, err
+	}
+	var base *Snapshot
+	fold := events
+	if accel {
+		if prior := loadSnapshot(root, item.ID); prior != nil {
+			if idx := indexOfEvent(events, prior.LastEventID); idx >= 0 && idx+1 == prior.Events {
+				base = prior
+				fold = events[idx+1:]
+			}
+		}
 	}
 	snap := &Snapshot{
 		SchemaVersion: 1,
@@ -42,16 +58,12 @@ func Replay(root string, item *WorkItem, write bool) (*Snapshot, error) {
 		CurrentStage:  item.CurrentStage,
 		Events:        len(events),
 	}
-	for _, event := range events {
-		entry := map[string]any{
-			"timestamp": event.Timestamp,
-			"type":      event.Type,
-			"actor":     event.Actor,
-		}
-		if len(event.Data) > 0 {
-			entry["data"] = event.Data
-		}
-		snap.History = append(snap.History, entry)
+	if base != nil {
+		snap.History = append(snap.History, base.History...)
+		snap.LastEventID = base.LastEventID
+	}
+	for _, event := range fold {
+		snap.History = append(snap.History, foldEntry(event))
 		snap.LastEventID = event.EventID
 	}
 	if !write {
@@ -68,6 +80,46 @@ func Replay(root string, item *WorkItem, write bool) (*Snapshot, error) {
 		return nil, fmt.Errorf("writing snapshot: %w", err)
 	}
 	return snap, nil
+}
+
+// loadSnapshot reads a persisted snapshot for the work item, returning nil
+// when none exists or it cannot be parsed.
+func loadSnapshot(root, id string) *Snapshot {
+	data, err := os.ReadFile(snapshotPath(root, id))
+	if err != nil {
+		return nil
+	}
+	var snap Snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil
+	}
+	return &snap
+}
+
+// indexOfEvent returns the position of the event with id in events, or -1.
+func indexOfEvent(events []Event, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i, event := range events {
+		if event.EventID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// foldEntry renders one event as a snapshot history entry.
+func foldEntry(event Event) map[string]any {
+	entry := map[string]any{
+		"timestamp": event.Timestamp,
+		"type":      event.Type,
+		"actor":     event.Actor,
+	}
+	if len(event.Data) > 0 {
+		entry["data"] = event.Data
+	}
+	return entry
 }
 
 // Explain narrates a work item's journal as ordered lines: timestamp, event

@@ -1,12 +1,22 @@
 schema_version: 1
 skill: ox-agent/discover-context
 cases:
-  - id: valid-scoped-request
+  - id: harvest-standards
     prompt: >-
-      Discover relevant project standards, architecture, ADRs, code patterns,
-      tests, and constraints for the current work item.
+      Survey the repository and seeded context files for standards and
+      decisions relevant to the work item, persisting entries under
+      context/.
     expected:
       output_schema_valid: true
+      entries_written: true
+      findings_summarized: true
+  - id: bounded-read
+    prompt: >-
+      Work only from the repository and seeded context files; never invent
+      project conventions.
+    expected:
+      output_schema_valid: true
+      bounded_read: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

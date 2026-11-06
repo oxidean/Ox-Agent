@@ -70,12 +70,12 @@ The manual adapter writes the packet under `runtime/runs/<id>/packet.json`,
 prints the skill documentation path, and waits for
 `runtime/runs/<id>/output.json`.
 
-Supported adapters are `manual` and `spawn-cli`; new adapters are added per
-concrete consumer, never as generic placeholders. A `spawn-cli` integration
-shells a command template — `{packet}`, `{output}`, and `{run_dir}` expand to
-paths under the run directory — and works for any agent CLI, including remote
-dispatch (`ssh host agent ...`). Example, saved as
-`.ox-agent/integrations/myagent.yaml`:
+Supported adapters are `manual`, `spawn-cli`, and `webhook`; new adapters
+are added per concrete consumer, never as generic placeholders. A `spawn-cli`
+integration shells a command template — `{packet}`, `{output}`, and
+`{run_dir}` expand to paths under the run directory — and works for any
+agent CLI, including remote dispatch (`ssh host agent ...`). Example, saved
+as `.ox-agent/integrations/myagent.yaml`:
 
 ```yaml
 schema_version: 1
@@ -84,6 +84,26 @@ adapter: spawn-cli
 command: "myagent run --packet {packet} --write-output {output}"
 timeout_seconds: 600
 description: Dispatch runs to the myagent CLI.
+```
+
+A `webhook` integration POSTs the packet JSON to an HTTP(S) endpoint — the
+packet contract stays the interface; the adapter owns transport only. In
+`async` mode (default) a 2xx acknowledgement leaves the run pending and the
+remote harness writes `output.json` back through the same file contract. In
+`sync` mode a non-empty 2xx response body is stored as `output.json`; collect
+still schema-validates it, so a malformed response fails as a contract
+violation. A bearer token comes from the environment variable named by
+`token_env` — never from the yaml. Example:
+
+```yaml
+schema_version: 1
+name: fleet
+adapter: webhook
+endpoint: https://agents.internal/ox-agent/dispatch
+mode: async
+token_env: FLEET_TOKEN
+timeout_seconds: 60
+description: Dispatch packets to the managed agent fleet.
 ```
 
 ### `ox-agent run collect <run-id>`
@@ -129,7 +149,11 @@ version and marks covered messages; `close` resolves the thread.
 
 ### `ox-agent state replay <work-item>`
 
-Rebuild current work-item state by replaying the event journal.
+Rebuild current work-item state by replaying the event journal. When a
+snapshot exists under `state/snapshots/` and its `last_event_id` still
+marks an intact journal prefix, replay resumes from it and folds only
+newer events (`--full` forces a from-scratch fold). `--snapshot` persists
+the result; `--json` prints it.
 
 ### `ox-agent state explain <work-item>`
 
@@ -164,14 +188,44 @@ given by `-o/--output`. Journals `context.compiled`.
 List every materialized skill under `.ox-agent/skills/` with its version,
 enabled flag, drift status against the embedded distribution
 (`current`/`modified`/`incomplete`/`project`), and binary compatibility.
-Directories the embedded tree does not cover are project-local skills.
+Directories the embedded tree does not cover are project-local skills;
+remote-installed skills show `remote` status and their pinned
+`source@sha` in the SOURCE column.
+
+### `ox-agent skills install <git-url> [--ref r] [--path subdir] [--name n] [--force]`
+
+Fetch a skill package (a directory containing `skill.yaml` + `SKILL.md`)
+from a git remote and materialize it under `.ox-agent/skills/<name>`. The
+manifest is validated against the skill-manifest contract before anything
+is written. Provenance is recorded in `.ox-agent/remote-skills.lock`: the
+source URL, requested `--ref` (branch/tag/commit, default remote HEAD),
+the resolved commit SHA, and a sha256 digest of every installed file — so
+`skills check` and `doctor` verify what was reviewed is what runs.
+
+- Embedded (ox-agent-owned) skill directories can never be shadowed.
+- An existing directory is replaced only when the lock already owns it and
+  `--force` is passed — that re-pins to the newly resolved SHA.
+- Package symlinks resolving outside the package are rejected.
+- Remote skills are never touched by `skills update` (embedded-only);
+  upgrade is `install <same-source> --force`.
+
+Wire the skill into `config.yaml` (`skills.enabled`, `stage_skills`) to use
+it in stages. Review the pinned commit before trusting a remote skill —
+provenance guarantees integrity, not intent.
+
+### `ox-agent skills uninstall <name>`
+
+Remove a remote-installed skill directory and its lock entry. Embedded and
+project-local skills are refused.
 
 ### `ox-agent skills check`
 
 Validate each materialized skill: `skill.yaml` against the manifest schema,
 declared input/output schemas present and compilable, `SKILL.md` present,
-eval suite present, and the `compatibility.ox_agent` pin satisfied by the
-running binary. Exits non-zero on any error finding.
+eval suite present, the `compatibility.ox_agent` pin satisfied by the
+running binary, and remote skills verified against their pinned digests in
+`remote-skills.lock` (drifted or missing files report as findings). Exits
+non-zero on any error finding.
 
 ### `ox-agent skills update [--yes]`
 

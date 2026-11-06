@@ -28,3 +28,9 @@ Identify and record consequential technical decisions as durable, supersedable a
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
 - Promote durable decisions and blockers into the appropriate work-item artifact.
+
+## Evaluation
+
+Self-report quality flags in `eval` (booleans — set each true only when
+genuinely satisfied): `records_decision`, `supersedes_correctly`, `durable_format`. `preserves_scope` reports that you stayed
+inside the supplied context and constraints.
