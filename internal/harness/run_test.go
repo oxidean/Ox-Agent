@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
@@ -564,5 +565,247 @@ func TestCollectRejectsMissingActionType(t *testing.T) {
 	writeOutput(t, root, run.RunID, out)
 	if _, _, err := Collect(root, run.RunID); err == nil {
 		t.Fatal("Collect() accepted next_action without type; want error")
+	}
+}
+
+// TestCollectEscalateFilesInputRequest verifies an escalated run blocks the
+// work item AND files a durable clarification request — the question
+// survives the turn in async hosts.
+func TestCollectEscalateFilesInputRequest(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "need a product decision"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	reloaded, err := state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if reloaded.State != "blocked" {
+		t.Fatalf("state = %s, want blocked", reloaded.State)
+	}
+	pending, issues := input.Pending(root)
+	if len(issues) > 0 {
+		t.Fatalf("Pending() issues = %v", issues)
+	}
+	if len(pending) != 1 || pending[0].Kind != input.KindClarification || pending[0].RunID != run.RunID {
+		t.Fatalf("pending = %+v", pending)
+	}
+	// A second escalation with the same reason dedupes onto the same request.
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "need a product decision"}
+	if err := fileEscalationRequest(root, reloaded, run, "need a product decision"); err != nil {
+		t.Fatalf("fileEscalationRequest() error = %v", err)
+	}
+	pending, _ = input.Pending(root)
+	if len(pending) != 1 {
+		t.Fatalf("dedupe failed: pending = %d", len(pending))
+	}
+}
+
+// TestCollectGateFilesApprovalRequest verifies a stage completion that lands
+// on a human-gated lifecycle edge files an approval request and reports
+// success — the collected outcome applied; only advancement waits.
+func TestCollectGateFilesApprovalRequest(t *testing.T) {
+	root, item := initProject(t)
+	// Gate a stage-boundary edge in the project lifecycle — the embedded
+	// lifecycle only gates shipping→shipped, which no stage maps to.
+	lifePath := filepath.Join(root, ".ox-agent", "lifecycle", "workflow.yaml")
+	life, err := os.ReadFile(lifePath)
+	if err != nil {
+		t.Fatalf("reading lifecycle: %v", err)
+	}
+	// The checkout may carry CRLF endings on Windows — normalize before
+	// patching so the edge match does not silently no-op.
+	normalized := strings.ReplaceAll(string(life), "\r\n", "\n")
+	gated := strings.Replace(normalized,
+		"  - from: discovering\n    to: brainstorming\n",
+		"  - from: discovering\n    to: brainstorming\n    gate: human\n", 1)
+	if gated == normalized {
+		t.Fatal("lifecycle gate not applied — edge text did not match")
+	}
+	if err := os.WriteFile(lifePath, []byte(gated), 0o644); err != nil {
+		t.Fatalf("writing lifecycle: %v", err)
+	}
+	item.State = "discovering"
+	item.CurrentStage = "discovery"
+	if err := item.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "discover-context", Stage: "discovery"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("discover-context"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() must succeed when advancement parks at a gate: %v", err)
+	}
+	reloaded, err := state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if reloaded.State != "discovering" {
+		t.Fatalf("state = %s, want discovering (awaiting approval)", reloaded.State)
+	}
+	req, err := input.FindPendingAction(root, item.ID, "transition", "brainstorming")
+	if err != nil {
+		t.Fatalf("FindPendingAction() error = %v", err)
+	}
+	if req == nil {
+		t.Fatal("no approval request filed for the gated edge")
+	}
+	// Approving it drives the real gated path forward.
+	if _, err := input.Approve(root, req.RequestID, "jesse"); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	reloaded, _ = state.Resolve(root, item.ID)
+	if reloaded.State != "brainstorming" {
+		t.Fatalf("state = %s after approve, want brainstorming", reloaded.State)
+	}
+}
+
+// TestCollectAwaitInputFilesRequest verifies next_action.type await_input
+// files a durable request, keeps the run re-dispatchable (retry), records
+// the request on the run, and leaves the work item unblocked — even when
+// the skill pairs it with status "blocked" (blocked on input, not work).
+func TestCollectAwaitInputFilesRequest(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{
+		"type":    "await_input",
+		"reason":  "which direction should the spec take?",
+		"options": []any{"cli-first", "api-first", "manual"},
+	}
+	writeOutput(t, root, run.RunID, out)
+	gotRun, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if gotRun.Status != "retry" {
+		t.Fatalf("run status = %s, want retry (dispatchable)", gotRun.Status)
+	}
+	if gotRun.AwaitingInput == "" {
+		t.Fatal("run.AwaitingInput empty — request ID not recorded")
+	}
+	reloaded, err := state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if reloaded.State == "blocked" {
+		t.Fatal("await_input marked the item blocked — it must not")
+	}
+	pending, issues := input.Pending(root)
+	if len(issues) > 0 {
+		t.Fatalf("Pending() issues = %v", issues)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	req := pending[0]
+	if req.RequestID != gotRun.AwaitingInput {
+		t.Fatalf("request %s != run.AwaitingInput %s", req.RequestID, gotRun.AwaitingInput)
+	}
+	if req.Kind != input.KindDecision || len(req.Options) != 3 {
+		t.Fatalf("request = kind %s options %v, want decision with 3 options", req.Kind, req.Options)
+	}
+	// The skill stays dispatchable — the human's answer unblocks a re-run.
+	skill, err := NextSkill(root, reloaded, reloaded.CurrentStage, map[string][]string{reloaded.CurrentStage: {"specify"}})
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill = %q, %v — await_input skill must stay dispatchable", skill, err)
+	}
+}
+
+// TestCollectAwaitInputDedupes verifies a repeated await_input with the
+// same question reuses the pending request, and that an answered request
+// lets the next collect proceed.
+func TestCollectAwaitInputDedupes(t *testing.T) {
+	root, item := initProject(t)
+	ask := func() *Run {
+		run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+		if err != nil {
+			t.Fatalf("Dispatch() error = %v", err)
+		}
+		out := validOutput("specify")
+		out["next_action"] = map[string]any{"type": "await_input", "reason": "confirm the scope?"}
+		writeOutput(t, root, run.RunID, out)
+		got, _, err := Collect(root, run.RunID)
+		if err != nil {
+			t.Fatalf("Collect() error = %v", err)
+		}
+		return got
+	}
+	first := ask()
+	second := ask()
+	pending, _ := input.Pending(root)
+	if len(pending) != 1 {
+		t.Fatalf("dedupe failed: pending = %d", len(pending))
+	}
+	if first.AwaitingInput != second.AwaitingInput {
+		t.Fatalf("dedupe ids differ: %s vs %s", first.AwaitingInput, second.AwaitingInput)
+	}
+}
+
+// TestCollectRetryAfterOutcomeFailure verifies a failed outcome filing
+// restores the run to pending so collection retries instead of stranding
+// the run non-collectable.
+func TestCollectRetryAfterOutcomeFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based failure injection is unreliable on Windows")
+	}
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which way?"}
+	writeOutput(t, root, run.RunID, out)
+	// Make request filing fail: read-only input dir.
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(inputDir, 0o555); err != nil {
+		t.Fatalf("chmod ro: %v", err)
+	}
+	// Root with CAP_DAC_OVERRIDE ignores mode bits — probe the actual
+	// write instead of assuming chmod took effect.
+	probe := filepath.Join(inputDir, ".probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err == nil {
+		os.Remove(probe)
+		t.Skip("directory remains writable after chmod — running with elevated privileges")
+	}
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite filing failure")
+	}
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "pending" {
+		t.Fatalf("run status = %s, want pending (retryable)", reloaded.Status)
+	}
+	if err := os.Chmod(inputDir, 0o755); err != nil {
+		t.Fatalf("chmod rw: %v", err)
+	}
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("retry Collect() error = %v", err)
+	}
+	if got.AwaitingInput == "" {
+		t.Fatal("retried collect did not file the request")
 	}
 }

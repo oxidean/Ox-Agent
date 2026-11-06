@@ -38,6 +38,7 @@
       "enum": [
         "manual",
         "spawn-cli",
+        "webhook",
         "api"
       ]
     },
@@ -61,6 +62,11 @@
     },
     "error": {
       "type": "string"
+    },
+    "awaiting_input": {
+      "type": "string",
+      "pattern": "^IN-[0-9]+$",
+      "description": "input request the run is parked on (next_action await_input)"
     }
   },
   "additionalProperties": true

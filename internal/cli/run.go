@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/oxidean/Ox-Agent/internal/harness"
@@ -37,7 +36,7 @@ func newRunCmd() *cobra.Command {
 			}
 			if item.CurrentStage == "intake" {
 				if _, err := item.Advance(root, "ox-agent"); err != nil {
-					return err
+					return handleGateError(root, err)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%s: → %s\n", item.ID, item.State)
 			}
@@ -57,11 +56,7 @@ func newRunCmd() *cobra.Command {
 			req := harness.DispatchRequest{Skill: skill, Stage: stage, Integration: integration, Budget: budget}
 			run, err := harness.Dispatch(cmd.Context(), root, item, req)
 			if err != nil {
-				var gate *state.ApprovalRequiredError
-				if errors.As(err, &gate) {
-					return err
-				}
-				return err
+				return handleGateError(root, err)
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s dispatched (adapter: %s)\n", run.RunID, run.Adapter)
@@ -105,6 +100,9 @@ func newRunCollectCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(out, "%s %s (verdict: %v)\n", run.RunID, run.Status, output["verdict"])
+			if run.AwaitingInput != "" {
+				fmt.Fprintf(out, "  awaiting input: %s — respond with `ox-agent input respond %s --by <name>`\n", run.AwaitingInput, run.AwaitingInput)
+			}
 			return nil
 		},
 	}

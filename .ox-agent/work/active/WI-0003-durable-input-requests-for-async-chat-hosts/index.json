@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "WI-0003",
+  "title": "Durable input requests for async-chat hosts",
+  "state": "intake",
+  "profile": "normal",
+  "current_stage": "intake",
+  "created_at": "2026-11-06T22:14:02Z"
+}

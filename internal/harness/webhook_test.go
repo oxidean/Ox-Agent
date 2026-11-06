@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeIntegration plants an integration yaml under .ox-agent/integrations.
@@ -178,5 +181,193 @@ func TestWebhookRejectsBadConfig(t *testing.T) {
 	writeIntegration(t, root, "badurl", "name: badurl\nadapter: webhook\nendpoint: file:///etc/passwd\n")
 	if _, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "badurl"}); err == nil || !strings.Contains(err.Error(), "invalid endpoint") {
 		t.Fatalf("bad endpoint error = %v", err)
+	}
+}
+
+// TestWebhookRejectsCleartextHTTP verifies non-loopback http endpoints are
+// refused — packets and bearer tokens must not travel in cleartext.
+func TestWebhookRejectsCleartextHTTP(t *testing.T) {
+	root, item := initProject(t)
+	writeIntegration(t, root, "cleartext", "name: cleartext\nadapter: webhook\nendpoint: http://hooks.example.com/run\n")
+	if _, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "cleartext"}); err == nil || !strings.Contains(err.Error(), "cleartext") {
+		t.Fatalf("non-loopback http error = %v, want cleartext refusal", err)
+	}
+}
+
+// TestWebhookBlocksRedirectToHTTP verifies an https→http redirect does not
+// resend the packet and token in cleartext.
+func TestWebhookBlocksRedirectToHTTP(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://hooks.example.com/capture", http.StatusFound)
+	}))
+	defer srv.Close()
+	root, item := initProject(t)
+	writeIntegration(t, root, "redirector", "name: redirector\nadapter: webhook\nendpoint: "+srv.URL+"\n")
+	// httptest serves loopback http — the redirect target is the downgrade
+	// the client must refuse.
+	_, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "redirector"})
+	if err == nil || !strings.Contains(err.Error(), "cleartext") {
+		t.Fatalf("redirect error = %v, want cleartext refusal", err)
+	}
+}
+
+// TestWebhookRefusalMarksRunFailed verifies a refused endpoint leaves the
+// run terminal — pending would wedge the pipeline step forever.
+func TestWebhookRefusalMarksRunFailed(t *testing.T) {
+	root, item := initProject(t)
+	writeIntegration(t, root, "hook", "name: hook\nadapter: webhook\nendpoint: http://169.254.1.1:9999/hook\n")
+	_, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "hook"})
+	if err == nil {
+		t.Fatal("Dispatch() accepted a cleartext http endpoint")
+	}
+	// Dispatch returns nil on adapter failure — find the run record on
+	// disk; exactly one exists.
+	entries, derr := os.ReadDir(runsDir(root))
+	if derr != nil || len(entries) != 1 {
+		t.Fatalf("runs dir: %v entries=%d", derr, len(entries))
+	}
+	reloaded, err := LoadRun(root, entries[0].Name())
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("refused run status = %s, want failed (pipeline-retryable)", reloaded.Status)
+	}
+}
+
+// TestWebhookHTTPBypassesProxy verifies loopback http dispatch ignores
+// HTTP_PROXY — a proxy would see the packet and token in cleartext.
+func TestWebhookHTTPBypassesProxy(t *testing.T) {
+	var hit bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	// A dead proxy: if the request honored it, dispatch could not succeed.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("NO_PROXY", "")
+	root, item := initProject(t)
+	writeIntegration(t, root, "hook", "name: hook\nadapter: webhook\nendpoint: "+srv.URL+"\n")
+	if _, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "hook"}); err != nil {
+		t.Fatalf("Dispatch() error = %v (proxy must be bypassed for http)", err)
+	}
+	if !hit {
+		t.Fatal("server never received the packet — request went to the proxy")
+	}
+}
+
+// TestIsLoopback covers name and IP admission, including zoned IPv6.
+func TestIsLoopback(t *testing.T) {
+	cases := map[string]bool{
+		"localhost":       true,
+		"hooks.localhost": true,
+		"127.0.0.1":       true,
+		"::1":             true,
+		"::1%lo0":         true,  // zoned loopback
+		"fe80::1%eth0":    false, // zoned link-local is not loopback
+		"10.0.0.1":        false,
+		"example.com":     false,
+		"localhost.evil":  false,
+	}
+	for host, want := range cases {
+		if got := isLoopback(host); got != want {
+			t.Errorf("isLoopback(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// TestDialLoopbackTriesEachAddress verifies the dialer walks every
+// resolved loopback address — a name resolving to a family the endpoint
+// does not listen on must not sink the request when another works.
+func TestDialLoopbackTriesEachAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			conn.Close()
+		}
+	}()
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	// 127.0.0.2 is loopback but nothing listens — the dialer must fall
+	// through to 127.0.0.1 where the test listener lives.
+	ips := []net.IP{net.ParseIP("127.0.0.2"), net.ParseIP("127.0.0.1")}
+	conn, err := dialLoopback(context.Background(), dialer, "tcp", port, ips)
+	if err != nil {
+		t.Fatalf("dialLoopback() error = %v — did not try the second address", err)
+	}
+	conn.Close()
+	// A single dead address must surface its error.
+	if _, err := dialLoopback(context.Background(), dialer, "tcp", port, []net.IP{net.ParseIP("127.0.0.2")}); err == nil {
+		t.Fatal("dialLoopback() to a dead address succeeded; want error")
+	}
+}
+
+// TestWebhookMissingPacketMarksRunFailed verifies a missing packet.json
+// fails the run durably instead of leaving it pending forever.
+func TestWebhookMissingPacketMarksRunFailed(t *testing.T) {
+	root, _ := initProject(t)
+	run := &Run{
+		RunID:   "run_nopacket",
+		Status:  "pending",
+		Adapter: "webhook",
+		Dir:     filepath.Join(runsDir(root), "run_nopacket"),
+	}
+	if err := os.MkdirAll(run.Dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	err := run.webhook(context.Background(), root, &Integration{Name: "hook", Adapter: "webhook", Endpoint: "http://127.0.0.1:1", Mode: "async"})
+	if err == nil {
+		t.Fatal("webhook() with no packet succeeded; want error")
+	}
+	loaded, loadErr := LoadRun(root, "run_nopacket")
+	if loadErr != nil {
+		t.Fatalf("LoadRun() error = %v", loadErr)
+	}
+	if loaded.Status != "failed" || !strings.Contains(loaded.Error, "reading packet") {
+		t.Fatalf("run = %s error %q — want failed with packet read error", loaded.Status, loaded.Error)
+	}
+}
+
+// TestWebhookSyncOutputWriteMarksRunFailed verifies a sync-mode
+// output.json write failure marks the run failed — otherwise a dispatch
+// that cannot persist its own response would strand the run pending.
+func TestWebhookSyncOutputWriteMarksRunFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"summary":"done"}`))
+	}))
+	defer srv.Close()
+	root, _ := initProject(t)
+	run := &Run{
+		RunID:   "run_badwrite",
+		Status:  "pending",
+		Adapter: "webhook",
+		Dir:     filepath.Join(runsDir(root), "run_badwrite"),
+	}
+	if err := os.MkdirAll(run.Dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(run.Dir, "packet.json"), []byte(`{"packet":1}`), 0o644); err != nil {
+		t.Fatalf("packet: %v", err)
+	}
+	// output.json as a directory makes the response write fail.
+	if err := os.Mkdir(filepath.Join(run.Dir, "output.json"), 0o755); err != nil {
+		t.Fatalf("output dir: %v", err)
+	}
+	err := run.webhook(context.Background(), root, &Integration{Name: "hook", Adapter: "webhook", Endpoint: srv.URL, Mode: "sync"})
+	if err == nil {
+		t.Fatal("webhook() with unwritable output.json succeeded; want error")
+	}
+	loaded, loadErr := LoadRun(root, "run_badwrite")
+	if loadErr != nil {
+		t.Fatalf("LoadRun() error = %v", loadErr)
+	}
+	if loaded.Status != "failed" || !strings.Contains(loaded.Error, "writing webhook output") {
+		t.Fatalf("run = %s error %q — want failed with output write error", loaded.Status, loaded.Error)
 	}
 }

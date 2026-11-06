@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
@@ -118,5 +119,144 @@ func TestCompileAcceptsNamespacedSkill(t *testing.T) {
 	}
 	if packet.Skill != "ox-agent/specify" || packet.SkillDir != "skills/specify" {
 		t.Fatalf("packet identity wrong for namespaced ref: %+v", packet)
+	}
+}
+
+// TestCompileIncludesInputs verifies pending and answered input requests
+// for the work item fold into the packet so a re-dispatched skill sees the
+// human's answer.
+func TestCompileIncludesInputs(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "input target")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	req, err := input.Create(root, input.Request{
+		Kind:       input.KindClarification,
+		WorkItemID: item.ID,
+		Question:   "which option?",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := input.Respond(root, req.RequestID, "jesse", "the second one"); err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+	// A request for a different work item must not leak into this packet.
+	other, err := state.Start(root, "unrelated")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := input.Create(root, input.Request{Kind: input.KindClarification, WorkItemID: other.ID, Question: "unrelated q"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	packet, err := Compile(root, item, "discover-context", "discovery", 0, "")
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if len(packet.Context.Inputs) != 1 {
+		t.Fatalf("inputs = %v, want exactly the answered request", packet.Context.Inputs)
+	}
+	got := packet.Context.Inputs[0]
+	if got.RequestID != req.RequestID || got.Status != input.StatusAnswered || got.Answer != "the second one" || got.AnsweredBy != "jesse" {
+		t.Fatalf("input = %+v", got)
+	}
+}
+
+// TestCompileFailsOnUnloadableRequest verifies a corrupt input request
+// fails compilation — it may be the very request the run is waiting on,
+// so the packet must not proceed answerless.
+func TestCompileFailsOnUnloadableRequest(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "corrupt input")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Ownership evidence: the journal ties IN-0001 to this work item.
+	if err := state.Append(root, state.Event{
+		Type:       "input.requested",
+		WorkItemID: item.ID,
+		Data:       map[string]any{"request_id": "IN-0001"},
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err == nil {
+		t.Fatal("Compile() succeeded with an unloadable request; want error")
+	}
+}
+
+// TestCompileFailsOnUnloadableScopedRequest verifies a corrupt request
+// whose work-item ownership was backfilled — journaled as input.scoped
+// rather than input.requested — still fails compilation: ownership proof
+// survives both event kinds.
+func TestCompileFailsOnUnloadableScopedRequest(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "scoped corrupt input")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Ownership evidence from a backfill: the journal ties IN-0001 to
+	// this work item via input.scoped.
+	if err := state.Append(root, state.Event{
+		Type:       "input.scoped",
+		WorkItemID: item.ID,
+		Data:       map[string]any{"request_id": "IN-0001"},
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err == nil {
+		t.Fatal("Compile() succeeded with an unloadable scoped request; want error")
+	}
+}
+
+// TestCompileWarnsOnUnrelatedCorruptRequest verifies an unloadable request
+// NOT tied to this work item only warns — one project's corrupt file must
+// not block every dispatch for unrelated work items.
+func TestCompileWarnsOnUnrelatedCorruptRequest(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "unrelated corrupt")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// No journal entry ties IN-0001 to item — the corruption is stray.
+	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err != nil {
+		t.Fatalf("Compile() blocked on an unrelated request: %v", err)
 	}
 }

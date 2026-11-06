@@ -1,12 +1,21 @@
 schema_version: 1
 skill: ox-agent/retrospective
 cases:
-  - id: valid-scoped-request
+  - id: analyze-completion
     prompt: >-
-      Analyze a completed work item for quality, cost, rework, and process
-      improvements without silently changing policy.
+      Analyze the completed work item for quality, rework, and improvements
+      grounded in journal and artifact evidence.
     expected:
       output_schema_valid: true
+      evidence_based: true
+  - id: promote-learnings
+    prompt: >-
+      Promote durable learnings into context/standards or context/decisions
+      without silently changing policy.
+    expected:
+      output_schema_valid: true
+      learnings_promoted: true
+      no_policy_change: true
   - id: respects-scope
     prompt: >-
       Execute the skill using only the supplied work-item context and

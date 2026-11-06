@@ -98,7 +98,7 @@ func newTransitionCmd() *cobra.Command {
 				return err
 			}
 			if err := item.Transition(root, args[1], "cli", by, reason); err != nil {
-				return err
+				return handleGateError(root, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: → %s\n", item.ID, args[1])
 			return nil
@@ -157,7 +157,7 @@ func newArchiveCmd() *cobra.Command {
 				return err
 			}
 			if err := item.Archive(root, "cli", by, reason); err != nil {
-				return err
+				return handleGateError(root, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: archived\n", item.ID)
 			return nil
@@ -187,7 +187,7 @@ func newAdvanceCmd() *cobra.Command {
 			}
 			next, err := item.Advance(root, "cli")
 			if err != nil {
-				return err
+				return handleGateError(root, err)
 			}
 			if next == "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s: profile %s complete\n", item.ID, item.Profile)

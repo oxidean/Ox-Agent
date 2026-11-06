@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
@@ -31,6 +33,7 @@ type Run struct {
 	StepID        string `json:"step_id,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	CollectedAt   string `json:"collected_at,omitempty"`
+	AwaitingInput string `json:"awaiting_input,omitempty"`
 	Error         string `json:"error,omitempty"`
 	Dir           string `json:"-"`
 }
@@ -227,10 +230,16 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	// transitions to blocked, even when the run itself must not count
 	// as collected.
 	blocking := status == "blocked" || verdict == "blocked" || action == "escalate"
+	needsInput := action == "await_input"
 	switch {
 	case status == "failed":
 		run.Status = "failed"
 		run.Error, _ = output["summary"].(string)
+	case needsInput:
+		// Awaiting a human answer: the run is finished for this turn but
+		// unresolved, so the skill stays dispatchable once the durable
+		// request is answered — the item is NOT blocked.
+		run.Status = "retry"
 	case blocking && (verdict == "needs_rework" || action == "retry"):
 		// Blocking rework or retry stays unresolved: retry keeps the skill
 		// dispatchable (NextSkill, stageComplete, and pipeline progress
@@ -261,8 +270,15 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	}); err != nil {
 		return run, output, err
 	}
-	if run.Status == "collected" || blocking {
+	if run.Status == "collected" || blocking || needsInput {
 		if err := applyOutcome(root, item, run, output); err != nil {
+			// Restore the run to pending so collect stays retryable: a
+			// failed filing (input request, journal) must not strand the
+			// run — filings dedupe, so the retry reuses them safely.
+			run.Status = "pending"
+			if saveErr := run.save(root); saveErr != nil {
+				return run, output, fmt.Errorf("%w (also failed to restore pending status: %v)", err, saveErr)
+			}
 			return run, output, err
 		}
 	}
@@ -366,12 +382,23 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 	// The output schema constrains next_action.type; reject unknown values
 	// here too so an out-of-contract action can never ride a pass verdict.
 	switch action {
-	case "", "advance_stage", "retry", "escalate", "complete":
+	case "", "advance_stage", "retry", "escalate", "await_input", "complete":
 	default:
 		return fmt.Errorf("unknown next_action.type %q", action)
 	}
 	switch {
+	case action == "await_input":
+		// Checked before the blocked branch: a skill may pair await_input
+		// with status "blocked" (blocked on input) — that is a question,
+		// not a work blockage, so the item stays unblocked.
+		return fileAwaitInputRequest(root, item, run, next, reason)
 	case status == "blocked" || verdict == "blocked" || action == "escalate":
+		// File the durable request FIRST: the question must outlive the
+		// turn even when the item can no longer be marked blocked (e.g.
+		// already shipped) — otherwise the escalation evaporates.
+		if err := fileEscalationRequest(root, item, run, reason); err != nil {
+			return err
+		}
 		if item.State != "blocked" {
 			return item.Transition(root, "blocked", "ox-agent", "", reason)
 		}
@@ -388,7 +415,7 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 				return nil
 			}
 			_, err = item.Advance(root, "ox-agent")
-			return err
+			return fileGateOrErr(root, err)
 		}
 		if run.Stage != item.CurrentStage {
 			return nil
@@ -401,8 +428,91 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 			return nil
 		}
 		_, err = item.Advance(root, "ox-agent")
-		return err
+		return fileGateOrErr(root, err)
 	default:
 		return fmt.Errorf("unknown next_action.type %q", action)
 	}
+}
+
+// fileEscalationRequest files a durable clarification request for a blocked
+// or escalated run, deduplicating on work-item + question so repeated
+// escalations reuse one pending request instead of stacking.
+func fileEscalationRequest(root string, item *state.WorkItem, run *Run, reason string) error {
+	question := reason
+	if question == "" {
+		question = fmt.Sprintf("%s run %s escalated; how should %s proceed?", run.Skill, run.RunID, item.ID)
+	}
+	_, err := fileInputRequest(root, item.ID, run.RunID, question, nil)
+	return err
+}
+
+// fileAwaitInputRequest files the durable request for a skill's
+// next_action.type await_input — a clarification, or a decision when the
+// output declares answer options. The request ID is persisted on the run
+// so collect, status, and re-dispatch can all surface it.
+func fileAwaitInputRequest(root string, item *state.WorkItem, run *Run, next map[string]any, reason string) error {
+	question := reason
+	if question == "" {
+		question = fmt.Sprintf("%s run %s needs input for %s", run.Skill, run.RunID, item.ID)
+	}
+	var options []string
+	if raw, ok := next["options"].([]any); ok {
+		for _, o := range raw {
+			if s, ok := o.(string); ok && s != "" {
+				options = append(options, s)
+			}
+		}
+	}
+	req, err := fileInputRequest(root, item.ID, run.RunID, question, options)
+	if err != nil {
+		return err
+	}
+	run.AwaitingInput = req.RequestID
+	return run.save(root)
+}
+
+// fileInputRequest files a clarification (or decision, with ≥2 options)
+// request, deduplicating on work-item + question so repeated filings reuse
+// one pending request instead of stacking.
+func fileInputRequest(root, workItemID, runID, question string, options []string) (*input.Request, error) {
+	// Best-effort dedupe: unreadable files cannot match this question
+	// anyway, and a fresh request is safer than a failed collect.
+	pending, _ := input.Pending(root)
+	for _, r := range pending {
+		if r.WorkItemID == workItemID && r.Question == question {
+			return r, nil // already on file
+		}
+	}
+	kind := input.KindClarification
+	if len(options) >= 2 {
+		kind = input.KindDecision
+	}
+	return input.Create(root, input.Request{
+		Kind:       kind,
+		WorkItemID: workItemID,
+		RunID:      runID,
+		Question:   question,
+		Options:    options,
+	})
+}
+
+// fileGateOrErr converts an ApprovalRequiredError into a durable approval
+// request and reports success — the collected outcome applied cleanly; only
+// the advancement waits on the human. Non-gate errors pass through.
+func fileGateOrErr(root string, err error) error {
+	var gate *state.ApprovalRequiredError
+	if !errors.As(err, &gate) {
+		return err
+	}
+	op := gate.Op
+	if op == "" {
+		op = "transition"
+	}
+	_, err = input.Create(root, input.Request{
+		Kind:       input.KindApproval,
+		WorkItemID: gate.ID,
+		Question:   fmt.Sprintf("Approve %s of %s (%s → %s)?", op, gate.ID, gate.From, gate.To),
+		Action:     &input.Action{Type: op, WorkItemID: gate.ID, Target: gate.To},
+	})
+	return err
 }

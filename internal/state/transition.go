@@ -103,7 +103,7 @@ func (item *WorkItem) Transition(root, to, actor, approver, reason string) error
 		return fmt.Errorf("transition %s → %s is not legal (from %s: %s)", from, to, from, strings.Join(targets, ", "))
 	}
 	if gate == "human" && approver == "" {
-		return fmt.Errorf("transition %s → %s requires human approval; pass --by <name>", from, to)
+		return &ApprovalRequiredError{ID: item.ID, From: from, To: to, Op: "transition"}
 	}
 	if to == "blocked" {
 		item.BlockedFrom = from
@@ -174,7 +174,7 @@ func (item *WorkItem) Archive(root, actor, approver, reason string) error {
 		return fmt.Errorf("%s cannot be archived from state %s", item.ID, item.State)
 	}
 	if gate == "human" && approver == "" {
-		return fmt.Errorf("archiving %s requires human approval; pass --by <name>", item.ID)
+		return &ApprovalRequiredError{ID: item.ID, From: item.State, To: "archived", Op: "archive"}
 	}
 	from := item.State
 	item.State = "archived"
@@ -230,15 +230,20 @@ func EventsFor(root, workItemID string, limit int) ([]Event, error) {
 }
 
 // ApprovalRequiredError reports a lifecycle edge that needs a human
-// approver; the CLI surfaces it as guidance rather than a failure.
+// approver; callers file a durable input request from it so the approval
+// survives async hosts where a synchronous prompt would expire.
 type ApprovalRequiredError struct {
 	ID   string
 	From string
 	To   string
+	Op   string // "transition" or "archive"; empty behaves as transition
 }
 
 // Error formats the approval hint with the exact command to run.
 func (e *ApprovalRequiredError) Error() string {
+	if e.Op == "archive" {
+		return fmt.Sprintf("archiving %s requires human approval (run: ox-agent archive %s --by <name>)", e.ID, e.ID)
+	}
 	return fmt.Sprintf("transition %s → %s requires human approval (run: ox-agent transition %s %s --by <name>)", e.From, e.To, e.ID, e.To)
 }
 

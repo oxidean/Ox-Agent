@@ -2,6 +2,7 @@ package appctx
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
@@ -36,6 +38,18 @@ type PacketContext struct {
 	Decisions    []string       `json:"decisions,omitempty"`
 	References   []string       `json:"references,omitempty"`
 	PriorOutputs []PriorOutput  `json:"prior_outputs,omitempty"`
+	Inputs       []PacketInput  `json:"inputs,omitempty"`
+}
+
+// PacketInput carries a human-input request (and its answer when given)
+// into the packet so a re-dispatched skill sees what the human said.
+type PacketInput struct {
+	RequestID  string `json:"request_id"`
+	Kind       string `json:"kind"`
+	Question   string `json:"question"`
+	Status     string `json:"status"`
+	Answer     string `json:"answer,omitempty"`
+	AnsweredBy string `json:"answered_by,omitempty"`
 }
 
 // PriorOutput points at a collected run's output for reuse as context.
@@ -125,6 +139,45 @@ func Compile(root string, item *state.WorkItem, skill, stage string, budget int,
 		return nil, err
 	}
 	packet.Context.PriorOutputs = priors
+	requests, issues := input.List(root)
+	if len(issues) > 0 {
+		// Fail only when an unloadable file could be one of THIS item's
+		// requests — an unreadable file can't declare its work item, but
+		// the journal's input.requested events record durable ownership.
+		// Stray corrupt files from other items warn instead of blocking
+		// every dispatch in the project.
+		owned, err := ownedRequestIDs(root, item.ID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot compile packet — %w", err)
+		}
+		for _, issue := range issues {
+			id := ""
+			var ie *input.IssueError
+			if errors.As(issue, &ie) {
+				id = strings.TrimSuffix(ie.File, ".yaml")
+			}
+			if owned[id] {
+				return nil, fmt.Errorf("cannot compile packet — unloadable input request for %s: %v", item.ID, issue)
+			}
+			fmt.Fprintf(os.Stderr, "warning: %v\n", issue)
+		}
+	}
+	for _, r := range requests {
+		if r.WorkItemID != item.ID {
+			continue
+		}
+		switch r.Status {
+		case input.StatusPending, input.StatusAnswered, input.StatusApproved, input.StatusRejected:
+			packet.Context.Inputs = append(packet.Context.Inputs, PacketInput{
+				RequestID:  r.RequestID,
+				Kind:       r.Kind,
+				Question:   r.Question,
+				Status:     r.Status,
+				Answer:     r.Answer,
+				AnsweredBy: r.AnsweredBy,
+			})
+		}
+	}
 	_ = state.Append(root, state.Event{
 		Type:       "context.compiled",
 		WorkItemID: item.ID,
@@ -173,4 +226,27 @@ func collectedRuns(root, workItemID string) ([]PriorOutput, error) {
 // Bytes reports the packet as indented JSON.
 func (p *Packet) Bytes() ([]byte, error) {
 	return json.MarshalIndent(p, "", "  ")
+}
+
+// ownedRequestIDs returns the request IDs the journal ties to this work
+// item — the ownership evidence that survives even when a request file
+// itself can no longer be read.
+func ownedRequestIDs(root, workItemID string) (map[string]bool, error) {
+	events, err := state.ReadEvents(root)
+	if err != nil {
+		return nil, fmt.Errorf("cannot verify input ownership — journal unreadable: %w", err)
+	}
+	owned := map[string]bool{}
+	for _, e := range events {
+		// input.scoped carries the same ownership proof for requests whose
+		// work-item scope was backfilled after creation — the original
+		// input.requested event for those predates scope recording.
+		if (e.Type != "input.requested" && e.Type != "input.scoped") || e.WorkItemID != workItemID {
+			continue
+		}
+		if id, ok := e.Data["request_id"].(string); ok {
+			owned[id] = true
+		}
+	}
+	return owned, nil
 }
