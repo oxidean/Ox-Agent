@@ -8,6 +8,7 @@ on:
 concurrency:
   group: release-tagging
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
