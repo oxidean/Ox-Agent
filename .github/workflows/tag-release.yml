@@ -27,18 +27,22 @@ jobs:
         run: |
           if git log -1 --pretty=%B | grep -qiE '\[(skip|no)[ -]release\]'; then
             echo "skip=commit message opts out" >> "$GITHUB_OUTPUT"
-          elif git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "skip=head commit already tagged" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A stable tag already at HEAD (e.g. pushed manually, or left by a
+          # run that died between tag push and dispatch) is still dispatched
+          # below — tag creation is skipped, the release is not.
+          existing="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
+          if [ -n "$existing" ]; then
+            echo "existing=$existing" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compute next patch tag
         id: next
-        if: steps.gate.outputs.skip == ''
+        if: steps.gate.outputs.skip == '' && steps.gate.outputs.existing == ''
         run: |
           git fetch --force origin 'refs/tags/*:refs/tags/*' -q
-          latest="$(git tag -l 'v*.*.*' --sort=-v:refname | head -n1)"
+          latest="$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1)"
           if [ -z "$latest" ]; then
             echo "tag=v0.0.1" >> "$GITHUB_OUTPUT"
             exit 0
@@ -55,9 +59,25 @@ jobs:
           git push origin "${{ steps.next.outputs.tag }}"
 
       # Tags pushed by GITHUB_TOKEN do not trigger `on: push: tags` workflows,
-      # so the release is dispatched explicitly against the new tag.
+      # so the release is dispatched explicitly against the tag. Dispatch is
+      # skipped when the tag's release or a release run already exists, which
+      # also makes a rerun after a failed dispatch safe.
       - name: Dispatch release workflow
-        if: steps.next.outputs.tag != ''
+        if: steps.gate.outputs.skip == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run release.yml --ref "${{ steps.next.outputs.tag }}" -f tag="${{ steps.next.outputs.tag }}"
+          TARGET: ${{ steps.next.outputs.tag || steps.gate.outputs.existing }}
+        run: |
+          if [ -z "$TARGET" ]; then
+            echo "nothing to release"
+            exit 0
+          fi
+          if gh release view "$TARGET" >/dev/null 2>&1; then
+            echo "release $TARGET already published"
+            exit 0
+          fi
+          if [ "$(gh run list --workflow release.yml --branch "$TARGET" --json databaseId --jq 'length')" -gt 0 ]; then
+            echo "release run for $TARGET already started"
+            exit 0
+          fi
+          gh workflow run release.yml --ref "$TARGET" -f tag="$TARGET"

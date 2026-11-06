@@ -50,11 +50,18 @@ the release is dispatched rather than triggered by the push.)
 Auto-tagging is skipped when the head commit already carries a `v*.*.*` tag
 or when the squash-merge message contains `[skip release]` or `[no-release]`.
 
-For a minor or major bump — or to release a specific commit — create an
-annotated tag manually and push it (manual pushes do trigger `release.yml`):
+For a minor or major bump, tag `HEAD` manually and push it (manual pushes do
+trigger `release.yml`):
 
 ```bash
 git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
+```
+
+To release a specific commit instead, pass it to `git tag`:
+
+```bash
+git tag -a v0.2.0 <commit-sha> -m "v0.2.0"
 git push origin v0.2.0
 ```
 
