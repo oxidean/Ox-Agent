@@ -781,6 +781,13 @@ func TestCollectRetryAfterOutcomeFailure(t *testing.T) {
 	if err := os.Chmod(inputDir, 0o555); err != nil {
 		t.Fatalf("chmod ro: %v", err)
 	}
+	// Root with CAP_DAC_OVERRIDE ignores mode bits — probe the actual
+	// write instead of assuming chmod took effect.
+	probe := filepath.Join(inputDir, ".probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err == nil {
+		os.Remove(probe)
+		t.Skip("directory remains writable after chmod — running with elevated privileges")
+	}
 	if _, _, err := Collect(root, run.RunID); err == nil {
 		t.Fatal("Collect() succeeded despite filing failure")
 	}

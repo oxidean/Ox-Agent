@@ -207,3 +207,69 @@ func TestWebhookBlocksRedirectToHTTP(t *testing.T) {
 		t.Fatalf("redirect error = %v, want cleartext refusal", err)
 	}
 }
+
+// TestWebhookRefusalMarksRunFailed verifies a refused endpoint leaves the
+// run terminal — pending would wedge the pipeline step forever.
+func TestWebhookRefusalMarksRunFailed(t *testing.T) {
+	root, item := initProject(t)
+	writeIntegration(t, root, "hook", "name: hook\nadapter: webhook\nendpoint: http://169.254.1.1:9999/hook\n")
+	_, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "hook"})
+	if err == nil {
+		t.Fatal("Dispatch() accepted a cleartext http endpoint")
+	}
+	// Dispatch returns nil on adapter failure — find the run record on
+	// disk; exactly one exists.
+	entries, derr := os.ReadDir(runsDir(root))
+	if derr != nil || len(entries) != 1 {
+		t.Fatalf("runs dir: %v entries=%d", derr, len(entries))
+	}
+	reloaded, err := LoadRun(root, entries[0].Name())
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("refused run status = %s, want failed (pipeline-retryable)", reloaded.Status)
+	}
+}
+
+// TestWebhookHTTPBypassesProxy verifies loopback http dispatch ignores
+// HTTP_PROXY — a proxy would see the packet and token in cleartext.
+func TestWebhookHTTPBypassesProxy(t *testing.T) {
+	var hit bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	// A dead proxy: if the request honored it, dispatch could not succeed.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("NO_PROXY", "")
+	root, item := initProject(t)
+	writeIntegration(t, root, "hook", "name: hook\nadapter: webhook\nendpoint: "+srv.URL+"\n")
+	if _, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification", Integration: "hook"}); err != nil {
+		t.Fatalf("Dispatch() error = %v (proxy must be bypassed for http)", err)
+	}
+	if !hit {
+		t.Fatal("server never received the packet — request went to the proxy")
+	}
+}
+
+// TestIsLoopback covers name and IP admission, including zoned IPv6.
+func TestIsLoopback(t *testing.T) {
+	cases := map[string]bool{
+		"localhost":       true,
+		"hooks.localhost": true,
+		"127.0.0.1":       true,
+		"::1":             true,
+		"::1%lo0":         true,  // zoned loopback
+		"fe80::1%eth0":    false, // zoned link-local is not loopback
+		"10.0.0.1":        false,
+		"example.com":     false,
+		"localhost.evil":  false,
+	}
+	for host, want := range cases {
+		if got := isLoopback(host); got != want {
+			t.Errorf("isLoopback(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

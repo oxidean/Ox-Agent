@@ -951,3 +951,21 @@ func TestDoctorIgnoresInputLockFiles(t *testing.T) {
 		t.Fatalf("Doctor flagged missing state/input: %+v", report.Checks)
 	}
 }
+
+// TestDoctorValidatesNonYAMLIntegration verifies the .yaml-only exemption
+// is scoped to state/input: a malformed .yml integration is still schema-
+// checked (harness.List loads integrations regardless of extension).
+func TestDoctorValidatesNonYAMLIntegration(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	bad := filepath.Join(root, ".ox-agent", "integrations", "broken.yml")
+	if err := os.WriteFile(bad, []byte("adapter: [unclosed"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	report := Doctor(root)
+	if report.Healthy() {
+		t.Fatal("Doctor missed a malformed .yml integration")
+	}
+}

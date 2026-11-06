@@ -184,10 +184,44 @@ func TestCompileFailsOnUnloadableRequest(t *testing.T) {
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+	// Ownership evidence: the journal ties IN-0001 to this work item.
+	if err := state.Append(root, state.Event{
+		Type:       "input.requested",
+		WorkItemID: item.ID,
+		Data:       map[string]any{"request_id": "IN-0001"},
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
 		t.Fatalf("write corrupt: %v", err)
 	}
 	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err == nil {
 		t.Fatal("Compile() succeeded with an unloadable request; want error")
+	}
+}
+
+// TestCompileWarnsOnUnrelatedCorruptRequest verifies an unloadable request
+// NOT tied to this work item only warns — one project's corrupt file must
+// not block every dispatch for unrelated work items.
+func TestCompileWarnsOnUnrelatedCorruptRequest(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "unrelated corrupt")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// No journal entry ties IN-0001 to item — the corruption is stray.
+	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err != nil {
+		t.Fatalf("Compile() blocked on an unrelated request: %v", err)
 	}
 }

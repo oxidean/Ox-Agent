@@ -400,3 +400,89 @@ func TestConcurrentApproveExecutesOnce(t *testing.T) {
 		t.Fatalf("discovering transition executed %d times, want 1", transitions)
 	}
 }
+
+// TestRequestLockRejectsTraversalIDs verifies an ID like ../../x can never
+// mint a lock file outside state/input — validation precedes acquireLock.
+func TestRequestLockRejectsTraversalIDs(t *testing.T) {
+	root := setup(t)
+	for _, id := range []string{"../../x", "..%2F..%2Fx", "IN-", "IN-XXXX"} {
+		if _, err := Respond(root, id, "me", "answer"); err == nil {
+			t.Fatalf("Respond(%q) succeeded; want invalid-id error", id)
+		}
+	}
+	outside := filepath.Join(dir(root), "..", "..", "x.lock")
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("lock escaped input dir: %s exists", outside)
+	}
+}
+
+// TestNextIDScansJournal verifies IDs recorded in journal events are never
+// reissued even when their request file is gone — reuse would let
+// journaledEvent match the old request's terminal event.
+func TestNextIDScansJournal(t *testing.T) {
+	root := setup(t)
+	// IN-0001's file is gone but its terminal event survives — allocating
+	// it again would let journaledEvent match the old outcome.
+	if err := state.Append(root, state.Event{
+		Type:       "input.answered",
+		WorkItemID: "WI-0001",
+		Data:       map[string]any{"request_id": "IN-0001", "outcome": "answered"},
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	req, err := Create(root, Request{Kind: KindClarification, Question: "id?"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if req.RequestID != "IN-0002" {
+		t.Fatalf("allocated %s, want IN-0002 (IN-0001 survives in journal)", req.RequestID)
+	}
+}
+
+// TestGateReuseBackfillsWorkItem verifies a pending approval created
+// without work-item scope gets it backfilled when a gate reuses it —
+// preserving the append-only event history (no new requested event).
+func TestGateReuseBackfillsWorkItem(t *testing.T) {
+	root := setup(t)
+	item, err := state.Start(root, "gate reuse")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	// Plant a legacy-scope-less approval request directly on disk.
+	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `schema_version: 1
+request_id: IN-0001
+kind: approval
+status: pending
+question: ship it?
+created_by: ox-agent
+created_at: "2026-01-01T00:00:00Z"
+action:
+  type: transition
+  work_item_id: ` + item.ID + `
+  target: discovering
+`
+	if err := os.WriteFile(filepath.Join(dir(root), "IN-0001.yaml"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	got, err := Create(root, Request{
+		Kind:       KindApproval,
+		WorkItemID: item.ID,
+		Question:   "ship it?",
+		Action:     &Action{Type: "transition", WorkItemID: item.ID, Target: "discovering"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if got.RequestID != "IN-0001" {
+		t.Fatalf("dedupe failed — created %s instead of reusing IN-0001", got.RequestID)
+	}
+	if got.WorkItemID != item.ID {
+		t.Fatalf("WorkItemID = %q, want %q backfilled", got.WorkItemID, item.ID)
+	}
+	if n := len(eventsOfType(t, root, "input.requested")); n != 0 {
+		t.Fatalf("reuse journaled %d input.requested events — history must stay untouched", n)
+	}
+}

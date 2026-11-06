@@ -152,6 +152,9 @@ func withLock(root string, fn func() error) error {
 // concurrent respond/approve/cancel/expiry cannot interleave — the lock
 // file is per-request and independent of the create lock.
 func withRequestLock(root, id string, fn func() error) error {
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("invalid request id %q", id)
+	}
 	lock, err := acquireLock(filepath.Join(dir(root), id+".lock"))
 	if err != nil {
 		return err
@@ -208,12 +211,27 @@ func Create(root string, req Request) (_ *Request, err error) {
 				return err
 			}
 			if existing != nil {
+				if existing.WorkItemID == "" && req.WorkItemID != "" {
+					if err := backfillWorkItem(root, existing.RequestID, req.WorkItemID); err != nil {
+						return err
+					}
+					reloaded, err := loadFile(root, existing.RequestID)
+					if err != nil {
+						return err
+					}
+					created = reloaded
+					return nil
+				}
 				created = existing
 				return nil
 			}
 		}
 		req.SchemaVersion = 1
-		req.RequestID = nextID(root)
+		id, err := nextID(root)
+		if err != nil {
+			return err
+		}
+		req.RequestID = id
 		req.Status = StatusPending
 		if req.CreatedBy == "" {
 			req.CreatedBy = "ox-agent"
@@ -248,24 +266,57 @@ func Create(root string, req Request) (_ *Request, err error) {
 	return created, nil
 }
 
-// nextID returns the lowest free IN-NNNN number.
-func nextID(root string) string {
-	entries, err := os.ReadDir(dir(root))
-	if err != nil {
-		return "IN-0001"
-	}
+// nextID returns the lowest free IN-NNNN number, considering both live
+// request files and journal history: a request whose file was removed
+// after its events landed must never have its ID reissued — journaledEvent
+// lookups would then match the old request's outcomes and swallow the new
+// one's. A journal read failure aborts allocation rather than risking
+// reuse.
+func nextID(root string) (string, error) {
 	used := map[int]bool{}
+	entries, err := os.ReadDir(dir(root))
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
 	for _, e := range entries {
 		name := strings.TrimSuffix(e.Name(), ".yaml")
 		if n, err := strconv.Atoi(strings.TrimPrefix(name, "IN-")); err == nil {
 			used[n] = true
 		}
 	}
-	for n := 1; ; n++ {
-		if !used[n] {
-			return fmt.Sprintf("IN-%04d", n)
+	events, err := state.ReadEvents(root)
+	if err != nil {
+		return "", fmt.Errorf("cannot allocate request id — journal unreadable: %w", err)
+	}
+	for _, e := range events {
+		id, _ := e.Data["request_id"].(string)
+		if n, err := strconv.Atoi(strings.TrimPrefix(id, "IN-")); err == nil {
+			used[n] = true
 		}
 	}
+	for n := 1; ; n++ {
+		if !used[n] {
+			return fmt.Sprintf("IN-%04d", n), nil
+		}
+	}
+}
+
+// backfillWorkItem writes a work-item scope onto an existing request that
+// predates scope-by-action defaulting. Runs under the request lock so it
+// cannot clobber a concurrent lifecycle change; no event is journaled —
+// the history stays append-only and untouched.
+func backfillWorkItem(root, id, workItemID string) error {
+	return withRequestLock(root, id, func() error {
+		req, err := loadFile(root, id)
+		if err != nil {
+			return err
+		}
+		if req.WorkItemID != "" {
+			return nil // another writer got here first
+		}
+		req.WorkItemID = workItemID
+		return req.save()
+	})
 }
 
 // Load reads a request, applying lazy expiry under the request lock: a
@@ -334,7 +385,7 @@ func List(root string) ([]*Request, []error) {
 		}
 		req, err := Load(root, strings.TrimSuffix(e.Name(), ".yaml"))
 		if err != nil {
-			issues = append(issues, fmt.Errorf("%s: %w", e.Name(), err))
+			issues = append(issues, &IssueError{File: e.Name(), Err: err})
 			continue
 		}
 		out = append(out, req)
@@ -374,6 +425,17 @@ func FindPendingAction(root, workItemID, actionType, target string) (*Request, e
 	}
 	return nil, nil
 }
+
+// IssueError reports a request file that failed to load, carrying the
+// filename so callers can map it back to a request ID even though the
+// file's contents — including its work-item scope — are unreadable.
+type IssueError struct {
+	File string
+	Err  error
+}
+
+func (e *IssueError) Error() string { return fmt.Sprintf("%s: %v", e.File, e.Err) }
+func (e *IssueError) Unwrap() error { return e.Err }
 
 // refreshExpiry lazily marks a pending request expired once its deadline
 // passes. Callers must hold the request lock. The event is journaled
