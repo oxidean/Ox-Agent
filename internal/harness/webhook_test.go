@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeIntegration plants an integration yaml under .ox-agent/integrations.
@@ -271,5 +274,100 @@ func TestIsLoopback(t *testing.T) {
 		if got := isLoopback(host); got != want {
 			t.Errorf("isLoopback(%q) = %v, want %v", host, got, want)
 		}
+	}
+}
+
+// TestDialLoopbackTriesEachAddress verifies the dialer walks every
+// resolved loopback address — a name resolving to a family the endpoint
+// does not listen on must not sink the request when another works.
+func TestDialLoopbackTriesEachAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			conn.Close()
+		}
+	}()
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	// 127.0.0.2 is loopback but nothing listens — the dialer must fall
+	// through to 127.0.0.1 where the test listener lives.
+	ips := []net.IP{net.ParseIP("127.0.0.2"), net.ParseIP("127.0.0.1")}
+	conn, err := dialLoopback(context.Background(), dialer, "tcp", port, ips)
+	if err != nil {
+		t.Fatalf("dialLoopback() error = %v — did not try the second address", err)
+	}
+	conn.Close()
+	// A single dead address must surface its error.
+	if _, err := dialLoopback(context.Background(), dialer, "tcp", port, []net.IP{net.ParseIP("127.0.0.2")}); err == nil {
+		t.Fatal("dialLoopback() to a dead address succeeded; want error")
+	}
+}
+
+// TestWebhookMissingPacketMarksRunFailed verifies a missing packet.json
+// fails the run durably instead of leaving it pending forever.
+func TestWebhookMissingPacketMarksRunFailed(t *testing.T) {
+	root, _ := initProject(t)
+	run := &Run{
+		RunID:   "run_nopacket",
+		Status:  "pending",
+		Adapter: "webhook",
+		Dir:     filepath.Join(runsDir(root), "run_nopacket"),
+	}
+	if err := os.MkdirAll(run.Dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	err := run.webhook(context.Background(), root, &Integration{Name: "hook", Adapter: "webhook", Endpoint: "http://127.0.0.1:1", Mode: "async"})
+	if err == nil {
+		t.Fatal("webhook() with no packet succeeded; want error")
+	}
+	loaded, loadErr := LoadRun(root, "run_nopacket")
+	if loadErr != nil {
+		t.Fatalf("LoadRun() error = %v", loadErr)
+	}
+	if loaded.Status != "failed" || !strings.Contains(loaded.Error, "reading packet") {
+		t.Fatalf("run = %s error %q — want failed with packet read error", loaded.Status, loaded.Error)
+	}
+}
+
+// TestWebhookSyncOutputWriteMarksRunFailed verifies a sync-mode
+// output.json write failure marks the run failed — otherwise a dispatch
+// that cannot persist its own response would strand the run pending.
+func TestWebhookSyncOutputWriteMarksRunFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"summary":"done"}`))
+	}))
+	defer srv.Close()
+	root, _ := initProject(t)
+	run := &Run{
+		RunID:   "run_badwrite",
+		Status:  "pending",
+		Adapter: "webhook",
+		Dir:     filepath.Join(runsDir(root), "run_badwrite"),
+	}
+	if err := os.MkdirAll(run.Dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(run.Dir, "packet.json"), []byte(`{"packet":1}`), 0o644); err != nil {
+		t.Fatalf("packet: %v", err)
+	}
+	// output.json as a directory makes the response write fail.
+	if err := os.Mkdir(filepath.Join(run.Dir, "output.json"), 0o755); err != nil {
+		t.Fatalf("output dir: %v", err)
+	}
+	err := run.webhook(context.Background(), root, &Integration{Name: "hook", Adapter: "webhook", Endpoint: srv.URL, Mode: "sync"})
+	if err == nil {
+		t.Fatal("webhook() with unwritable output.json succeeded; want error")
+	}
+	loaded, loadErr := LoadRun(root, "run_badwrite")
+	if loadErr != nil {
+		t.Fatalf("LoadRun() error = %v", loadErr)
+	}
+	if loaded.Status != "failed" || !strings.Contains(loaded.Error, "writing webhook output") {
+		t.Fatalf("run = %s error %q — want failed with output write error", loaded.Status, loaded.Error)
 	}
 }

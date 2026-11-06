@@ -200,6 +200,41 @@ func TestCompileFailsOnUnloadableRequest(t *testing.T) {
 	}
 }
 
+// TestCompileFailsOnUnloadableScopedRequest verifies a corrupt request
+// whose work-item ownership was backfilled — journaled as input.scoped
+// rather than input.requested — still fails compilation: ownership proof
+// survives both event kinds.
+func TestCompileFailsOnUnloadableScopedRequest(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "scoped corrupt input")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Ownership evidence from a backfill: the journal ties IN-0001 to
+	// this work item via input.scoped.
+	if err := state.Append(root, state.Event{
+		Type:       "input.scoped",
+		WorkItemID: item.ID,
+		Data:       map[string]any{"request_id": "IN-0001"},
+	}); err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "IN-0001.yaml"), []byte("\tbad: [yaml"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	if _, err := Compile(root, item, "discover-context", "discovery", 0, ""); err == nil {
+		t.Fatal("Compile() succeeded with an unloadable scoped request; want error")
+	}
+}
+
 // TestCompileWarnsOnUnrelatedCorruptRequest verifies an unloadable request
 // NOT tied to this work item only warns — one project's corrupt file must
 // not block every dispatch for unrelated work items.

@@ -485,4 +485,26 @@ action:
 	if n := len(eventsOfType(t, root, "input.requested")); n != 0 {
 		t.Fatalf("reuse journaled %d input.requested events — history must stay untouched", n)
 	}
+	// The backfilled scope is journaled durably as input.scoped — packet
+	// compile relies on it to prove ownership when the request file
+	// itself becomes unloadable.
+	scoped := eventsOfType(t, root, "input.scoped")
+	if len(scoped) != 1 {
+		t.Fatalf("input.scoped events = %d, want 1", len(scoped))
+	}
+	if scoped[0].WorkItemID != item.ID || scoped[0].Data["request_id"] != "IN-0001" {
+		t.Fatalf("input.scoped event = %+v", scoped[0])
+	}
+	// A second dedupe hit is a no-op: scope already set, journal stays at 1.
+	if _, err := Create(root, Request{
+		Kind:       KindApproval,
+		WorkItemID: item.ID,
+		Question:   "ship it?",
+		Action:     &Action{Type: "transition", WorkItemID: item.ID, Target: "discovering"},
+	}); err != nil {
+		t.Fatalf("second Create() error = %v", err)
+	}
+	if n := len(eventsOfType(t, root, "input.scoped")); n != 1 {
+		t.Fatalf("input.scoped events after re-dedupe = %d, want 1", n)
+	}
 }

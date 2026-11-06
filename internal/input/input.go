@@ -303,8 +303,13 @@ func nextID(root string) (string, error) {
 
 // backfillWorkItem writes a work-item scope onto an existing request that
 // predates scope-by-action defaulting. Runs under the request lock so it
-// cannot clobber a concurrent lifecycle change; no event is journaled —
-// the history stays append-only and untouched.
+// cannot clobber a concurrent lifecycle change. The scope is journaled as
+// input.scoped BEFORE the file save — if the request file later becomes
+// unloadable, the journal still proves which work item owned it and packet
+// compile can hard-fail on that request instead of warning and dropping
+// it. journaledEvent dedupes a crash between the append and the save. No
+// input.requested event is replayed — the creation history stays
+// append-only and untouched.
 func backfillWorkItem(root, id, workItemID string) error {
 	return withRequestLock(root, id, func() error {
 		req, err := loadFile(root, id)
@@ -313,6 +318,20 @@ func backfillWorkItem(root, id, workItemID string) error {
 		}
 		if req.WorkItemID != "" {
 			return nil // another writer got here first
+		}
+		journaled, err := journaledEvent(root, id, "input.scoped")
+		if err != nil {
+			return err
+		}
+		if !journaled {
+			if err := state.Append(root, state.Event{
+				Type:       "input.scoped",
+				WorkItemID: workItemID,
+				Actor:      "ox-agent",
+				Data:       map[string]any{"request_id": id},
+			}); err != nil {
+				return err
+			}
 		}
 		req.WorkItemID = workItemID
 		return req.save()

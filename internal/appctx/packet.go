@@ -238,7 +238,10 @@ func ownedRequestIDs(root, workItemID string) (map[string]bool, error) {
 	}
 	owned := map[string]bool{}
 	for _, e := range events {
-		if e.Type != "input.requested" || e.WorkItemID != workItemID {
+		// input.scoped carries the same ownership proof for requests whose
+		// work-item scope was backfilled after creation — the original
+		// input.requested event for those predates scope recording.
+		if (e.Type != "input.requested" && e.Type != "input.scoped") || e.WorkItemID != workItemID {
 			continue
 		}
 		if id, ok := e.Data["request_id"].(string); ok {

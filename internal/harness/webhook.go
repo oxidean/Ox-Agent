@@ -55,7 +55,7 @@ func (r *Run) webhook(ctx context.Context, root string, integration *Integration
 	}
 	packet, err := os.ReadFile(filepath.Join(r.Dir, "packet.json"))
 	if err != nil {
-		return fmt.Errorf("reading packet: %w", err)
+		return r.fail(root, fmt.Sprintf("reading packet: %v", err))
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -78,6 +78,10 @@ func (r *Run) webhook(ctx context.Context, root string, integration *Integration
 	// cleartext — refuse them outright.
 	client := &http.Client{
 		Transport: &http.Transport{
+			// A custom DialContext disables net/http's automatic HTTP/2
+			// setup — without this TLS connections would silently stay on
+			// HTTP/1.1.
+			ForceAttemptHTTP2: true,
 			Proxy: func(req *http.Request) (*url.URL, error) {
 				if req.URL.Scheme == "http" {
 					return nil, nil
@@ -93,11 +97,11 @@ func (r *Run) webhook(ctx context.Context, root string, integration *Integration
 				if !isLoopback(host) {
 					return dialer.DialContext(ctx, network, addr)
 				}
-				ip, err := loopbackIP(ctx, host)
+				ips, err := loopbackIPs(ctx, host)
 				if err != nil {
 					return nil, err
 				}
-				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				return dialLoopback(ctx, dialer, network, port, ips)
 			},
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -112,31 +116,22 @@ func (r *Run) webhook(ctx context.Context, root string, integration *Integration
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		r.Status = "failed"
-		r.Error = fmt.Sprintf("webhook dispatch failed: %v", err)
-		_ = r.save(root)
-		return fmt.Errorf("webhook dispatch to %s failed: %w", integration.Endpoint, err)
+		return r.fail(root, fmt.Sprintf("webhook dispatch to %s failed: %v", integration.Endpoint, err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		r.Status = "failed"
-		r.Error = fmt.Sprintf("reading webhook response: %v", err)
-		_ = r.save(root)
-		return fmt.Errorf("reading webhook response: %w", err)
+		return r.fail(root, fmt.Sprintf("reading webhook response: %v", err))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		r.Status = "failed"
-		r.Error = fmt.Sprintf("webhook returned %s", resp.Status)
-		_ = r.save(root)
-		return fmt.Errorf("webhook %s returned %s: %s", integration.Name, resp.Status, truncate(body, 200))
+		return r.fail(root, fmt.Sprintf("webhook %s returned %s: %s", integration.Name, resp.Status, truncate(body, 200)))
 	}
 	// Sync mode stores the response body as the output document; an empty
 	// body is treated as an async acknowledgement. Collect validates either
 	// way, so a malformed response surfaces as a contract failure.
 	if integration.Mode == "sync" && len(bytes.TrimSpace(body)) > 0 {
 		if err := os.WriteFile(filepath.Join(r.Dir, "output.json"), body, 0o644); err != nil {
-			return fmt.Errorf("writing webhook output: %w", err)
+			return r.fail(root, fmt.Sprintf("writing webhook output: %v", err))
 		}
 	}
 	return nil
@@ -178,11 +173,28 @@ func isLoopback(host string) bool {
 	return false
 }
 
-// loopbackIP resolves a loopback-named host to a literal loopback
-// address for dialing. A name that resolves to no loopback address is
+// dialLoopback tries each resolved loopback address in order — a
+// loopback name can resolve to several (::1 AND 127.0.0.1) while the
+// endpoint listens on only one family — and returns the last dial error
+// when every attempt fails.
+func dialLoopback(ctx context.Context, dialer *net.Dialer, network, port string, ips []net.IP) (net.Conn, error) {
+	var lastErr error
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// loopbackIPs resolves a loopback-named host to its literal loopback
+// addresses for dialing. A name that resolves to no loopback address is
 // rejected — the endpoint only passed isLoopback by name, so the
-// resolver must not be allowed to route the packet off-host.
-func loopbackIP(ctx context.Context, host string) (net.IP, error) {
+// resolver must not be allowed to route the packet off-host. Every
+// loopback address is returned so the dialer can try each family.
+func loopbackIPs(ctx context.Context, host string) ([]net.IP, error) {
 	target := host
 	if i := strings.IndexByte(target, '%'); i >= 0 {
 		target = target[:i] // zoned literals keep the numeric form
@@ -191,16 +203,20 @@ func loopbackIP(ctx context.Context, host string) (net.IP, error) {
 		if !ip.IsLoopback() {
 			return nil, fmt.Errorf("endpoint %s is not a loopback address", host)
 		}
-		return ip, nil
+		return []net.IP{ip}, nil
 	}
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", target)
 	if err != nil {
 		return nil, fmt.Errorf("resolving loopback endpoint %s: %w", host, err)
 	}
+	var loopback []net.IP
 	for _, ip := range ips {
 		if ip.IsLoopback() {
-			return ip, nil
+			loopback = append(loopback, ip)
 		}
 	}
-	return nil, fmt.Errorf("endpoint %s does not resolve to a loopback address", host)
+	if len(loopback) == 0 {
+		return nil, fmt.Errorf("endpoint %s does not resolve to a loopback address", host)
+	}
+	return loopback, nil
 }
