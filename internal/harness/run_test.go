@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
@@ -564,5 +565,102 @@ func TestCollectRejectsMissingActionType(t *testing.T) {
 	writeOutput(t, root, run.RunID, out)
 	if _, _, err := Collect(root, run.RunID); err == nil {
 		t.Fatal("Collect() accepted next_action without type; want error")
+	}
+}
+
+// TestCollectEscalateFilesInputRequest verifies an escalated run blocks the
+// work item AND files a durable clarification request — the question
+// survives the turn in async hosts.
+func TestCollectEscalateFilesInputRequest(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "need a product decision"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	reloaded, err := state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if reloaded.State != "blocked" {
+		t.Fatalf("state = %s, want blocked", reloaded.State)
+	}
+	pending, err := input.Pending(root)
+	if err != nil {
+		t.Fatalf("Pending() error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].Kind != input.KindClarification || pending[0].RunID != run.RunID {
+		t.Fatalf("pending = %+v", pending)
+	}
+	// A second escalation with the same reason dedupes onto the same request.
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "need a product decision"}
+	if err := fileEscalationRequest(root, reloaded, run, "need a product decision"); err != nil {
+		t.Fatalf("fileEscalationRequest() error = %v", err)
+	}
+	pending, _ = input.Pending(root)
+	if len(pending) != 1 {
+		t.Fatalf("dedupe failed: pending = %d", len(pending))
+	}
+}
+
+// TestCollectGateFilesApprovalRequest verifies a stage completion that lands
+// on a human-gated lifecycle edge files an approval request and reports
+// success — the collected outcome applied; only advancement waits.
+func TestCollectGateFilesApprovalRequest(t *testing.T) {
+	root, item := initProject(t)
+	// Gate a stage-boundary edge in the project lifecycle — the embedded
+	// lifecycle only gates shipping→shipped, which no stage maps to.
+	lifePath := filepath.Join(root, ".ox-agent", "lifecycle", "workflow.yaml")
+	life, err := os.ReadFile(lifePath)
+	if err != nil {
+		t.Fatalf("reading lifecycle: %v", err)
+	}
+	gated := strings.Replace(string(life),
+		"  - from: discovering\n    to: brainstorming\n",
+		"  - from: discovering\n    to: brainstorming\n    gate: human\n", 1)
+	if err := os.WriteFile(lifePath, []byte(gated), 0o644); err != nil {
+		t.Fatalf("writing lifecycle: %v", err)
+	}
+	item.State = "discovering"
+	item.CurrentStage = "discovery"
+	if err := item.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "discover-context", Stage: "discovery"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("discover-context"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() must succeed when advancement parks at a gate: %v", err)
+	}
+	reloaded, err := state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if reloaded.State != "discovering" {
+		t.Fatalf("state = %s, want discovering (awaiting approval)", reloaded.State)
+	}
+	req, err := input.FindPendingAction(root, item.ID, "transition", "brainstorming")
+	if err != nil {
+		t.Fatalf("FindPendingAction() error = %v", err)
+	}
+	if req == nil {
+		t.Fatal("no approval request filed for the gated edge")
+	}
+	// Approving it drives the real gated path forward.
+	if _, err := input.Approve(root, req.RequestID, "jesse"); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	reloaded, _ = state.Resolve(root, item.ID)
+	if reloaded.State != "brainstorming" {
+		t.Fatalf("state = %s after approve, want brainstorming", reloaded.State)
 	}
 }

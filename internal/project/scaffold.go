@@ -79,7 +79,7 @@ func requiredVersionRange() string {
 var scaffoldDirs = []string{
 	"skills", "work/active", "work/archived", "context/standards",
 	"context/decisions", "lifecycle", "workflows", "pipelines",
-	"discussions", "state", "state/snapshots", "integrations",
+	"discussions", "state", "state/snapshots", "state/input", "integrations",
 	"runtime/packets", "runtime/runs", "runtime/cache", "runtime/locks",
 }
 

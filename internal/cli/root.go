@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 		newReviewCmd(),
 		newShipCmd(),
 		newDiscussCmd(),
+		newInputCmd(),
 		newUpdateCmd(),
 		newUninstallCmd(),
 		newEvalCmd(),

@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
@@ -372,6 +374,12 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 	}
 	switch {
 	case status == "blocked" || verdict == "blocked" || action == "escalate":
+		// File the durable request FIRST: the question must outlive the
+		// turn even when the item can no longer be marked blocked (e.g.
+		// already shipped) — otherwise the escalation evaporates.
+		if err := fileEscalationRequest(root, item, run, reason); err != nil {
+			return err
+		}
 		if item.State != "blocked" {
 			return item.Transition(root, "blocked", "ox-agent", "", reason)
 		}
@@ -388,7 +396,7 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 				return nil
 			}
 			_, err = item.Advance(root, "ox-agent")
-			return err
+			return fileGateOrErr(root, err)
 		}
 		if run.Stage != item.CurrentStage {
 			return nil
@@ -401,8 +409,55 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 			return nil
 		}
 		_, err = item.Advance(root, "ox-agent")
-		return err
+		return fileGateOrErr(root, err)
 	default:
 		return fmt.Errorf("unknown next_action.type %q", action)
 	}
+}
+
+// fileEscalationRequest files a durable clarification request for a blocked
+// or escalated run, deduplicating on work-item + question so repeated
+// escalations reuse one pending request instead of stacking.
+func fileEscalationRequest(root string, item *state.WorkItem, run *Run, reason string) error {
+	question := reason
+	if question == "" {
+		question = fmt.Sprintf("%s run %s escalated; how should %s proceed?", run.Skill, run.RunID, item.ID)
+	}
+	pending, err := input.Pending(root)
+	if err != nil {
+		return err
+	}
+	for _, r := range pending {
+		if r.WorkItemID == item.ID && r.Question == question {
+			return nil // already on file
+		}
+	}
+	_, err = input.Create(root, input.Request{
+		Kind:       input.KindClarification,
+		WorkItemID: item.ID,
+		RunID:      run.RunID,
+		Question:   question,
+	})
+	return err
+}
+
+// fileGateOrErr converts an ApprovalRequiredError into a durable approval
+// request and reports success — the collected outcome applied cleanly; only
+// the advancement waits on the human. Non-gate errors pass through.
+func fileGateOrErr(root string, err error) error {
+	var gate *state.ApprovalRequiredError
+	if !errors.As(err, &gate) {
+		return err
+	}
+	op := gate.Op
+	if op == "" {
+		op = "transition"
+	}
+	_, err = input.Create(root, input.Request{
+		Kind:       input.KindApproval,
+		WorkItemID: gate.ID,
+		Question:   fmt.Sprintf("Approve %s of %s (%s → %s)?", op, gate.ID, gate.From, gate.To),
+		Action:     &input.Action{Type: op, WorkItemID: gate.ID, Target: gate.To},
+	})
+	return err
 }

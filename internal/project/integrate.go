@@ -23,6 +23,12 @@ runtime. Project state, skills, and contracts live under ` + "`.ox-agent/`" + `.
 - ` + "`ox-agent doctor`" + ` validates the setup; ` + "`ox-agent start <title>`" + ` opens work items.
 - Work items carry state in ` + "`index.json`" + `; drive them with
   ` + "`ox-agent transition|archive|unblock|status`" + `.
+- Human input is durable, never synchronous. When you need an answer or a
+  gated approval, file ` + "`ox-agent input request`" + ` and END THE TURN —
+  chat prompts expire before humans see them. Poll with
+  ` + "`ox-agent input pending`" + ` / ` + "`input wait`" + `; answers arrive via
+  ` + "`input respond <id> --by <name>`" + `. Escalated runs and gate hits file
+  these requests automatically.
 - Skills are contracts, not free-form prompts: ` + "`.ox-agent/skills/<name>/SKILL.md`" + `
   plus input/output ` + "`schemas/`" + `.
 - Compile the bounded packet (` + "`ox-agent context compile <wi> --skill <s>`" + `)

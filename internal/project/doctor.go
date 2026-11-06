@@ -77,6 +77,7 @@ func Doctor(root string) *DoctorReport {
 	report.checkGlob(base, "workflows", "workflow")
 	report.checkGlob(base, "pipelines", "pipeline")
 	report.checkGlob(base, "integrations", "integration")
+	report.checkGlob(base, "state/input", "input-request")
 	report.checkAssets(base)
 	report.checkIntegration(root)
 	return report

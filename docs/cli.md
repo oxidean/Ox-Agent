@@ -145,6 +145,35 @@ ox-agent discuss close <thread> [conclusion]
 Threads keep an append-only message log; `summarize` bumps the summary
 version and marks covered messages; `close` resolves the thread.
 
+### `ox-agent input`
+
+Durable human-input requests under `.ox-agent/state/input/` — the answer
+to async hosts (chat agents, CI) where a synchronous prompt would expire
+before a human sees it. File the question, end the turn; the human answers
+whenever they respond.
+
+```text
+ox-agent input request --kind clarification --question "..." [--work-item WI-0001]
+ox-agent input list [--status pending] [--work-item WI-0001]
+ox-agent input respond IN-0001 --by <name> --answer "..."
+ox-agent input respond IN-0001 --by <name> --approve | --reject
+ox-agent input wait IN-0001 [--interval 5s --factor 2 --max-interval 60s --timeout 0]
+ox-agent input cancel IN-0001 --by <name>
+```
+
+Kinds: `clarification` (free-text answer), `decision` (answer must match a
+declared `--option`), `approval` (carries a pending `transition`/`archive`
+action — `respond --approve` executes it through the normal lifecycle path
+with the responder recorded as approver, `--reject` declines).
+
+Requests are filed automatically when they are needed: a `human`-gated
+`transition`/`archive`/`advance`/`run` leaves an approval request naming
+the pending action (`respond IN-.... --by <you> --approve` completes it),
+and a run collected with a blocked/escalated outcome leaves a
+clarification request carrying the reason. `wait` polls with exponential
+backoff so agents never hot-loop or expire a synchronous ask. Requests do
+not expire unless filed with `--ttl`.
+
 ## State commands
 
 ### `ox-agent state replay <work-item>`
