@@ -216,10 +216,29 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
 	status, _ := output["status"].(string)
 	verdict, _ := output["verdict"].(string)
-	if status == "failed" {
+	next, _ := output["next_action"].(map[string]any)
+	action, _ := next["type"].(string)
+	// Blocking outcomes must reach applyOutcome so the work item
+	// transitions to blocked, even when the run itself must not count
+	// as collected.
+	blocking := status == "blocked" || verdict == "blocked" || action == "escalate"
+	switch {
+	case status == "failed":
 		run.Status = "failed"
 		run.Error, _ = output["summary"].(string)
-	} else {
+	case blocking && (verdict == "needs_rework" || action == "retry"):
+		// Blocking rework or retry stays unresolved: retry keeps the skill
+		// dispatchable (NextSkill, stageComplete, and pipeline progress
+		// all exclude it) after the item is unblocked.
+		run.Status = "retry"
+	case blocking:
+		run.Status = "collected"
+	case verdict == "needs_rework" || action == "retry":
+		// A rework/retry outcome is finished but not done: the run must not
+		// count for skill selection or pipeline progress so another pass
+		// stays dispatchable.
+		run.Status = "retry"
+	default:
 		run.Status = "collected"
 	}
 	if err := run.save(root); err != nil {
@@ -233,11 +252,11 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		Type:       eventType,
 		WorkItemID: item.ID,
 		Actor:      "ox-agent",
-		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict},
+		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action},
 	}); err != nil {
 		return run, output, err
 	}
-	if run.Status == "collected" {
+	if run.Status == "collected" || blocking {
 		if err := applyOutcome(root, item, run, output); err != nil {
 			return run, output, err
 		}
@@ -246,23 +265,43 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 }
 
 // collectedSkills returns the skills with a collected run for the work item
-// at the given stage.
+// at the given stage. Only the latest run per skill counts: a skill that
+// collected once but was later retried is unresolved until its newest run
+// collects.
 func collectedSkills(root, itemID, stage string) map[string]bool {
 	collected := map[string]bool{}
 	entries, err := os.ReadDir(runsDir(root))
 	if err != nil {
 		return collected
 	}
+	latest := map[string]*Run{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		run, err := LoadRun(root, entry.Name())
-		if err == nil && run.WorkItemID == itemID && run.Stage == stage && run.Status == "collected" {
-			collected[run.Skill] = true
+		if err == nil && run.WorkItemID == itemID && run.Stage == stage && laterRun(run, latest[run.Skill]) {
+			latest[run.Skill] = run
+		}
+	}
+	for skill, run := range latest {
+		if run.Status == "collected" {
+			collected[skill] = true
 		}
 	}
 	return collected
+}
+
+// laterRun reports whether run is more recent than current, ordering by
+// creation time with the run ID as the same-second tie-break.
+func laterRun(run, current *Run) bool {
+	if current == nil {
+		return true
+	}
+	if run.CreatedAt != current.CreatedAt {
+		return run.CreatedAt > current.CreatedAt
+	}
+	return run.RunID > current.RunID
 }
 
 // stageComplete reports whether every skill mapped to the work item's current
@@ -318,6 +357,13 @@ func applyOutcome(root string, item *state.WorkItem, run *Run, output map[string
 	summary, _ := output["summary"].(string)
 	if reason == "" {
 		reason = summary
+	}
+	// The output schema constrains next_action.type; reject unknown values
+	// here too so an out-of-contract action can never ride a pass verdict.
+	switch action {
+	case "", "advance_stage", "retry", "escalate", "complete":
+	default:
+		return fmt.Errorf("unknown next_action.type %q", action)
 	}
 	switch {
 	case status == "blocked" || verdict == "blocked" || action == "escalate":

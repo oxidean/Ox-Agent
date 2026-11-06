@@ -31,6 +31,13 @@ func initProject(t *testing.T) (string, *state.WorkItem) {
 // seedRun writes a run.json record for a pipeline step.
 func seedRun(t *testing.T, root, id, wi, pipeline, stepID, status string) {
 	t.Helper()
+	seedRunAt(t, root, id, wi, pipeline, stepID, status, "t")
+}
+
+// seedRunAt writes a run.json record with an explicit creation time so tests
+// can control which of a step's runs is the latest.
+func seedRunAt(t *testing.T, root, id, wi, pipeline, stepID, status, createdAt string) {
+	t.Helper()
 	dir := filepath.Join(root, ".ox-agent", "runtime", "runs", id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir run: %v", err)
@@ -39,7 +46,7 @@ func seedRun(t *testing.T, root, id, wi, pipeline, stepID, status string) {
 		"schema_version": 1, "run_id": id, "work_item_id": wi,
 		"skill": "ox-agent/x", "stage": "s", "adapter": "manual",
 		"status": status, "packet_path": "p", "pipeline": pipeline, "step_id": stepID,
-		"created_at": "t",
+		"created_at": createdAt,
 	})
 	if err := os.WriteFile(filepath.Join(dir, "run.json"), data, 0o644); err != nil {
 		t.Fatalf("write run.json: %v", err)
@@ -88,6 +95,16 @@ func TestProgressTracksSteps(t *testing.T) {
 	if status["specify"] != "ready" {
 		t.Fatalf("specify should be ready once deps done: %v", status)
 	}
+	// A retry-status run is finished but not done: the step returns to
+	// ready so another pass can be dispatched.
+	seedRun(t, root, "run_d", item.ID, "plan", "specify", "retry")
+	progress, _ = Progress(root, pipe, item)
+	for _, s := range progress {
+		status[s.Step.ID] = s.Status
+	}
+	if status["specify"] != "ready" {
+		t.Fatalf("retry step should stay ready, got %s", status["specify"])
+	}
 }
 
 // TestLoadRejectsBadDeps verifies pipeline loading rejects unknown depends_on.
@@ -99,5 +116,27 @@ func TestLoadRejectsBadDeps(t *testing.T) {
 	}
 	if _, err := Load(root, "bad"); err == nil {
 		t.Fatal("Load() accepted unknown depends_on")
+	}
+}
+
+// TestProgressUsesLatestStepRun verifies a step's newest run decides its
+// status: a step that collected and was later retried drops back to ready
+// rather than staying done.
+func TestProgressUsesLatestStepRun(t *testing.T) {
+	root, item := initProject(t)
+	pipe, err := Load(root, "plan")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	seedRunAt(t, root, "run_old", item.ID, "plan", "discover", "collected", "2026-01-01T00:00:00Z")
+	seedRunAt(t, root, "run_new", item.ID, "plan", "discover", "retry", "2026-01-01T00:01:00Z")
+	progress, err := Progress(root, pipe, item)
+	if err != nil {
+		t.Fatalf("Progress() error = %v", err)
+	}
+	for _, s := range progress {
+		if s.Step.ID == "discover" && s.Status != "ready" {
+			t.Fatalf("discover step = %q; want ready while its latest run is retry", s.Status)
+		}
 	}
 }

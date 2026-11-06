@@ -92,6 +92,10 @@ func Progress(root string, pipe *Pipeline, item *state.WorkItem) ([]StepStatus, 
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	// Only the latest run per step decides its status: a step that
+	// collected once but was later retried is not done until the newest
+	// run collects.
+	latest := map[string]runRecord{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -100,12 +104,19 @@ func Progress(root string, pipe *Pipeline, item *state.WorkItem) ([]StepStatus, 
 		if err != nil {
 			continue
 		}
-		if run.WorkItemID == item.ID && run.Pipeline == pipe.Name && run.StepID != "" {
-			if run.Status == "collected" {
-				done[run.StepID] = run.RunID
-			} else if run.Status == "pending" {
-				pending[run.StepID] = run.RunID
-			}
+		if run.WorkItemID != item.ID || run.Pipeline != pipe.Name || run.StepID == "" {
+			continue
+		}
+		cur, ok := latest[run.StepID]
+		if !ok || run.CreatedAt > cur.CreatedAt || (run.CreatedAt == cur.CreatedAt && run.RunID > cur.RunID) {
+			latest[run.StepID] = *run
+		}
+	}
+	for stepID, run := range latest {
+		if run.Status == "collected" {
+			done[stepID] = run.RunID
+		} else if run.Status == "pending" {
+			pending[stepID] = run.RunID
 		}
 	}
 	var out []StepStatus
@@ -155,4 +166,5 @@ type runRecord struct {
 	Pipeline   string `json:"pipeline"`
 	StepID     string `json:"step_id"`
 	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
 }

@@ -7,6 +7,20 @@ description: Independently review an implementation against its specification, s
 
 Independently review an implementation against its specification, security boundaries, maintainability, and test quality.
 
+## Invocation contract
+
+- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`, relative to `.ox-agent/`) and the schema it must satisfy (`output.schema`).
+- Write exactly one JSON object to `output.path`. `ox-agent` schema-validates it on collection, journals the outcome, and applies your declared `next_action`.
+- `next_action.type` must be one of `advance_stage` (unit of work done — move to the next stage), `retry` (needs another pass — the run does not count as done, so the skill stays dispatchable), `escalate` (blocked — needs a human), or `complete` (stage/pipeline finished). Always include a `reason`.
+
+## Consumes
+
+- the implementation run's output via `context.prior_outputs` — its `artifacts` list the changed paths to review — plus the standards the change must satisfy.
+
+## Produces
+
+- severity-ranked review comments in `findings` and a `verdict` that gates the verification stage; cite `file:line` for every finding.
+
 ## Operating rules
 
 - Load only the current work-item packet and referenced artifacts.

@@ -4,9 +4,25 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// symlinkOrSkip plants a fixture symlink, skipping the test on Windows hosts
+// without symlink privilege (ERROR_PRIVILEGE_NOT_HELD) rather than failing —
+// Developer Mode or elevation is not guaranteed there. Other errors fail so
+// fixture mistakes stay visible.
+func symlinkOrSkip(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.Symlink(oldname, newname); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skipf("symlink privilege unavailable: %v", err)
+		}
+		t.Fatalf("creating symlink: %v", err)
+	}
+}
 
 // TestInitDoctor verifies init produces a scaffold doctor accepts.
 func TestInitDoctor(t *testing.T) {
@@ -125,7 +141,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	}
 	base := Base(root)
 	for _, rel := range []string{
-		"skills/adr/SKILL.md", "config.yaml", ".gitignore",
+		"skills/adr/SKILL.md", "config.yaml", ".gitignore", "README.md",
 		"state/events.ndjson", "context/project.yaml", "assets.lock",
 	} {
 		if err := os.Remove(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
@@ -142,7 +158,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	if len(report.DirsCreated) == 0 || len(report.FilesRestored) == 0 || len(report.SeedsWritten) == 0 {
 		t.Fatalf("incomplete repair report: %+v", report)
 	}
-	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions"} {
+	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "README.md"} {
 		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s not restored: %v", rel, err)
 		}
@@ -197,5 +213,172 @@ func TestInitWritesLockAndGitignore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "context", "project.yaml")); err != nil {
 		t.Fatalf("context/project.yaml missing: %v", err)
+	}
+}
+
+// TestInitWritesReadme verifies the scaffold leaves an in-tree pointer doc so
+// a bare init is still discoverable inside .ox-agent/ itself.
+func TestInitWritesReadme(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(Base(root), "README.md"))
+	if err != nil {
+		t.Fatalf("README.md missing: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "ox-agent integrate") {
+		t.Fatal("README.md does not point at integrate")
+	}
+}
+
+// TestRepairConfinesWritesToProject verifies Repair cannot be redirected by a
+// symlink planted inside .ox-agent: a valid symlinked asset is preserved, a
+// dangling symlinked asset is replaced by a real file, and a symlinked parent
+// directory fails the repair instead of redirecting writes outside the
+// project.
+func TestRepairConfinesWritesToProject(t *testing.T) {
+	t.Run("valid symlinked asset is preserved", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		base := Base(root)
+		outside := filepath.Join(t.TempDir(), "victim.txt")
+		if err := os.WriteFile(outside, []byte("keep me"), 0o644); err != nil {
+			t.Fatalf("writing outside file: %v", err)
+		}
+		target := filepath.Join(base, "skills", "adr", "SKILL.md")
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("removing asset: %v", err)
+		}
+		symlinkOrSkip(t, outside, target)
+		if _, err := Repair(root); err != nil {
+			t.Fatalf("Repair() error = %v", err)
+		}
+		info, err := os.Lstat(target)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("valid symlinked asset was replaced; want preserved")
+		}
+	})
+
+	t.Run("dangling symlinked asset is replaced", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		base := Base(root)
+		outside := filepath.Join(t.TempDir(), "victim.txt")
+		target := filepath.Join(base, "skills", "adr", "SKILL.md")
+		if err := os.Remove(target); err != nil {
+			t.Fatalf("removing asset: %v", err)
+		}
+		symlinkOrSkip(t, outside, target)
+		if _, err := Repair(root); err != nil {
+			t.Fatalf("Repair() error = %v", err)
+		}
+		if _, err := os.Stat(outside); !os.IsNotExist(err) {
+			t.Fatal("repair wrote through the dangling symlink to an outside file")
+		}
+		info, err := os.Lstat(target)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatal("dangling symlinked asset was not replaced by a real file")
+		}
+	})
+
+	t.Run("symlinked parent dir fails repair", func(t *testing.T) {
+		root := t.TempDir()
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		base := Base(root)
+		outside := t.TempDir()
+		skillsDir := filepath.Join(base, "skills")
+		marker := filepath.Join(skillsDir, "adr", "SKILL.md")
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatalf("reading asset for restore: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outside, "SKILL.md"), data, 0o644); err != nil {
+			t.Fatalf("staging outside dir: %v", err)
+		}
+		if err := os.RemoveAll(skillsDir); err != nil {
+			t.Fatalf("removing skills dir: %v", err)
+		}
+		symlinkOrSkip(t, outside, skillsDir)
+		if _, err := Repair(root); err == nil {
+			t.Fatal("Repair() succeeded through a symlinked parent dir; want refusal")
+		}
+	})
+}
+
+// TestDoctorWarnsWithoutIntegration verifies doctor nudges toward `integrate`
+// when neither an AGENTS.md managed block nor .agents/skills exists — a bare
+// init is otherwise invisible to agents scanning standard discovery paths.
+func TestDoctorWarnsWithoutIntegration(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	report := Doctor(root)
+	found := false
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "ox-agent integrate") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no integration warning on bare init: %v", report.Warnings)
+	}
+	if _, err := Integrate(root); err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	report = Doctor(root)
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "ox-agent integrate") {
+			t.Fatalf("integration warning persists after integrate: %v", report.Warnings)
+		}
+	}
+	if !report.Healthy() {
+		t.Fatalf("doctor unhealthy after integrate: %+v", report.Checks)
+	}
+	// The remaining assertions manipulate the managed link directly; on hosts
+	// where Integrate could not create it (Windows without Developer Mode)
+	// there is nothing to resolve and nothing meaningful to assert.
+	link := filepath.Join(root, ".agents", "skills")
+	if _, err := os.Lstat(link); err != nil {
+		t.Log("managed link unavailable; skipping link-resolution assertions")
+		return
+	}
+	// A .agents/skills link that does not resolve to .ox-agent/skills is not
+	// wiring: with no AGENTS.md block, doctor warns again.
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("removing managed link: %v", err)
+	}
+	if err := os.Remove(filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Fatalf("removing AGENTS.md: %v", err)
+	}
+	symlinkOrSkip(t, "../elsewhere", link)
+	report = Doctor(root)
+	found = false
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "ox-agent integrate") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no integration warning on foreign link: %v", report.Warnings)
+	}
+	// A link resolving to .ox-agent/skills counts even without AGENTS.md.
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("removing foreign link: %v", err)
+	}
+	symlinkOrSkip(t, filepath.Join("..", ".ox-agent", "skills"), link)
+	report = Doctor(root)
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "ox-agent integrate") {
+			t.Fatalf("integration warning fires on a resolvable link: %v", report.Warnings)
+		}
 	}
 }

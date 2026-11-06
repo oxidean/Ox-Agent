@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/oxidean/Ox-Agent/internal/assets"
 	"github.com/oxidean/Ox-Agent/internal/buildinfo"
@@ -61,7 +62,7 @@ func Doctor(root string) *DoctorReport {
 		_, err := os.Stat(filepath.Join(base, dir))
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
 	}
-	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml"} {
+	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml", "README.md"} {
 		_, err := os.Stat(filepath.Join(base, filepath.FromSlash(seed)))
 		report.add("file "+seed, wrapMissing(err, "missing"), true)
 	}
@@ -74,6 +75,7 @@ func Doctor(root string) *DoctorReport {
 	report.checkGlob(base, "pipelines", "pipeline")
 	report.checkGlob(base, "integrations", "integration")
 	report.checkAssets(base)
+	report.checkIntegration(root)
 	return report
 }
 
@@ -385,6 +387,33 @@ func (r *DoctorReport) checkAssets(base string) {
 	}
 	if len(unlisted) > 0 {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("local extension files not in lock: %v", unlisted))
+	}
+}
+
+// checkIntegration warns when no harness discovery wiring is present: a bare
+// init leaves .ox-agent invisible to agents that only scan AGENTS.md or
+// .agents/skills, so doctor nudges toward `ox-agent integrate`.
+func (r *DoctorReport) checkIntegration(root string) {
+	wired := false
+	if data, err := os.ReadFile(filepath.Join(root, "AGENTS.md")); err == nil && strings.Contains(string(data), markerBegin) {
+		wired = true
+	}
+	// Only the managed link counts: a symlink at .agents/skills must resolve
+	// to this project's .ox-agent/skills. Foreign dirs or dangling links
+	// leave agents without a path to the materialized skills.
+	link := filepath.Join(root, ".agents", "skills")
+	if target, err := os.Readlink(link); err == nil {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(link), target)
+		}
+		if filepath.Clean(target) == filepath.Join(root, ".ox-agent", "skills") {
+			if _, err := os.Stat(link); err == nil {
+				wired = true
+			}
+		}
+	}
+	if !wired {
+		r.Warnings = append(r.Warnings, "no harness integration detected; run `ox-agent integrate` so agents discover the materialized skills")
 	}
 }
 

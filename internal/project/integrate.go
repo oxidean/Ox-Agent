@@ -117,7 +117,7 @@ func integrateSymlink(path, target string, report *IntegrateReport) error {
 		return err
 	}
 	if err := os.Symlink(target, path); err != nil {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("could not link %s: %v", path, err))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("could not link %s: %v (on Windows enable Developer Mode or run elevated)", path, err))
 		return nil
 	}
 	report.Created = append(report.Created, strings.TrimPrefix(path, filepath.Dir(filepath.Dir(path))+string(filepath.Separator)))

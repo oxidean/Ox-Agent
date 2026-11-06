@@ -98,3 +98,25 @@ func TestCompileBuildsContract(t *testing.T) {
 		t.Fatal("Compile() with unknown skill succeeded; want error")
 	}
 }
+
+// TestCompileAcceptsNamespacedSkill verifies --skill accepts the ox-agent/<name>
+// form that packets, runs, and the event journal use — not just the bare
+// directory name.
+func TestCompileAcceptsNamespacedSkill(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "namespaced target")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	packet, err := Compile(root, item, "ox-agent/specify", "specification", 0, "")
+	if err != nil {
+		t.Fatalf("Compile() with namespaced skill error = %v", err)
+	}
+	if packet.Skill != "ox-agent/specify" || packet.SkillDir != "skills/specify" {
+		t.Fatalf("packet identity wrong for namespaced ref: %+v", packet)
+	}
+}

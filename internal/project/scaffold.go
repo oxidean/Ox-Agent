@@ -206,6 +206,66 @@ func writeSeeds(base, project string) error {
 	if err := writeYAML(filepath.Join(base, "context", "project.yaml"), ctx); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(base, "README.md"), []byte(scaffoldReadme), 0o644); err != nil {
+		return fmt.Errorf("writing README.md: %w", err)
+	}
+	return nil
+}
+
+// scaffoldReadme orients humans and agents landing in .ox-agent without
+// harness integration — it is the in-tree pointer a bare init leaves behind.
+const scaffoldReadme = `# .ox-agent — project state managed by ox-agent
+
+This directory is the project-local AI-SDLC runtime for ` + "`ox-agent`" + `. Work items,
+skills, contracts, and the event journal live here.
+
+- ` + "`framework.yaml`" + `, ` + "`config.yaml`" + `, ` + "`policy.yaml`" + ` — the project's contract files; these are yours to edit.
+- ` + "`skills/`" + `, ` + "`schemas/`" + `, ` + "`workflows/`" + `, ` + "`pipelines/`" + `, ` + "`lifecycle/`" + `, ` + "`integrations/`" + ` —
+  materialized assets tracked by ` + "`assets.lock`" + `; do not edit in place. Add
+  extension skills as new directories under ` + "`skills/`" + `.
+- ` + "`work/`" + `, ` + "`state/`" + `, ` + "`discussions/`" + ` — live project state; committed so context
+  travels through PRs. ` + "`state/events.ndjson`" + ` is the append-only journal.
+- ` + "`runtime/`" + ` — generated packets and runs; gitignored.
+
+` + "`ox-agent doctor`" + ` validates this setup. ` + "`ox-agent integrate`" + ` wires it into
+agent harnesses (a managed ` + "`AGENTS.md`" + ` block plus ` + "`/.agents/skills`" + ` and
+` + "`/.claude/skills`" + ` links) so the materialized skills are discoverable during
+agentic work — without it, nothing outside this directory advertises the toolkit.
+`
+
+// ConfinedTarget verifies that writing target stays inside resolvedBase: a
+// dangling symlink at target itself is removed rather than written through,
+// and the deepest existing ancestor of target's directory must resolve under
+// resolvedBase. Repair and skills-update writes must pass through this so a
+// symlink planted inside .ox-agent cannot redirect writes (or MkdirAll)
+// outside the project. Callers that preserve existing files must Stat-skip
+// before confining so valid symlinks are never reached here.
+func ConfinedTarget(resolvedBase, target string) error {
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("removing symlinked path %s: %w", target, err)
+		}
+	}
+	ancestor := filepath.Dir(target)
+	for {
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return fmt.Errorf("no existing ancestor for %s", target)
+		}
+		ancestor = parent
+	}
+	resolved, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", ancestor, err)
+	}
+	if resolved != resolvedBase && !strings.HasPrefix(resolved, resolvedBase+string(os.PathSeparator)) {
+		return fmt.Errorf("%s resolves outside %s; refusing to write", target, resolvedBase)
+	}
 	return nil
 }
 
@@ -228,9 +288,19 @@ func Repair(root string) (*RepairReport, error) {
 		return nil, err
 	}
 	report := &RepairReport{}
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// A missing path may sit under a symlinked ancestor (or be a
+			// dangling symlink); confine before MkdirAll so directory
+			// creation cannot escape the project.
+			if err := ConfinedTarget(resolvedBase, path); err != nil {
+				return nil, err
+			}
 			if err := os.MkdirAll(path, 0o755); err != nil {
 				return nil, fmt.Errorf("creating %s: %w", dir, err)
 			}
@@ -254,6 +324,9 @@ func Repair(root string) (*RepairReport, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := ConfinedTarget(resolvedBase, target); err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return nil, err
 		}
@@ -274,7 +347,10 @@ func Repair(root string) (*RepairReport, error) {
 		".gitattributes": func() error {
 			return os.WriteFile(filepath.Join(base, ".gitattributes"), []byte("# The append-only event journal merges cleanly across branches with the union driver.\nstate/events.ndjson merge=union\n"), 0o644)
 		},
-		"assets.lock":         func() error { return assets.WriteLock(base) },
+		"assets.lock": func() error { return assets.WriteLock(base) },
+		"README.md": func() error {
+			return os.WriteFile(filepath.Join(base, "README.md"), []byte(scaffoldReadme), 0o644)
+		},
 		"state/events.ndjson": func() error { return os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644) },
 		"framework.yaml": func() error {
 			framework := FrameworkConfig{SchemaVersion: 1}
@@ -315,11 +391,14 @@ func Repair(root string) (*RepairReport, error) {
 			return writeYAML(filepath.Join(base, "context", "project.yaml"), ctx)
 		},
 	}
-	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
+	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "README.md", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		if _, err := os.Stat(target); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err := ConfinedTarget(resolvedBase, target); err != nil {
 			return nil, err
 		}
 		if err := seeds[rel](); err != nil {

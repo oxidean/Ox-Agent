@@ -55,7 +55,7 @@ func validOutput(skill string) map[string]any {
 		"summary":        "done",
 		"artifacts":      []any{},
 		"findings":       []any{},
-		"next_action":    map[string]any{"type": "advance_stage"},
+		"next_action":    map[string]any{"type": "advance_stage", "reason": "unit of work done"},
 	}
 }
 
@@ -140,6 +140,214 @@ func TestNextSkillSkipsCollected(t *testing.T) {
 	skill, err = NextSkill(root, item, "specification", skills)
 	if err != nil || skill != "adr" {
 		t.Fatalf("NextSkill() = %q, %v; want adr", skill, err)
+	}
+}
+
+// TestCollectRetryLeavesSkillRedispatchable verifies a needs_rework/retry
+// output finishes the run without counting it as done: the skill stays
+// selectable for another pass and the work item does not advance.
+func TestCollectRetryLeavesSkillRedispatchable(t *testing.T) {
+	root, item := initProject(t)
+	skills := map[string][]string{"specification": {"specify", "adr"}}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "retry", "reason": "gaps found"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" {
+		t.Fatalf("run status = %s; want retry", run.Status)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable", skill, err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.CurrentStage != "intake" {
+		t.Fatalf("stage advanced on retry: %s", item.CurrentStage)
+	}
+}
+
+// TestCollectEscalateBeatsRetry verifies a rework verdict combined with an
+// escalate action blocks the work item while keeping the run unresolved:
+// the run is recorded as retry so the skill stays dispatchable once the
+// item is unblocked.
+func TestCollectEscalateBeatsRetry(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "needs human decision"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" {
+		t.Fatalf("run status = %s; want retry so the skill stays unresolved", run.Status)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.State != "blocked" {
+		t.Fatalf("escalated item state = %s; want blocked", item.State)
+	}
+}
+
+// TestUnblockLeavesEscalatedSkillRedispatchable verifies an escalated rework
+// run does not count as done after the work item is unblocked: the skill
+// stays selectable and the stage is not treated as complete.
+func TestUnblockLeavesEscalatedSkillRedispatchable(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify"}}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "needs human decision"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := item.Unblock(root, "cli", "human resolved the question"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable after unblock", skill, err)
+	}
+	complete, err := stageComplete(root, item)
+	if err != nil {
+		t.Fatalf("stageComplete() error = %v", err)
+	}
+	if complete {
+		t.Fatal("stage reported complete while the escalated skill is unresolved")
+	}
+}
+
+// TestUnblockPreservesBlockedRetry verifies a blocked run that also
+// requested retry does not count as done after the work item is unblocked:
+// the run records retry, the blocked transition still applies, and the
+// skill stays selectable.
+func TestUnblockPreservesBlockedRetry(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify"}}
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["next_action"] = map[string]any{"type": "retry", "reason": "missing spec detail, needs another pass"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" {
+		t.Fatalf("run status = %s; want retry so the skill stays unresolved", run.Status)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if item.State != "blocked" {
+		t.Fatalf("blocked output item state = %s; want blocked", item.State)
+	}
+	if err := item.Unblock(root, "cli", "human supplied the detail"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable after unblock", skill, err)
+	}
+	complete, err := stageComplete(root, item)
+	if err != nil {
+		t.Fatalf("stageComplete() error = %v", err)
+	}
+	if complete {
+		t.Fatal("stage reported complete while the blocked retry is unresolved")
+	}
+}
+
+// TestLatestRunOutcomeWins verifies completion checks consider only the
+// newest run per skill: a skill that collected once but was re-dispatched
+// and escalated to rework is unresolved again after unblock.
+func TestLatestRunOutcomeWins(t *testing.T) {
+	root, item := initProject(t)
+	item.CurrentStage = "specification"
+	item.State = "specifying"
+	if err := item.Save(); err != nil {
+		t.Fatalf("seeding stage: %v", err)
+	}
+	skills := map[string][]string{"specification": {"specify", "adr"}}
+
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	retry, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("re-Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "escalate", "reason": "needs human decision"}
+	writeOutput(t, root, retry.RunID, out)
+	if _, _, err := Collect(root, retry.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	item, err = state.Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := item.Unblock(root, "cli", "human resolved the question"); err != nil {
+		t.Fatalf("Unblock() error = %v", err)
+	}
+	skill, err := NextSkill(root, item, "specification", skills)
+	if err != nil || skill != "specify" {
+		t.Fatalf("NextSkill() = %q, %v; want specify re-selectable despite older collected run", skill, err)
+	}
+	complete, err := stageComplete(root, item)
+	if err != nil {
+		t.Fatalf("stageComplete() error = %v", err)
+	}
+	if complete {
+		t.Fatal("stage reported complete while specify's latest run is unresolved")
 	}
 }
 
@@ -303,5 +511,58 @@ func TestSpawnCLIResolvesRunDirPlaceholders(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(run.Dir, "output.json")); err != nil {
 		t.Fatalf("spawned command did not write output.json into the run dir: %v", err)
+	}
+}
+
+// TestCollectRejectsUnknownNextAction verifies collect fails a run whose
+// output declares an out-of-contract next_action.type — schema validation
+// catches it before any outcome is applied.
+func TestCollectRejectsUnknownNextAction(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "bogus_action"}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err == nil {
+		t.Fatal("Collect() accepted an unknown next_action.type; want error")
+	}
+	if run.Status != "failed" {
+		t.Fatalf("run status = %s, want failed", run.Status)
+	}
+}
+
+// TestApplyOutcomeRejectsUnknownAction verifies the defense-in-depth check:
+// even if schema validation were bypassed, an unknown next_action.type cannot
+// ride a pass verdict into a stage advance.
+func TestApplyOutcomeRejectsUnknownAction(t *testing.T) {
+	root, item := initProject(t)
+	run := &Run{RunID: "run_test", Skill: "ox-agent/specify", Stage: "specification"}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{"type": "bogus_action"}
+	if err := applyOutcome(root, item, run, out); err == nil {
+		t.Fatal("applyOutcome() accepted unknown next_action.type; want error")
+	}
+	if item.CurrentStage != "intake" {
+		t.Fatalf("work item advanced on bogus action: stage = %s", item.CurrentStage)
+	}
+}
+
+// TestCollectRejectsMissingActionType verifies next_action without a type
+// fails schema validation.
+func TestCollectRejectsMissingActionType(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["next_action"] = map[string]any{}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted next_action without type; want error")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -65,6 +66,7 @@ const defaultTokenBudget = 8000
 // expected; it is empty for standalone packet compilation.
 func Compile(root string, item *state.WorkItem, skill, stage string, budget int, outputPath string) (*Packet, error) {
 	base := filepath.Join(root, ".ox-agent")
+	skill = strings.TrimPrefix(skill, "ox-agent/")
 	if _, err := os.Stat(filepath.Join(base, "skills", skill, "skill.yaml")); err != nil {
 		return nil, fmt.Errorf("skill %q is not materialized in this project", skill)
 	}
@@ -156,7 +158,7 @@ func collectedRuns(root, workItemID string) ([]PriorOutput, error) {
 			Skill      string `json:"skill"`
 			Status     string `json:"status"`
 		}
-		if json.Unmarshal(data, &run) != nil || run.WorkItemID != workItemID || run.Status != "collected" {
+		if json.Unmarshal(data, &run) != nil || run.WorkItemID != workItemID || (run.Status != "collected" && run.Status != "retry") {
 			continue
 		}
 		priors = append(priors, PriorOutput{
