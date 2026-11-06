@@ -14,6 +14,13 @@ overwrite an existing `.ox-agent/` unless `--repair` is passed.
 
 - `ox-agent init --repair` — restore missing scaffold files and directories in
   an existing `.ox-agent/` without touching existing content.
+- `ox-agent init --repair --sync` — additionally reconcile the project with the
+  running binary: rewrite asset files that drifted from the embedded tree,
+  remove owned files this binary no longer ships (untouched copies only), and
+  reset `framework.yaml`'s `required_version` when it excludes the binary.
+  Drifted files the lock never owned — local extensions colliding with
+  embedded paths — are kept and reported, never overwritten. The asset
+  lock is always refreshed.
 - `ox-agent init --integrate` — additionally wire agent-facing access: create
   `.agents/skills` symlinked to `.ox-agent/skills`, `.claude/skills` pointing at
   it, and a managed block in `AGENTS.md`. Idempotent.
@@ -179,7 +186,16 @@ as skipped). Project-local skills are never touched.
 
 Verify the latest release checksum and atomically replace the installed
 binary. `--check` reports installed vs latest without changing anything;
-`--version <tag>` selects a specific release.
+`--version <tag>` selects a specific release; `--binary-only` skips project
+reconciliation.
+
+When run inside a project, `update` then re-executes the freshly installed
+binary's `init --repair --sync` so ox-agent-owned assets (skills, schemas,
+workflows, pipelines, lifecycle, integrations) move to the new embedded
+tree and a stale `required_version` pin is reset — the running process
+still carries the old assets in memory, so the sync has to come from the
+new binary. Outside a project the asset sync is skipped; `skills update`
+remains the targeted skills-only repair for local drift.
 
 ### `ox-agent uninstall --yes`
 

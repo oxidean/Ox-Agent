@@ -99,6 +99,17 @@ func TestEndToEndLifecycle(t *testing.T) {
 		t.Fatalf("skills list after update: %q, %v", out, err)
 	}
 
+	// Drift a non-skill asset: init --repair --sync rewrites it.
+	schema := filepath.Join(dir, ".ox-agent", "schemas", "config.schema.json")
+	data, _ = os.ReadFile(schema)
+	if err := os.WriteFile(schema, append(data, "\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runCLI(t, "init", "--repair", "--sync")
+	if err != nil || !strings.Contains(out, "synced asset: schemas/config.schema.json") {
+		t.Fatalf("init --repair --sync: %q, %v", out, err)
+	}
+
 	// Doctor is healthy and the journal tells the whole story.
 	out, err = runCLI(t, "doctor")
 	if err != nil || !strings.Contains(out, "healthy") {

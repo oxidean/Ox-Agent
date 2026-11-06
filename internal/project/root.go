@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 )
 
+// ErrNotFound reports that no ancestor of a start path contains .ox-agent.
+var ErrNotFound = errors.New("could not find .ox-agent")
+
 // Find locates the nearest ancestor of start containing a .ox-agent
 // directory, so project commands work from any subdirectory.
 func Find(start string) (string, error) {
@@ -25,7 +28,7 @@ func Find(start string) (string, error) {
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", fmt.Errorf("could not find .ox-agent from %s", start)
+			return "", fmt.Errorf("%w from %s", ErrNotFound, start)
 		}
 		current = parent
 	}

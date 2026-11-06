@@ -13,7 +13,7 @@ import (
 // newInitCmd builds the init command, which materializes .ox-agent/.
 func newInitCmd() *cobra.Command {
 	var path string
-	var repair, integrate bool
+	var repair, integrate, sync bool
 	cmd := &cobra.Command{
 		Use:     "init",
 		Short:   "Initialize .ox-agent/ in a repository",
@@ -21,7 +21,7 @@ func newInitCmd() *cobra.Command {
 		GroupID: "project",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if repair {
-				report, err := project.Repair(path)
+				report, err := project.Repair(path, sync)
 				if err != nil {
 					return err
 				}
@@ -32,10 +32,22 @@ func newInitCmd() *cobra.Command {
 				for _, file := range report.FilesRestored {
 					fmt.Fprintf(out, "restored asset: %s\n", file)
 				}
+				for _, file := range report.FilesSynced {
+					fmt.Fprintf(out, "synced asset: %s\n", file)
+				}
+				for _, file := range report.FilesRemoved {
+					fmt.Fprintf(out, "removed stale asset: %s\n", file)
+				}
+				for _, file := range report.FilesConflicted {
+					fmt.Fprintf(out, "kept local file (not ox-agent-owned): %s\n", file)
+				}
+				if report.PinUpdated != "" {
+					fmt.Fprintf(out, "updated required_version: %s\n", report.PinUpdated)
+				}
 				for _, file := range report.SeedsWritten {
 					fmt.Fprintf(out, "wrote seed: %s\n", file)
 				}
-				if len(report.DirsCreated)+len(report.FilesRestored)+len(report.SeedsWritten) == 0 {
+				if len(report.DirsCreated)+len(report.FilesRestored)+len(report.FilesSynced)+len(report.FilesRemoved)+len(report.FilesConflicted)+len(report.SeedsWritten) == 0 && report.PinUpdated == "" {
 					fmt.Fprintln(out, "Nothing to repair")
 				}
 				return nil
@@ -52,6 +64,9 @@ func newInitCmd() *cobra.Command {
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Initialized %s\n", filepath.Join(path, ".ox-agent"))
+			if !integrate {
+				fmt.Fprintln(cmd.OutOrStdout(), "Run 'ox-agent integrate' to wire agent discovery (AGENTS.md + .agents/skills).")
+			}
 			if integrate {
 				report, err := project.Integrate(path)
 				if err != nil {
@@ -64,6 +79,7 @@ func newInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&path, "path", ".", "directory to initialize")
 	cmd.Flags().BoolVar(&repair, "repair", false, "restore missing scaffold pieces in an existing project")
+	cmd.Flags().BoolVar(&sync, "sync", false, "with --repair: reconcile assets with this binary (rewrite drift, drop stale files, fix the version pin)")
 	cmd.Flags().BoolVar(&integrate, "integrate", false, "wire AGENTS.md and .agents/skills discovery into the project")
 	return cmd
 }
@@ -84,7 +100,7 @@ func newDoctorCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			report := project.Doctor(root)
 			if fix && !report.Healthy() {
-				if _, err := project.Repair(root); err != nil {
+				if _, err := project.Repair(root, false); err != nil {
 					return err
 				}
 				fmt.Fprintln(out, "repair applied; re-checking")

@@ -1,6 +1,9 @@
 package project
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/oxidean/Ox-Agent/internal/assets"
+	"github.com/oxidean/Ox-Agent/internal/buildinfo"
+	"github.com/oxidean/Ox-Agent/internal/contract"
 )
 
 // symlinkOrSkip plants a fixture symlink, skipping the test on Windows hosts
@@ -151,7 +158,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(base, "discussions")); err != nil {
 		t.Fatalf("removing discussions dir: %v", err)
 	}
-	report, err := Repair(root)
+	report, err := Repair(root, false)
 	if err != nil {
 		t.Fatalf("Repair() error = %v", err)
 	}
@@ -175,7 +182,7 @@ func TestRepairDoesNotOverwrite(t *testing.T) {
 	if err := os.WriteFile(custom, []byte("custom: true\n"), 0o644); err != nil {
 		t.Fatalf("writing custom config: %v", err)
 	}
-	if _, err := Repair(root); err != nil {
+	if _, err := Repair(root, false); err != nil {
 		t.Fatalf("Repair() error = %v", err)
 	}
 	data, err := os.ReadFile(custom)
@@ -254,7 +261,7 @@ func TestRepairConfinesWritesToProject(t *testing.T) {
 			t.Fatalf("removing asset: %v", err)
 		}
 		symlinkOrSkip(t, outside, target)
-		if _, err := Repair(root); err != nil {
+		if _, err := Repair(root, false); err != nil {
 			t.Fatalf("Repair() error = %v", err)
 		}
 		info, err := os.Lstat(target)
@@ -275,7 +282,7 @@ func TestRepairConfinesWritesToProject(t *testing.T) {
 			t.Fatalf("removing asset: %v", err)
 		}
 		symlinkOrSkip(t, outside, target)
-		if _, err := Repair(root); err != nil {
+		if _, err := Repair(root, false); err != nil {
 			t.Fatalf("Repair() error = %v", err)
 		}
 		if _, err := os.Stat(outside); !os.IsNotExist(err) {
@@ -307,7 +314,7 @@ func TestRepairConfinesWritesToProject(t *testing.T) {
 			t.Fatalf("removing skills dir: %v", err)
 		}
 		symlinkOrSkip(t, outside, skillsDir)
-		if _, err := Repair(root); err == nil {
+		if _, err := Repair(root, false); err == nil {
 			t.Fatal("Repair() succeeded through a symlinked parent dir; want refusal")
 		}
 	})
@@ -380,5 +387,542 @@ func TestDoctorWarnsWithoutIntegration(t *testing.T) {
 		if strings.Contains(w, "ox-agent integrate") {
 			t.Fatalf("integration warning fires on a resolvable link: %v", report.Warnings)
 		}
+	}
+}
+
+// setBinaryVersion pins buildinfo.Version for a test and restores it.
+func setBinaryVersion(t *testing.T, version string) {
+	t.Helper()
+	old := buildinfo.Version
+	buildinfo.Version = version
+	t.Cleanup(func() { buildinfo.Version = old })
+}
+
+// plantStaleAsset writes rel under base with content and records content's
+// hash in the asset lock as an owned file, simulating an asset this binary
+// no longer ships.
+func plantStaleAsset(t *testing.T, base, rel string, content []byte) {
+	t.Helper()
+	target := filepath.Join(base, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("creating stale dir: %v", err)
+	}
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatalf("writing stale asset: %v", err)
+	}
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading lock: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	lock.Files[rel] = "sha256:" + hex.EncodeToString(sum[:])
+	data, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		t.Fatalf("encoding lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, assets.LockPath), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+}
+
+// TestRepairSyncRewritesDriftedAsset verifies --sync rewrites asset files
+// that drifted from the embedded tree.
+func TestRepairSyncRewritesDriftedAsset(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	target := filepath.Join(base, "skills", "README.md")
+	if err := os.WriteFile(target, []byte("local drift\n"), 0o644); err != nil {
+		t.Fatalf("drifting asset: %v", err)
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if len(report.FilesSynced) != 1 || report.FilesSynced[0] != "skills/README.md" {
+		t.Fatalf("FilesSynced = %v", report.FilesSynced)
+	}
+	want, err := assets.ReadFile("skills/README.md")
+	if err != nil {
+		t.Fatalf("reading embedded asset: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading synced asset: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatal("synced file does not match embedded content")
+	}
+}
+
+// TestRepairWithoutSyncPreservesDrift verifies plain --repair leaves drifted
+// asset files alone.
+func TestRepairWithoutSyncPreservesDrift(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	target := filepath.Join(Base(root), "skills", "README.md")
+	if err := os.WriteFile(target, []byte("local drift\n"), 0o644); err != nil {
+		t.Fatalf("drifting asset: %v", err)
+	}
+	report, err := Repair(root, false)
+	if err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	if len(report.FilesSynced) != 0 || len(report.FilesRemoved) != 0 {
+		t.Fatalf("non-sync repair touched files: %+v", report)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "local drift\n" {
+		t.Fatal("drifted file overwritten without --sync")
+	}
+}
+
+// TestRepairSyncRemovesStaleOwnedFile verifies --sync deletes files the lock
+// owned but the embedded tree no longer ships, when unmodified on disk.
+func TestRepairSyncRemovesStaleOwnedFile(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	plantStaleAsset(t, base, "skills/dropped/SKILL.md", []byte("dropped skill\n"))
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if len(report.FilesRemoved) != 1 || report.FilesRemoved[0] != "skills/dropped/SKILL.md" {
+		t.Fatalf("FilesRemoved = %v", report.FilesRemoved)
+	}
+	if _, err := os.Stat(filepath.Join(base, "skills", "dropped", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatal("stale asset still on disk")
+	}
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading refreshed lock: %v", err)
+	}
+	if _, ok := lock.Files["skills/dropped/SKILL.md"]; ok {
+		t.Fatal("refreshed lock still lists the dropped asset")
+	}
+}
+
+// TestRepairSyncKeepsLocallyModifiedStale verifies --sync keeps a stale
+// owned file whose on-disk content no longer matches the lock hash.
+func TestRepairSyncKeepsLocallyModifiedStale(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	plantStaleAsset(t, base, "skills/dropped/SKILL.md", []byte("original\n"))
+	// Local modification after materialization changes the hash.
+	if err := os.WriteFile(filepath.Join(base, "skills", "dropped", "SKILL.md"), []byte("edited locally\n"), 0o644); err != nil {
+		t.Fatalf("editing stale asset: %v", err)
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if len(report.FilesRemoved) != 0 {
+		t.Fatalf("modified stale asset removed: %v", report.FilesRemoved)
+	}
+	if _, err := os.Stat(filepath.Join(base, "skills", "dropped", "SKILL.md")); err != nil {
+		t.Fatal("locally modified stale asset removed")
+	}
+}
+
+// TestRepairSyncReconcilesVersionPin verifies --sync resets a
+// required_version range that excludes the running binary.
+func TestRepairSyncReconcilesVersionPin(t *testing.T) {
+	setBinaryVersion(t, "0.3.0")
+	root := t.TempDir()
+	// Init runs under 0.3.0 so its pin satisfies the binary; then narrow it.
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	framework, err := LoadFramework(root)
+	if err != nil {
+		t.Fatalf("loading framework.yaml: %v", err)
+	}
+	framework.Framework.RequiredVersion = ">=0.1.0 <0.2.0"
+	if err := writeYAML(filepath.Join(base, "framework.yaml"), framework); err != nil {
+		t.Fatalf("narrowing pin: %v", err)
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if report.PinUpdated != ">=0.3.0 <0.4.0" {
+		t.Fatalf("PinUpdated = %q", report.PinUpdated)
+	}
+	framework, err = LoadFramework(root)
+	if err != nil {
+		t.Fatalf("reloading framework.yaml: %v", err)
+	}
+	ok, err := contract.Satisfies(buildinfo.Version, framework.Framework.RequiredVersion)
+	if err != nil || !ok {
+		t.Fatalf("rewritten pin %q does not satisfy %s", framework.Framework.RequiredVersion, buildinfo.Version)
+	}
+}
+
+// TestRepairSyncPreservesCompatiblePin verifies --sync leaves a
+// required_version range that already covers the binary untouched.
+func TestRepairSyncPreservesCompatiblePin(t *testing.T) {
+	setBinaryVersion(t, "0.1.5")
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if report.PinUpdated != "" {
+		t.Fatalf("compatible pin rewritten to %q", report.PinUpdated)
+	}
+}
+
+// TestRepairRefreshesCorruptLock verifies repair rewrites an unparsable
+// asset lock from the embedded manifest even without --sync.
+func TestRepairRefreshesCorruptLock(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	if err := os.WriteFile(filepath.Join(base, assets.LockPath), []byte("not json\n"), 0o644); err != nil {
+		t.Fatalf("corrupting lock: %v", err)
+	}
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	if _, err := assets.LoadLock(base); err != nil {
+		t.Fatalf("lock still invalid after repair: %v", err)
+	}
+}
+
+// TestRepairPreservesStaleProvenance verifies a plain (non-sync) repair
+// keeps previously-owned assets identifiable in the refreshed lock so a
+// later --sync can still remove them, and doctor classifies them as stale
+// rather than as local extensions.
+func TestRepairPreservesStaleProvenance(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	plantStaleAsset(t, base, "skills/dropped/SKILL.md", []byte("dropped skill\n"))
+
+	// Non-sync repair refreshes the lock but must not drop the ownership
+	// record for the stale file.
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading lock: %v", err)
+	}
+	if _, ok := lock.Files["skills/dropped/SKILL.md"]; !ok {
+		t.Fatal("non-sync repair dropped prior ownership from the lock")
+	}
+
+	// Doctor reports it as stale, not as an unlisted extension.
+	_, _, unlisted, stale, err := assets.CheckLock(base)
+	if err != nil {
+		t.Fatalf("CheckLock() error = %v", err)
+	}
+	if len(stale) != 1 || stale[0] != "skills/dropped/SKILL.md" {
+		t.Fatalf("stale = %v", stale)
+	}
+	for _, rel := range unlisted {
+		if rel == "skills/dropped/SKILL.md" {
+			t.Fatal("owned stale file reported as unlisted extension")
+		}
+	}
+
+	// A later --sync still removes it.
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if len(report.FilesRemoved) != 1 || report.FilesRemoved[0] != "skills/dropped/SKILL.md" {
+		t.Fatalf("FilesRemoved = %v", report.FilesRemoved)
+	}
+}
+
+// TestRepairReturnsLockReadError verifies a lock that exists but cannot be
+// read fails repair instead of silently discarding provenance.
+func TestRepairReturnsLockReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-bit fixtures are unreliable on Windows")
+	}
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	lockPath := filepath.Join(Base(root), assets.LockPath)
+	if err := os.Chmod(lockPath, 0o000); err != nil {
+		t.Fatalf("chmod lock: %v", err)
+	}
+	if _, err := os.ReadFile(lockPath); err == nil {
+		t.Skip("runner can read mode-0 files (CAP_DAC_OVERRIDE or elevated user)")
+	}
+	if _, err := Repair(root, false); err == nil {
+		t.Fatal("Repair() succeeded with an unreadable lock")
+	}
+}
+
+// writeLock persists lock as base's assets.lock.
+func writeLock(t *testing.T, base string, lock *assets.Lock) {
+	t.Helper()
+	data, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		t.Fatalf("encoding lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, assets.LockPath), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("writing lock: %v", err)
+	}
+}
+
+// TestRepairSyncProtectsUnownedCollision verifies --sync does not overwrite a
+// file at an embedded asset path that the previous lock never owned — a
+// local extension colliding with a newly shipped asset.
+func TestRepairSyncProtectsUnownedCollision(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	// Simulate an asset shipped by a newer binary colliding with a
+	// pre-existing local file: drop the path from the lock and put local
+	// content on disk.
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading lock: %v", err)
+	}
+	delete(lock.Files, "skills/README.md")
+	writeLock(t, base, lock)
+	target := filepath.Join(base, "skills", "README.md")
+	if err := os.WriteFile(target, []byte("local extension\n"), 0o644); err != nil {
+		t.Fatalf("writing local file: %v", err)
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	for _, rel := range report.FilesSynced {
+		if rel == "skills/README.md" {
+			t.Fatal("sync overwrote a file the lock never owned")
+		}
+	}
+	found := false
+	for _, rel := range report.FilesConflicted {
+		if rel == "skills/README.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("collision not reported: %v", report.FilesConflicted)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading local file: %v", err)
+	}
+	if string(got) != "local extension\n" {
+		t.Fatal("local file overwritten by sync")
+	}
+	// The refreshed lock must not claim the path, or a later sync would
+	// treat the file as ox-owned and overwrite it.
+	lock, err = assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading refreshed lock: %v", err)
+	}
+	if _, ok := lock.Files["skills/README.md"]; ok {
+		t.Fatal("refreshed lock claimed the unowned file")
+	}
+	_, _, unlisted, _, err := assets.CheckLock(base)
+	if err != nil {
+		t.Fatalf("CheckLock() error = %v", err)
+	}
+	found = false
+	for _, rel := range unlisted {
+		if rel == "skills/README.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unowned file not reported as unlisted extension")
+	}
+	// Repeated repairs — an intervening non-sync repair and a second
+	// sync — keep protecting the file because the lock still lacks it.
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	if _, err := Repair(root, true); err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	got, err = os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading local file: %v", err)
+	}
+	if string(got) != "local extension\n" {
+		t.Fatal("local file overwritten by a later repair")
+	}
+}
+
+// TestRepairSyncProtectsDriftWithoutBaseline verifies --sync protects
+// drifted files when the lock baseline is missing or corrupt — nothing is
+// provably ox-owned, so nothing may be overwritten.
+func TestRepairSyncProtectsDriftWithoutBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, lockPath string)
+	}{
+		{"missing lock", func(t *testing.T, lockPath string) {
+			if err := os.Remove(lockPath); err != nil {
+				t.Fatalf("removing lock: %v", err)
+			}
+		}},
+		{"corrupt lock", func(t *testing.T, lockPath string) {
+			if err := os.WriteFile(lockPath, []byte("not json\n"), 0o644); err != nil {
+				t.Fatalf("corrupting lock: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := Init(root); err != nil {
+				t.Fatalf("Init() error = %v", err)
+			}
+			base := Base(root)
+			target := filepath.Join(base, "skills", "README.md")
+			if err := os.WriteFile(target, []byte("local drift\n"), 0o644); err != nil {
+				t.Fatalf("drifting asset: %v", err)
+			}
+			tc.plant(t, filepath.Join(base, assets.LockPath))
+			report, err := Repair(root, true)
+			if err != nil {
+				t.Fatalf("Repair(sync) error = %v", err)
+			}
+			found := false
+			for _, rel := range report.FilesConflicted {
+				if rel == "skills/README.md" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("drifted file not reported as conflict: %v", report.FilesConflicted)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("reading drifted file: %v", err)
+			}
+			if string(got) != "local drift\n" {
+				t.Fatal("drifted file overwritten without a usable baseline")
+			}
+			// The recovered lock must not claim the protected path.
+			lock, err := assets.LoadLock(base)
+			if err != nil {
+				t.Fatalf("loading recovered lock: %v", err)
+			}
+			if _, ok := lock.Files["skills/README.md"]; ok {
+				t.Fatal("recovered lock claimed the unowned file")
+			}
+		})
+	}
+}
+
+// TestRepairSyncPreservesFrameworkExtensions verifies --sync rewrites only
+// required_version when reconciling the pin, leaving schema-permitted
+// extension fields (project.owner, etc.) intact.
+func TestRepairSyncPreservesFrameworkExtensions(t *testing.T) {
+	setBinaryVersion(t, "0.1.0")
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	target := filepath.Join(Base(root), "framework.yaml")
+	content := "schema_version: 1\n" +
+		"framework:\n" +
+		"  name: ox-agent\n" +
+		"  distribution: standalone\n" +
+		"  binary: ox-agent\n" +
+		"  required_version: \">=9.9.0 <9.10.0\"\n" +
+		"project:\n" +
+		"  name: demo\n" +
+		"  owner: jesse\n"
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing framework.yaml: %v", err)
+	}
+	report, err := Repair(root, true)
+	if err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	if report.PinUpdated == "" {
+		t.Fatal("incompatible pin not reconciled")
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading framework.yaml: %v", err)
+	}
+	if !strings.Contains(string(raw), "owner: jesse") {
+		t.Fatalf("extension field dropped:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), report.PinUpdated) {
+		t.Fatalf("pin not updated:\n%s", raw)
+	}
+	framework, err := LoadFramework(root)
+	if err != nil {
+		t.Fatalf("reparsing framework.yaml: %v", err)
+	}
+	if framework.Framework.RequiredVersion != report.PinUpdated {
+		t.Fatalf("pin = %q, want %q", framework.Framework.RequiredVersion, report.PinUpdated)
+	}
+}
+
+// TestRepairSyncDropsModifiedStaleOwnership verifies a stale asset retained
+// by --sync because of local modifications is reclassified as a local
+// extension: the refreshed lock does not keep it flagged as owned stale.
+func TestRepairSyncDropsModifiedStaleOwnership(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	plantStaleAsset(t, base, "skills/dropped/SKILL.md", []byte("original\n"))
+	if err := os.WriteFile(filepath.Join(base, "skills", "dropped", "SKILL.md"), []byte("edited locally\n"), 0o644); err != nil {
+		t.Fatalf("editing stale asset: %v", err)
+	}
+	if _, err := Repair(root, true); err != nil {
+		t.Fatalf("Repair(sync) error = %v", err)
+	}
+	lock, err := assets.LoadLock(base)
+	if err != nil {
+		t.Fatalf("loading refreshed lock: %v", err)
+	}
+	if _, ok := lock.Files["skills/dropped/SKILL.md"]; ok {
+		t.Fatal("modified stale asset kept in the lock")
+	}
+	_, _, unlisted, stale, err := assets.CheckLock(base)
+	if err != nil {
+		t.Fatalf("CheckLock() error = %v", err)
+	}
+	for _, rel := range stale {
+		if rel == "skills/dropped/SKILL.md" {
+			t.Fatal("retained modification still reported as stale")
+		}
+	}
+	found := false
+	for _, rel := range unlisted {
+		if rel == "skills/dropped/SKILL.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("retained modification not reported as unlisted extension")
 	}
 }

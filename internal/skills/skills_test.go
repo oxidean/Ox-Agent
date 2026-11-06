@@ -255,3 +255,18 @@ func TestUpdateDoesNotWriteThroughSymlinkedLock(t *testing.T) {
 		t.Fatal("symlinked lock was not replaced by a real lock file")
 	}
 }
+
+// TestNormalizeName verifies bare and namespaced skill references resolve
+// to the same directory name.
+func TestNormalizeName(t *testing.T) {
+	for ref, want := range map[string]string{
+		"specify":          "specify",
+		"ox-agent/specify": "specify",
+		"custom/specify-x": "specify-x",
+		"":                 "",
+	} {
+		if got := NormalizeName(ref); got != want {
+			t.Fatalf("NormalizeName(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}

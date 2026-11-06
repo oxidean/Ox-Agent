@@ -372,7 +372,7 @@ func (r *DoctorReport) checkAssets(base string) {
 		r.add("asset lock", wrapMissing(err, "missing"), true)
 		return
 	}
-	missing, changed, unlisted, err := assets.CheckLock(base)
+	missing, changed, unlisted, stale, err := assets.CheckLock(base)
 	if err != nil {
 		r.add("asset lock", err, false)
 		return
@@ -387,6 +387,9 @@ func (r *DoctorReport) checkAssets(base string) {
 	}
 	if len(unlisted) > 0 {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("local extension files not in lock: %v", unlisted))
+	}
+	if len(stale) > 0 {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("assets no longer shipped by this binary (init --repair --sync removes unmodified copies; locally modified files are kept): %v", stale))
 	}
 }
 

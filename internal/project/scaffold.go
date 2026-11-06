@@ -1,18 +1,24 @@
 package project
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/oxidean/Ox-Agent/internal/assets"
 	"github.com/oxidean/Ox-Agent/internal/buildinfo"
+	"github.com/oxidean/Ox-Agent/internal/contract"
 	"golang.org/x/mod/semver"
+	"gopkg.in/yaml.v3"
 )
 
 // defaultStages, defaultSkills, and defaultStageSkills seed a new project's
@@ -271,15 +277,23 @@ func ConfinedTarget(resolvedBase, target string) error {
 
 // RepairReport summarizes what Repair restored in an existing .ox-agent.
 type RepairReport struct {
-	DirsCreated   []string
-	FilesRestored []string
-	SeedsWritten  []string
+	DirsCreated     []string
+	FilesRestored   []string
+	FilesSynced     []string // drifted asset files rewritten (--sync)
+	FilesRemoved    []string // owned files the binary no longer ships (--sync)
+	FilesConflicted []string // drifted paths protected as local, not ox-owned (--sync)
+	SeedsWritten    []string
+	PinUpdated      string // framework.yaml required_version range rewritten to (--sync)
 }
 
 // Repair restores missing scaffold directories, missing materialized asset
-// files, and missing generated seed files in an existing project. It never
-// overwrites files that already exist; doctor reports drifted content.
-func Repair(root string) (*RepairReport, error) {
+// files, and missing generated seed files in an existing project. With sync
+// false it never overwrites files that already exist; doctor reports drifted
+// content. With sync true it reconciles the project against the running
+// binary: drifted asset files are rewritten, files the binary no longer
+// ships are removed when untouched locally, and a required_version pin that
+// excludes the running binary is reset to the binary's derived range.
+func Repair(root string, sync bool) (*RepairReport, error) {
 	base := Base(root)
 	if _, err := os.Stat(base); err != nil {
 		if os.IsNotExist(err) {
@@ -291,6 +305,23 @@ func Repair(root string) (*RepairReport, error) {
 	resolvedBase, err := filepath.EvalSymlinks(base)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
+	// Snapshot the previous lock before any writes: it is the provenance
+	// baseline a sync needs to tell previously-owned stale files from local
+	// additions. A missing or corrupt lock leaves no baseline — the merge
+	// below simply has nothing to preserve.
+	var oldLock *assets.Lock
+	if lock, err := assets.LoadLock(base); err == nil {
+		oldLock = lock
+	} else if !os.IsNotExist(err) {
+		// LoadLock surfaces os.ReadFile failures unwrapped and parse
+		// failures wrapped — distinguish them. A corrupt lock has no
+		// baseline to preserve and repair recovers it below, but a real
+		// read failure must not silently discard ownership before the
+		// lock is rewritten.
+		if _, err := os.ReadFile(filepath.Join(base, assets.LockPath)); err != nil {
+			return nil, fmt.Errorf("reading asset lock: %w", err)
+		}
 	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
@@ -313,27 +344,111 @@ func Repair(root string) (*RepairReport, error) {
 	if err != nil {
 		return nil, err
 	}
+	embedded := make(map[string]bool, len(files))
+	for _, rel := range files {
+		embedded[rel] = true
+	}
+	// unowned collects embedded paths whose on-disk content drifted but
+	// no previous lock owned — local extensions protected from sync and
+	// excluded from the refreshed lock below.
+	unowned := make(map[string]bool)
 	for _, rel := range files {
 		target := filepath.Join(base, filepath.FromSlash(rel))
-		if _, err := os.Stat(target); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
 		data, err := assets.ReadFile(rel)
 		if err != nil {
 			return nil, err
 		}
-		if err := ConfinedTarget(resolvedBase, target); err != nil {
+		disk, err := os.ReadFile(target)
+		switch {
+		case err == nil:
+			if bytes.Equal(disk, data) {
+				continue
+			}
+			// The file drifted from the embedded asset. A drifted path
+			// the previous lock never owned may be a local extension
+			// colliding with a newly embedded asset; protect it rather
+			// than overwriting user content, and drop it from the
+			// refreshed lock below so later syncs keep protecting it.
+			// Without a usable baseline (missing or corrupt lock)
+			// nothing is provably owned, so all drifted paths are
+			// protected the same way.
+			if !lockOwned(oldLock, rel) {
+				unowned[rel] = true
+				report.FilesConflicted = append(report.FilesConflicted, rel)
+				continue
+			}
+			if !sync {
+				continue
+			}
+			if err := ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				return nil, err
+			}
+			report.FilesSynced = append(report.FilesSynced, rel)
+		case !os.IsNotExist(err):
 			return nil, err
+		default:
+			if err := ConfinedTarget(resolvedBase, target); err != nil {
+				return nil, err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				return nil, err
+			}
+			report.FilesRestored = append(report.FilesRestored, rel)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return nil, err
+	}
+	// Remove files the old lock owned that this binary no longer ships —
+	// only while the on-disk copy still matches the old lock hash. Locally
+	// modified stale files are kept and surface as unlisted extensions.
+	if sync && oldLock != nil {
+		for rel, wantHash := range oldLock.Files {
+			if embedded[rel] {
+				continue
+			}
+			target, ok := assets.LockedTarget(resolvedBase, base, rel)
+			if !ok {
+				continue
+			}
+			disk, err := os.ReadFile(target)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			sum := sha256.Sum256(disk)
+			if "sha256:"+hex.EncodeToString(sum[:]) != wantHash {
+				continue
+			}
+			if err := os.Remove(target); err != nil {
+				return nil, err
+			}
+			report.FilesRemoved = append(report.FilesRemoved, rel)
 		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
-			return nil, err
+		sort.Strings(report.FilesRemoved)
+	}
+	// Reconcile the required_version pin with the running binary: a pin
+	// that excludes this binary fails doctor's version gate outright.
+	if sync {
+		if framework, err := LoadFramework(root); err == nil {
+			ok, serr := contract.Satisfies(buildinfo.Version, framework.Framework.RequiredVersion)
+			if serr != nil || !ok {
+				target := filepath.Join(base, "framework.yaml")
+				if err := ConfinedTarget(resolvedBase, target); err != nil {
+					return nil, err
+				}
+				pin := requiredVersionRange()
+				if err := patchRequiredVersion(target, pin); err != nil {
+					return nil, fmt.Errorf("updating required_version: %w", err)
+				}
+				report.PinUpdated = pin
+			}
 		}
-		report.FilesRestored = append(report.FilesRestored, rel)
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -406,5 +521,129 @@ func Repair(root string) (*RepairReport, error) {
 		}
 		report.SeedsWritten = append(report.SeedsWritten, rel)
 	}
+	// Refresh the lock so it describes the running binary's embedded
+	// manifest; its content is deterministic, and a stale or corrupt lock
+	// would keep doctor warning about drift the repair already resolved.
+	lockTarget := filepath.Join(base, assets.LockPath)
+	if err := ConfinedTarget(resolvedBase, lockTarget); err != nil {
+		return nil, err
+	}
+	if err := assets.WriteLock(base); err != nil {
+		return nil, err
+	}
+	// Adjust the refreshed lock before returning. Drifted paths no lock
+	// ever owned are local extensions — dropping them keeps a later
+	// --sync protecting them instead of treating them as ox-owned.
+	// Entries the previous lock owned that this binary no longer ships
+	// are re-recorded when still on disk so a later --sync can remove
+	// them (or doctor can report them as stale) instead of mistaking
+	// them for local extensions.
+	if len(unowned) > 0 || oldLock != nil {
+		lock, err := assets.LoadLock(base)
+		if err != nil {
+			return nil, err
+		}
+		adjusted := false
+		for rel := range unowned {
+			if _, ok := lock.Files[rel]; ok {
+				delete(lock.Files, rel)
+				adjusted = true
+			}
+		}
+		if oldLock != nil {
+			for rel, hash := range oldLock.Files {
+				if embedded[rel] {
+					continue
+				}
+				target, ok := assets.LockedTarget(resolvedBase, base, rel)
+				if !ok {
+					continue
+				}
+				data, err := os.ReadFile(target)
+				if err != nil {
+					continue
+				}
+				if sync {
+					// A stale file sync kept on disk no longer
+					// matches the recorded hash — it is a local
+					// modification, i.e. an extension, not an
+					// owned stale file. Restoring its entry
+					// would keep it flagged stale and let a
+					// later sync delete it if its content ever
+					// reverted.
+					sum := sha256.Sum256(data)
+					if "sha256:"+hex.EncodeToString(sum[:]) != hash {
+						continue
+					}
+				}
+				lock.Files[rel] = hash
+				adjusted = true
+			}
+		}
+		if adjusted {
+			out, err := json.MarshalIndent(lock, "", "  ")
+			if err != nil {
+				return nil, fmt.Errorf("encoding asset lock: %w", err)
+			}
+			if err := os.WriteFile(lockTarget, append(out, '\n'), 0o644); err != nil {
+				return nil, fmt.Errorf("writing asset lock: %w", err)
+			}
+		}
+	}
 	return report, nil
+}
+
+// patchRequiredVersion updates framework.required_version in the existing
+// framework.yaml so schema-permitted fields the typed config does not
+// model (project.owner and other extensions) survive a sync.
+func patchRequiredVersion(path, version string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("parsing framework.yaml: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("framework.yaml: unexpected document shape")
+	}
+	var fw *yaml.Node
+	for i := 0; i+1 < len(doc.Content[0].Content); i += 2 {
+		if doc.Content[0].Content[i].Value == "framework" {
+			fw = doc.Content[0].Content[i+1]
+			break
+		}
+	}
+	if fw == nil || fw.Kind != yaml.MappingNode {
+		return fmt.Errorf("framework.yaml: missing framework mapping")
+	}
+	patched := false
+	for i := 0; i+1 < len(fw.Content); i += 2 {
+		if fw.Content[i].Value == "required_version" {
+			fw.Content[i+1].SetString(version)
+			patched = true
+			break
+		}
+	}
+	if !patched {
+		fw.Content = append(fw.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "required_version"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: version})
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return fmt.Errorf("encoding framework.yaml: %w", err)
+	}
+	return os.WriteFile(path, out, 0o644)
+}
+
+// lockOwned reports whether lock records rel as an ox-agent-owned asset.
+// A nil lock (absent or corrupt baseline) owns nothing.
+func lockOwned(lock *assets.Lock, rel string) bool {
+	if lock == nil {
+		return false
+	}
+	_, ok := lock.Files[rel]
+	return ok
 }

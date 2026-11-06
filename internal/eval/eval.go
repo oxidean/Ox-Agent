@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/skills"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,10 +60,7 @@ type Report struct {
 
 // skillDir resolves a skill reference ("ox-agent/x" or "x") to its directory.
 func skillDir(root, ref string) (string, string, error) {
-	name := ref
-	if i := strings.LastIndex(ref, "/"); i >= 0 {
-		name = ref[i+1:]
-	}
+	name := skills.NormalizeName(ref)
 	dir := filepath.Join(root, ".ox-agent", "skills", name)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return "", "", fmt.Errorf("no skill %q under .ox-agent/skills", ref)
