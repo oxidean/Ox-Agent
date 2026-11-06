@@ -148,6 +148,9 @@ func TestUpdateSyncTargetsProjectRoot(t *testing.T) {
 	calls := stubUpdateSeams(t, true, "v0.2.0", nil, nil)
 	dir := t.TempDir()
 	t.Chdir(dir)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved // Find resolves the root through symlinks/8.3 names
+	}
 	if _, err := runCLI(t, "init"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
