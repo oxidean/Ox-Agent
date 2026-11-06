@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // LockPath is the .ox-agent file recording materialized asset hashes.
@@ -55,7 +56,35 @@ func LoadLock(base string) (*Lock, error) {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return nil, fmt.Errorf("parsing asset lock: %w", err)
 	}
+	// Drop keys that could escape base when joined — a tampered lock must
+	// not steer reads, stats, or removals outside .ox-agent. WriteLock only
+	// ever records local embedded paths, so nothing legitimate is lost.
+	for rel := range lock.Files {
+		if !filepath.IsLocal(rel) {
+			delete(lock.Files, rel)
+		}
+	}
 	return &lock, nil
+}
+
+// LockedTarget joins a lock key under base and reports whether the resolved
+// path stays inside resolvedBase (EvalSymlinks(base)). IsLocal cannot see
+// symlinks, so callers must use this before reading, stating, or removing a
+// lock-derived path. Non-local keys and paths that do not exist or resolve
+// outside the project are rejected.
+func LockedTarget(resolvedBase, base, rel string) (string, bool) {
+	if !filepath.IsLocal(rel) {
+		return "", false
+	}
+	target := filepath.Join(base, filepath.FromSlash(rel))
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", false
+	}
+	if resolved != resolvedBase && !strings.HasPrefix(resolved, resolvedBase+string(os.PathSeparator)) {
+		return "", false
+	}
+	return target, true
 }
 
 // CheckLock compares the lock under base with the files on disk. missing are
@@ -70,8 +99,19 @@ func CheckLock(base string) (missing, changed, unlisted, stale []string, err err
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("resolving %s: %w", base, err)
+	}
 	for rel, want := range lock.Files {
-		data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
+		target, ok := LockedTarget(resolvedBase, base, rel)
+		if !ok {
+			// Absent, non-local, or escaping — the owned file is not
+			// verifiably present inside the project.
+			missing = append(missing, rel)
+			continue
+		}
+		data, err := os.ReadFile(target)
 		if err != nil {
 			if os.IsNotExist(err) {
 				missing = append(missing, rel)
@@ -96,7 +136,7 @@ func CheckLock(base string) (missing, changed, unlisted, stale []string, err err
 		if ships[rel] {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err == nil {
+		if _, ok := LockedTarget(resolvedBase, base, rel); ok {
 			stale = append(stale, rel)
 		}
 	}

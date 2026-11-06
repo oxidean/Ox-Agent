@@ -73,3 +73,60 @@ func TestCheckLockDetectsDrift(t *testing.T) {
 		t.Fatalf("stale = %v", stale)
 	}
 }
+
+// TestLoadLockDropsNonLocalKeys verifies a tampered lock cannot carry keys
+// that would escape the project when joined — they are dropped at load.
+func TestLoadLockDropsNonLocalKeys(t *testing.T) {
+	base := t.TempDir()
+	raw := `{"schema_version":1,"files":{"../escape":"sha256:x","skills/ok.md":"sha256:y","/abs/path":"sha256:z"}}`
+	if err := os.WriteFile(filepath.Join(base, LockPath), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := LoadLock(base)
+	if err != nil {
+		t.Fatalf("LoadLock() error = %v", err)
+	}
+	if len(lock.Files) != 1 {
+		t.Fatalf("non-local keys survived: %v", lock.Files)
+	}
+	if _, ok := lock.Files["skills/ok.md"]; !ok {
+		t.Fatal("local key dropped")
+	}
+}
+
+// TestLockedTargetConfinement verifies lock-derived paths must resolve inside
+// the project — non-local keys, symlink escapes, and missing files are all
+// rejected before any filesystem access on the target.
+func TestLockedTargetConfinement(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, ".ox-agent")
+	if err := os.MkdirAll(filepath.Join(base, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(base, "skills", "ok.md")
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := LockedTarget(resolvedBase, base, "skills/ok.md"); !ok {
+		t.Fatal("confined local file rejected")
+	}
+	for _, rel := range []string{"../outside/secret", "/etc/passwd", "escape/secret", "skills/missing.md"} {
+		if _, ok := LockedTarget(resolvedBase, base, rel); ok {
+			t.Fatalf("%q accepted", rel)
+		}
+	}
+}

@@ -410,7 +410,10 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			if embedded[rel] {
 				continue
 			}
-			target := filepath.Join(base, filepath.FromSlash(rel))
+			target, ok := assets.LockedTarget(resolvedBase, base, rel)
+			if !ok {
+				continue
+			}
 			disk, err := os.ReadFile(target)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -421,9 +424,6 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			sum := sha256.Sum256(disk)
 			if "sha256:"+hex.EncodeToString(sum[:]) != wantHash {
 				continue
-			}
-			if err := ConfinedTarget(resolvedBase, target); err != nil {
-				return nil, err
 			}
 			if err := os.Remove(target); err != nil {
 				return nil, err
@@ -555,7 +555,11 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 				if embedded[rel] {
 					continue
 				}
-				data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
+				target, ok := assets.LockedTarget(resolvedBase, base, rel)
+				if !ok {
+					continue
+				}
+				data, err := os.ReadFile(target)
 				if err != nil {
 					continue
 				}
