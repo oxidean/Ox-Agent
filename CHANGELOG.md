@@ -2,7 +2,50 @@
 
 All notable changes to Ox-Agent are documented here. This project uses
 semantic versioning; 0.x releases may break compatibility between minor
-versions.
+versions. Patch releases cut automatically on merge to main ship with
+generated release notes; this file carries curated entries for notable
+work and minor-release summaries.
+
+## [Unreleased]
+
+### Added
+
+- **`skills install`/`uninstall`** — fetch skill packages from git remotes
+  pinned to a resolved commit SHA, with per-file provenance in
+  `.ox-agent/remote-skills.lock` verified by `skills check` and `doctor`.
+- **`webhook` harness adapter** — POSTs the packet to an HTTP(S) endpoint;
+  `async` leaves the run pending for file-contract output, `sync` stores
+  the response body as output for schema-validated collection.
+- **Snapshot-accelerated `state replay`** — resumes folding from a
+  persisted snapshot when the journal prefix is intact; `--full` forces a
+  from-scratch fold.
+
+### Changed
+
+- All 13 skill evals exercise their own contract, and SKILL.md files
+  declare the `eval.*` quality flags each skill self-reports.
+- CI tests run on Windows as well as Linux.
+
+## [0.1.1] - 2026-11-06
+
+### Added
+
+- **Pickup hardening** — `.ox-agent/README.md` on init, doctor warns when
+  harness discovery wiring is missing, namespaced `ox-agent/` skill refs
+  normalize everywhere, `next_action.type` is an enforced contract enum,
+  per-skill SKILL.md consumes/produces contracts, write confinement for
+  materialized assets.
+- **`init --repair --sync` and update-time asset sync** — `ox-agent update`
+  re-executes the new binary to reconcile `.ox-agent` assets to the
+  updated embedded tree; repair can rewrite drift, drop stale owned
+  files, and fix the `required_version` pin.
+- **Auto-tagging** — every merge to main tags the next patch version and
+  dispatches the release.
+
+### Security
+
+- Asset-lock keys are path-confined (non-local keys dropped, symlink
+  escapes rejected) so a tampered lock cannot steer reads or removals.
 
 ## [0.1.0] - 2026-11-05
 
