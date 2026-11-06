@@ -314,3 +314,15 @@ func TestInstallRejectsEscapingSymlink(t *testing.T) {
 		t.Fatalf("escaping symlink error = %v", err)
 	}
 }
+
+// TestInstallRejectsEscapingPath verifies --path cannot resolve outside the
+// checkout, whether lexically (../..) or through a symlinked component.
+func TestInstallRejectsEscapingPath(t *testing.T) {
+	root := initProject(t)
+	repo, _ := makeRemoteRepo(t, "")
+	for _, path := range []string{"..", "../..", "../../.."} {
+		if _, err := Install(root, repo, InstallOptions{Path: path}); err == nil || !strings.Contains(err.Error(), "escapes the source repository") {
+			t.Fatalf("Install(path=%q) error = %v, want escape rejection", path, err)
+		}
+	}
+}

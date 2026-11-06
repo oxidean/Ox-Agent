@@ -78,6 +78,21 @@ func Install(root, source string, opts InstallOptions) (*RemoteSkill, error) {
 	pkgDir := cloneDir
 	if opts.Path != "" {
 		pkgDir = filepath.Join(cloneDir, filepath.FromSlash(opts.Path))
+		// The package path must stay inside the checkout — neither a
+		// lexical escape (../..) nor a symlinked component may resolve
+		// outside it.
+		resolvedClone, err := filepath.EvalSymlinks(cloneDir)
+		if err != nil {
+			return nil, err
+		}
+		resolvedPkg, err := filepath.EvalSymlinks(pkgDir)
+		if err != nil {
+			return nil, fmt.Errorf("package path %q not found in source: %w", opts.Path, err)
+		}
+		if resolvedPkg != resolvedClone && !strings.HasPrefix(resolvedPkg, resolvedClone+string(os.PathSeparator)) {
+			return nil, fmt.Errorf("package path %q escapes the source repository", opts.Path)
+		}
+		pkgDir = resolvedPkg
 	}
 	manifestData, err := os.ReadFile(filepath.Join(pkgDir, "skill.yaml"))
 	if err != nil {

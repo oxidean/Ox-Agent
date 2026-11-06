@@ -376,6 +376,10 @@ func (r *DoctorReport) checkAssets(base string) {
 		return
 	}
 	missing, changed, unlisted, stale, err := assets.CheckLock(base)
+	if err != nil {
+		r.add("asset lock", err, false)
+		return
+	}
 	if remote := assets.RemoteFiles(base); len(remote) > 0 {
 		kept := unlisted[:0]
 		for _, rel := range unlisted {
@@ -384,10 +388,6 @@ func (r *DoctorReport) checkAssets(base string) {
 			}
 		}
 		unlisted = kept
-	}
-	if err != nil {
-		r.add("asset lock", err, false)
-		return
 	}
 	if len(missing) > 0 {
 		r.add("asset lock", fmt.Errorf("missing asset files: %v", missing), true)
