@@ -622,9 +622,15 @@ func TestCollectGateFilesApprovalRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading lifecycle: %v", err)
 	}
-	gated := strings.Replace(string(life),
+	// The checkout may carry CRLF endings on Windows — normalize before
+	// patching so the edge match does not silently no-op.
+	normalized := strings.ReplaceAll(string(life), "\r\n", "\n")
+	gated := strings.Replace(normalized,
 		"  - from: discovering\n    to: brainstorming\n",
 		"  - from: discovering\n    to: brainstorming\n    gate: human\n", 1)
+	if gated == normalized {
+		t.Fatal("lifecycle gate not applied — edge text did not match")
+	}
 	if err := os.WriteFile(lifePath, []byte(gated), 0o644); err != nil {
 		t.Fatalf("writing lifecycle: %v", err)
 	}
