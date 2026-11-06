@@ -423,16 +423,15 @@ func fileEscalationRequest(root string, item *state.WorkItem, run *Run, reason s
 	if question == "" {
 		question = fmt.Sprintf("%s run %s escalated; how should %s proceed?", run.Skill, run.RunID, item.ID)
 	}
-	pending, err := input.Pending(root)
-	if err != nil {
-		return err
-	}
+	// Best-effort dedupe: unreadable files cannot match this question
+	// anyway, and a fresh request is safer than a failed collect.
+	pending, _ := input.Pending(root)
 	for _, r := range pending {
 		if r.WorkItemID == item.ID && r.Question == question {
 			return nil // already on file
 		}
 	}
-	_, err = input.Create(root, input.Request{
+	_, err := input.Create(root, input.Request{
 		Kind:       input.KindClarification,
 		WorkItemID: item.ID,
 		RunID:      run.RunID,

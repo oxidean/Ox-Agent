@@ -6,10 +6,12 @@ package input
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,8 +67,47 @@ type Request struct {
 	path string // absolute file location; never serialized
 }
 
+// idPattern constrains request IDs to the generated shape so CLI-supplied
+// IDs can never resolve outside state/input.
+var idPattern = regexp.MustCompile(`^IN-[0-9]+$`)
+
+// createLockStaleAfter bounds how long an orphaned create lock file is
+// honored before a waiting process reclaims it.
+const createLockStaleAfter = 30 * time.Second
+
 func dir(root string) string {
 	return filepath.Join(root, ".ox-agent", "state", "input")
+}
+
+// withLock serializes the dedupe + ID-allocation + save + journal critical
+// section across concurrent ox-agent processes, the same pattern
+// withWorkItemLock uses for work-item allocation.
+func withLock(root string, fn func() error) error {
+	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+		return err
+	}
+	lockPath := filepath.Join(dir(root), ".create.lock")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			fmt.Fprintf(lock, "pid=%d\n", os.Getpid())
+			lock.Close()
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("acquiring input lock: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > createLockStaleAfter {
+			os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return errors.New("timed out waiting for input create lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -74,7 +115,9 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 // Create files a new input request, journaling input.requested. For
 // approval requests carrying an Action, an identical pending request is
 // returned instead of stacking duplicates — repeated gate hits
-// idempotently reuse the same request.
+// idempotently reuse the same request. The dedupe check, ID allocation,
+// file write and journal append run under a lockfile so concurrent
+// processes cannot claim the same ID or duplicate a pending approval.
 func Create(root string, req Request) (_ *Request, err error) {
 	switch req.Kind {
 	case KindApproval, KindClarification, KindDecision:
@@ -87,49 +130,67 @@ func Create(root string, req Request) (_ *Request, err error) {
 	if req.Kind == KindDecision && len(req.Options) < 2 {
 		return nil, fmt.Errorf("decision requests need at least two --option values")
 	}
-	if req.Kind == KindApproval && req.Action == nil {
-		return nil, fmt.Errorf("approval requests need an action")
-	}
 	if req.Kind == KindApproval {
-		existing, err := FindPendingAction(root, req.Action.WorkItemID, req.Action.Type, req.Action.Target)
-		if err != nil {
-			return nil, err
+		if req.Action == nil {
+			return nil, fmt.Errorf("approval requests need an action")
 		}
-		if existing != nil {
-			return existing, nil
+		switch req.Action.Type {
+		case "transition", "archive":
+		default:
+			return nil, fmt.Errorf("unsupported action type %q", req.Action.Type)
 		}
 	}
-	req.SchemaVersion = 1
-	req.RequestID = nextID(root)
-	req.Status = StatusPending
-	if req.CreatedBy == "" {
-		req.CreatedBy = "ox-agent"
+	if req.ExpiresAt != "" {
+		if _, err := time.Parse(time.RFC3339, req.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("expires_at must be RFC3339: %w", err)
+		}
 	}
-	req.CreatedAt = now()
-	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+	var created *Request
+	err = withLock(root, func() error {
+		if req.Kind == KindApproval {
+			existing, err := FindPendingAction(root, req.Action.WorkItemID, req.Action.Type, req.Action.Target)
+			if err != nil {
+				return err
+			}
+			if existing != nil {
+				created = existing
+				return nil
+			}
+		}
+		req.SchemaVersion = 1
+		req.RequestID = nextID(root)
+		req.Status = StatusPending
+		if req.CreatedBy == "" {
+			req.CreatedBy = "ox-agent"
+		}
+		req.CreatedAt = now()
+		req.path = filepath.Join(dir(root), req.RequestID+".yaml")
+		if err := req.save(); err != nil {
+			return err
+		}
+		eventData := map[string]any{"request_id": req.RequestID, "kind": req.Kind, "question": req.Question}
+		if req.RunID != "" {
+			eventData["run_id"] = req.RunID
+		}
+		if req.Action != nil {
+			eventData["action"] = fmt.Sprintf("%s %s → %s", req.Action.Type, req.Action.WorkItemID, req.Action.Target)
+		}
+		if err := state.Append(root, state.Event{
+			Type:       "input.requested",
+			WorkItemID: req.WorkItemID,
+			Actor:      req.CreatedBy,
+			Data:       eventData,
+		}); err != nil {
+			_ = os.Remove(req.path)
+			return err
+		}
+		created = &req
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	req.path = filepath.Join(dir(root), req.RequestID+".yaml")
-	if err := req.save(); err != nil {
-		return nil, err
-	}
-	eventData := map[string]any{"request_id": req.RequestID, "kind": req.Kind, "question": req.Question}
-	if req.RunID != "" {
-		eventData["run_id"] = req.RunID
-	}
-	if req.Action != nil {
-		eventData["action"] = fmt.Sprintf("%s %s → %s", req.Action.Type, req.Action.WorkItemID, req.Action.Target)
-	}
-	if err := state.Append(root, state.Event{
-		Type:       "input.requested",
-		WorkItemID: req.WorkItemID,
-		Actor:      req.CreatedBy,
-		Data:       eventData,
-	}); err != nil {
-		_ = os.Remove(req.path)
-		return nil, err
-	}
-	return &req, nil
+	return created, nil
 }
 
 // nextID returns the lowest free IN-NNNN number.
@@ -155,6 +216,9 @@ func nextID(root string) string {
 // Load reads a request, applying lazy expiry: a pending request past its
 // expires_at is marked expired, saved, and journaled once.
 func Load(root, id string) (*Request, error) {
+	if !idPattern.MatchString(id) {
+		return nil, fmt.Errorf("invalid request id %q", id)
+	}
 	path := filepath.Join(dir(root), id+".yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -174,52 +238,58 @@ func Load(root, id string) (*Request, error) {
 	return &req, nil
 }
 
-// List returns all requests, oldest first, applying lazy expiry.
-func List(root string) ([]*Request, error) {
+// List returns all loadable requests, oldest first, applying lazy expiry.
+// Files that fail to load are reported in the issues slice rather than
+// failing the whole listing — one corrupt file must not hide every other
+// request. Issues name the offending file so it can be repaired (doctor's
+// schema glob flags it too).
+func List(root string) ([]*Request, []error) {
 	entries, err := os.ReadDir(dir(root))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, []error{err}
 	}
 	var out []*Request
+	var issues []error
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
 		req, err := Load(root, strings.TrimSuffix(e.Name(), ".yaml"))
 		if err != nil {
-			return nil, err
+			issues = append(issues, fmt.Errorf("%s: %w", e.Name(), err))
+			continue
 		}
 		out = append(out, req)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].RequestID < out[j].RequestID })
-	return out, nil
+	return out, issues
 }
 
-// Pending returns requests still awaiting a human answer.
-func Pending(root string) ([]*Request, error) {
-	all, err := List(root)
-	if err != nil {
-		return nil, err
-	}
+// Pending returns loadable requests still awaiting a human answer, plus
+// per-file load issues.
+func Pending(root string) ([]*Request, []error) {
+	all, issues := List(root)
 	var out []*Request
 	for _, r := range all {
 		if r.Status == StatusPending {
 			out = append(out, r)
 		}
 	}
-	return out, nil
+	return out, issues
 }
 
 // FindPendingAction returns the pending approval request for an identical
 // action, or nil — the dedupe key that keeps repeated gate hits from
-// stacking duplicate requests.
+// stacking duplicate requests. Unloadable files are surfaced as an error
+// for approvals: silently skipping a possibly-pending file could let a
+// duplicate approval slip through.
 func FindPendingAction(root, workItemID, actionType, target string) (*Request, error) {
-	pending, err := Pending(root)
-	if err != nil {
-		return nil, err
+	pending, issues := Pending(root)
+	if len(issues) > 0 {
+		return nil, fmt.Errorf("cannot verify pending approvals — unloadable request files: %v", issues)
 	}
 	for _, r := range pending {
 		if r.Kind == KindApproval && r.Action != nil &&
@@ -236,9 +306,12 @@ func (r *Request) refreshExpiry(root string) error {
 	if r.Status != StatusPending || r.ExpiresAt == "" {
 		return nil
 	}
+	// An unparseable expires_at never expires the request — Create rejects
+	// bad values at write time, and an existing oddity should not poison
+	// every List/Load caller.
 	deadline, err := time.Parse(time.RFC3339, r.ExpiresAt)
 	if err != nil || time.Now().UTC().Before(deadline) {
-		return err
+		return nil
 	}
 	r.Status = StatusExpired
 	if err := r.save(); err != nil {
@@ -260,25 +333,50 @@ func (r *Request) save() error {
 	return os.WriteFile(r.path, data, 0o644)
 }
 
-// finish records a terminal outcome and journals input.answered.
+// finish records a terminal outcome. The journal append runs BEFORE the
+// file save so a mid-finish crash leaves a pending file that a retry can
+// close — journaledOutcome dedupes the event on retry. The reverse order
+// would leave a terminal file whose event could never be recovered.
 func (r *Request) finish(root, status, actor, answer string) error {
+	journaled, err := journaledOutcome(root, r.RequestID, status)
+	if err != nil {
+		return err
+	}
+	if !journaled {
+		if err := state.Append(root, state.Event{
+			Type:       "input.answered",
+			WorkItemID: r.WorkItemID,
+			Actor:      actor,
+			Data: map[string]any{
+				"request_id": r.RequestID,
+				"outcome":    status,
+				"answer":     answer,
+			},
+		}); err != nil {
+			return err
+		}
+	}
 	r.Status = status
 	r.AnsweredBy = actor
 	r.AnsweredAt = now()
 	r.Answer = answer
-	if err := r.save(); err != nil {
-		return err
+	return r.save()
+}
+
+// journaledOutcome reports whether an input.answered event for this
+// request and outcome already exists — the dedupe that makes a retried
+// finish idempotent.
+func journaledOutcome(root, id, outcome string) (bool, error) {
+	events, err := state.ReadEvents(root)
+	if err != nil {
+		return false, err
 	}
-	return state.Append(root, state.Event{
-		Type:       "input.answered",
-		WorkItemID: r.WorkItemID,
-		Actor:      actor,
-		Data: map[string]any{
-			"request_id": r.RequestID,
-			"outcome":    status,
-			"answer":     answer,
-		},
-	})
+	for _, e := range events {
+		if e.Type == "input.answered" && e.Data["request_id"] == id && e.Data["outcome"] == outcome {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Respond records a free-text or option answer. Decision answers must
@@ -326,16 +424,27 @@ func Approve(root, id, actor string) (*Request, error) {
 	if req.Kind != KindApproval {
 		return nil, fmt.Errorf("input request %s is %s, not an approval", id, req.Kind)
 	}
+	if req.Action == nil {
+		return nil, fmt.Errorf("approval request %s has no action to execute", id)
+	}
 	item, err := state.Resolve(root, req.Action.WorkItemID)
 	if err != nil {
 		return nil, err
 	}
 	reason := "approved via " + id
+	// Idempotent against a prior attempt that executed the action but
+	// failed before recording the outcome: if the work item already sits
+	// at the requested end state, the action is done — skip re-execution
+	// and just finalize the request.
 	switch req.Action.Type {
 	case "transition":
-		err = item.Transition(root, req.Action.Target, actor, actor, reason)
+		if item.State != req.Action.Target {
+			err = item.Transition(root, req.Action.Target, actor, actor, reason)
+		}
 	case "archive":
-		err = item.Archive(root, actor, actor, reason)
+		if item.State != "archived" {
+			err = item.Archive(root, actor, actor, reason)
+		}
 	default:
 		err = fmt.Errorf("unsupported action type %q", req.Action.Type)
 	}

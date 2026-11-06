@@ -592,9 +592,9 @@ func TestCollectEscalateFilesInputRequest(t *testing.T) {
 	if reloaded.State != "blocked" {
 		t.Fatalf("state = %s, want blocked", reloaded.State)
 	}
-	pending, err := input.Pending(root)
-	if err != nil {
-		t.Fatalf("Pending() error = %v", err)
+	pending, issues := input.Pending(root)
+	if len(issues) > 0 {
+		t.Fatalf("Pending() issues = %v", issues)
 	}
 	if len(pending) != 1 || pending[0].Kind != input.KindClarification || pending[0].RunID != run.RunID {
 		t.Fatalf("pending = %+v", pending)

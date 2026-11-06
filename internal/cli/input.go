@@ -141,11 +141,11 @@ func newInputListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			all, err := input.List(root)
-			if err != nil {
-				return err
-			}
+			all, issues := input.List(root)
 			out := cmd.OutOrStdout()
+			for _, issue := range issues {
+				fmt.Fprintf(out, "warning: %v\n", issue)
+			}
 			shown := 0
 			for _, r := range all {
 				if status == "" && r.Status != input.StatusPending {
@@ -182,7 +182,10 @@ func newInputRespondCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "respond <request-id>",
 		Short: "Answer a pending input request",
-		Args:  cobra.ExactArgs(1),
+		Long: "Answer a pending input request. Answers are stored in committed " +
+			"project state (the request file and the event journal) — do not " +
+			"include secrets or private data.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := project.Find(".")
 			if err != nil {
