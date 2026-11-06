@@ -47,12 +47,15 @@ the latest existing tag, pushes it, and dispatches `release.yml` against it.
 (Tags pushed by `GITHUB_TOKEN` do not fire `on: push` workflows, which is why
 the release is dispatched rather than triggered by the push.)
 
+Auto-tagging is skipped when the head commit already carries a `v*.*.*` tag
+or when the squash-merge message contains `[skip release]` or `[no-release]`.
+
 For a minor or major bump — or to release a specific commit — create an
-annotated tag manually and push it:
+annotated tag manually and push it (manual pushes do trigger `release.yml`):
 
 ```bash
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
 The tag triggers `.github/workflows/release.yml`. The workflow checks out the

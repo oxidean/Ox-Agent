@@ -22,9 +22,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Decide whether to tag
+        id: gate
+        run: |
+          if git log -1 --pretty=%B | grep -qiE '\[(skip|no)[ -]release\]'; then
+            echo "skip=commit message opts out" >> "$GITHUB_OUTPUT"
+          elif git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "skip=head commit already tagged" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Compute next patch tag
         id: next
+        if: steps.gate.outputs.skip == ''
         run: |
+          git fetch --force origin 'refs/tags/*:refs/tags/*' -q
           latest="$(git tag -l 'v*.*.*' --sort=-v:refname | head -n1)"
           if [ -z "$latest" ]; then
             echo "tag=v0.0.1" >> "$GITHUB_OUTPUT"
@@ -34,6 +47,7 @@ jobs:
           echo "tag=v$(awk -F. '{ $3 += 1; print $1 "." $2 "." $3 }' <<< "${latest#v}")" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
+        if: steps.next.outputs.tag != ''
         run: |
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
@@ -43,6 +57,7 @@ jobs:
       # Tags pushed by GITHUB_TOKEN do not trigger `on: push: tags` workflows,
       # so the release is dispatched explicitly against the new tag.
       - name: Dispatch release workflow
+        if: steps.next.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run release.yml --ref "${{ steps.next.outputs.tag }}" -f tag="${{ steps.next.outputs.tag }}"
