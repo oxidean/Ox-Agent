@@ -52,26 +52,29 @@ func TestScoreMixedResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if len(evals.Cases) != 2 {
-		t.Fatalf("expected 2 cases, got %d", len(evals.Cases))
+	if len(evals.Cases) != 3 {
+		t.Fatalf("expected 3 cases, got %d", len(evals.Cases))
 	}
 	_ = name
-	// case 1: fully passing
-	writeOutput(t, root, skill, "valid-scoped-request", validOutput(map[string]any{"preserves_scope": true}))
-	// case 2: schema-valid but fails the preserves_scope quality assertion
+	// two cases fully satisfy their assertions
+	writeOutput(t, root, skill, "harvest-standards", validOutput(map[string]any{
+		"entries_written": true, "findings_summarized": true}))
+	writeOutput(t, root, skill, "bounded-read", validOutput(map[string]any{"bounded_read": true}))
+	// one fails the preserves_scope quality assertion
 	writeOutput(t, root, skill, "respects-scope", validOutput(map[string]any{"preserves_scope": false}))
 	report, err := Score(root, skill)
 	if err != nil {
 		t.Fatalf("Score() error = %v", err)
 	}
-	if !report.Complete || report.RecordedCount != 2 {
+	if !report.Complete || report.RecordedCount != 3 {
 		t.Fatalf("report incomplete: %+v", report)
 	}
 	if report.SchemaRate != 1.0 {
 		t.Fatalf("schema rate = %v, want 1.0", report.SchemaRate)
 	}
-	if report.QualityRate != 0.5 {
-		t.Fatalf("quality rate = %v, want 0.5", report.QualityRate)
+	want := 2.0 / 3.0
+	if report.QualityRate < want-0.001 || report.QualityRate > want+0.001 {
+		t.Fatalf("quality rate = %v, want ~0.67", report.QualityRate)
 	}
 	if !report.SchemaPass || report.QualityPass {
 		t.Fatalf("thresholds wrong: %+v", report)
@@ -90,11 +93,12 @@ func TestEmitPacketsSkipsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmitPackets() error = %v", err)
 	}
-	if len(emitted) != 1 {
-		t.Fatalf("emitted %d packets, want 1", len(emitted))
+	if len(emitted) != len(evals.Cases)-1 {
+		t.Fatalf("emitted %d packets, want %d", len(emitted), len(evals.Cases)-1)
 	}
-	if _, err := os.Stat(filepath.Join(runsDir(root, name), evals.Cases[1].ID+".packet.json")); err != nil {
-		t.Fatalf("missing packet for second case: %v", err)
+	last := evals.Cases[len(evals.Cases)-1]
+	if _, err := os.Stat(filepath.Join(runsDir(root, name), last.ID+".packet.json")); err != nil {
+		t.Fatalf("missing packet for last case: %v", err)
 	}
 }
 

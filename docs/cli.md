@@ -149,7 +149,11 @@ version and marks covered messages; `close` resolves the thread.
 
 ### `ox-agent state replay <work-item>`
 
-Rebuild current work-item state by replaying the event journal.
+Rebuild current work-item state by replaying the event journal. When a
+snapshot exists under `state/snapshots/` and its `last_event_id` still
+marks an intact journal prefix, replay resumes from it and folds only
+newer events (`--full` forces a from-scratch fold). `--snapshot` persists
+the result; `--json` prints it.
 
 ### `ox-agent state explain <work-item>`
 
