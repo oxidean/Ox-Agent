@@ -48,6 +48,14 @@ jobs:
             echo "tag=v0.0.1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Queued runs may execute out of push order. Refuse to tag a commit
+          # that does not contain the latest release tag — tagging an older
+          # commit with a higher version would misorder release history.
+          latest_commit="$(git rev-list -n1 "$latest")"
+          if ! git merge-base --is-ancestor "$latest_commit" HEAD; then
+            echo "stale=HEAD does not contain $latest - a newer commit already owns that release" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "tag=v$(awk -F. '{ $3 += 1; print $1 "." $2 "." $3 }' <<< "${latest#v}")" >> "$GITHUB_OUTPUT"
 
@@ -64,7 +72,7 @@ jobs:
       # skipped when the tag's release or a release run already exists, which
       # also makes a rerun after a failed dispatch safe.
       - name: Dispatch release workflow
-        if: steps.gate.outputs.skip == ''
+        if: steps.gate.outputs.skip == '' && steps.next.outputs.stale == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET: ${{ steps.next.outputs.tag || steps.gate.outputs.existing }}
