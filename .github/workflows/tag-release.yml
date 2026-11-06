@@ -43,21 +43,26 @@ jobs:
         if: steps.gate.outputs.skip == '' && steps.gate.outputs.existing == ''
         run: |
           git fetch --force origin 'refs/tags/*:refs/tags/*' -q
-          latest="$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1)"
+          latest="$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1 || true)"
           if [ -z "$latest" ]; then
             echo "tag=v0.0.1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Queued runs may execute out of push order. If HEAD is an ancestor
-          # of the latest tagged commit, that tag already covers this commit's
-          # content — tagging it with a higher version would hand a higher
-          # version to older code. Release tags outside main's history are not
-          # ancestors of a newer main push, so they never block auto-tagging;
-          # they only advance the next version number.
-          latest_commit="$(git rev-list -n1 "$latest")"
-          if git merge-base --is-ancestor HEAD "$latest_commit"; then
-            echo "stale=HEAD is already covered by $latest - a newer commit already owns that release" >> "$GITHUB_OUTPUT"
-            exit 0
+          # Queued runs may execute out of push order. Staleness is judged only
+          # against release tags already on main's history: if HEAD is an
+          # ancestor of the newest on-main tag, a later push already released
+          # this content — tagging it with a higher version would hand a higher
+          # version to older code. Release tags outside main's history (for
+          # example a side-branch tag that contains HEAD) never block tagging;
+          # they only advance the next version via `latest` above.
+          git fetch origin main -q
+          latest_main="$(git tag --merged origin/main -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1 || true)"
+          if [ -n "$latest_main" ]; then
+            latest_main_commit="$(git rev-list -n1 "$latest_main")"
+            if git merge-base --is-ancestor HEAD "$latest_main_commit"; then
+              echo "stale=HEAD is already covered by $latest_main - a newer main commit already owns that release" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "tag=v$(awk -F. '{ $3 += 1; print $1 "." $2 "." $3 }' <<< "${latest#v}")" >> "$GITHUB_OUTPUT"
