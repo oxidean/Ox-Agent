@@ -38,13 +38,16 @@ func newInitCmd() *cobra.Command {
 				for _, file := range report.FilesRemoved {
 					fmt.Fprintf(out, "removed stale asset: %s\n", file)
 				}
+				for _, file := range report.FilesConflicted {
+					fmt.Fprintf(out, "kept local file (not ox-agent-owned): %s\n", file)
+				}
 				if report.PinUpdated != "" {
 					fmt.Fprintf(out, "updated required_version: %s\n", report.PinUpdated)
 				}
 				for _, file := range report.SeedsWritten {
 					fmt.Fprintf(out, "wrote seed: %s\n", file)
 				}
-				if len(report.DirsCreated)+len(report.FilesRestored)+len(report.FilesSynced)+len(report.FilesRemoved)+len(report.SeedsWritten) == 0 && report.PinUpdated == "" {
+				if len(report.DirsCreated)+len(report.FilesRestored)+len(report.FilesSynced)+len(report.FilesRemoved)+len(report.FilesConflicted)+len(report.SeedsWritten) == 0 && report.PinUpdated == "" {
 					fmt.Fprintln(out, "Nothing to repair")
 				}
 				return nil

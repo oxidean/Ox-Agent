@@ -18,6 +18,7 @@ import (
 	"github.com/oxidean/Ox-Agent/internal/buildinfo"
 	"github.com/oxidean/Ox-Agent/internal/contract"
 	"golang.org/x/mod/semver"
+	"gopkg.in/yaml.v3"
 )
 
 // defaultStages, defaultSkills, and defaultStageSkills seed a new project's
@@ -276,12 +277,13 @@ func ConfinedTarget(resolvedBase, target string) error {
 
 // RepairReport summarizes what Repair restored in an existing .ox-agent.
 type RepairReport struct {
-	DirsCreated   []string
-	FilesRestored []string
-	FilesSynced   []string // drifted asset files rewritten (--sync)
-	FilesRemoved  []string // owned files the binary no longer ships (--sync)
-	SeedsWritten  []string
-	PinUpdated    string // framework.yaml required_version range rewritten to (--sync)
+	DirsCreated     []string
+	FilesRestored   []string
+	FilesSynced     []string // drifted asset files rewritten (--sync)
+	FilesRemoved    []string // owned files the binary no longer ships (--sync)
+	FilesConflicted []string // drifted paths protected as local, not ox-owned (--sync)
+	SeedsWritten    []string
+	PinUpdated      string // framework.yaml required_version range rewritten to (--sync)
 }
 
 // Repair restores missing scaffold directories, missing materialized asset
@@ -358,6 +360,19 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			if !sync || bytes.Equal(disk, data) {
 				continue
 			}
+			// A drifted path the previous lock never owned may be a local
+			// extension colliding with a newly embedded asset; sync
+			// protects it rather than overwriting user content. Without a
+			// usable baseline (missing or corrupt lock) nothing is
+			// provably owned, so every drifted path is protected.
+			if oldLock == nil {
+				report.FilesConflicted = append(report.FilesConflicted, rel)
+				continue
+			}
+			if _, owned := oldLock.Files[rel]; !owned {
+				report.FilesConflicted = append(report.FilesConflicted, rel)
+				continue
+			}
 			if err := ConfinedTarget(resolvedBase, target); err != nil {
 				return nil, err
 			}
@@ -420,11 +435,11 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 				if err := ConfinedTarget(resolvedBase, target); err != nil {
 					return nil, err
 				}
-				framework.Framework.RequiredVersion = requiredVersionRange()
-				if err := writeYAML(target, framework); err != nil {
-					return nil, err
+				pin := requiredVersionRange()
+				if err := patchRequiredVersion(target, pin); err != nil {
+					return nil, fmt.Errorf("updating required_version: %w", err)
 				}
-				report.PinUpdated = framework.Framework.RequiredVersion
+				report.PinUpdated = pin
 			}
 		}
 	}
@@ -523,10 +538,23 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			if embedded[rel] {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err == nil {
-				lock.Files[rel] = hash
-				merged = true
+			data, err := os.ReadFile(filepath.Join(base, filepath.FromSlash(rel)))
+			if err != nil {
+				continue
 			}
+			if sync {
+				// A stale file sync kept on disk no longer matches the
+				// recorded hash — it is a local modification, i.e. an
+				// extension, not an owned stale file. Restoring its
+				// entry would keep it flagged stale and let a later
+				// sync delete it if its content ever reverted.
+				sum := sha256.Sum256(data)
+				if "sha256:"+hex.EncodeToString(sum[:]) != hash {
+					continue
+				}
+			}
+			lock.Files[rel] = hash
+			merged = true
 		}
 		if merged {
 			out, err := json.MarshalIndent(lock, "", "  ")
@@ -539,4 +567,49 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 		}
 	}
 	return report, nil
+}
+
+// patchRequiredVersion updates framework.required_version in the existing
+// framework.yaml so schema-permitted fields the typed config does not
+// model (project.owner and other extensions) survive a sync.
+func patchRequiredVersion(path, version string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("parsing framework.yaml: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("framework.yaml: unexpected document shape")
+	}
+	var fw *yaml.Node
+	for i := 0; i+1 < len(doc.Content[0].Content); i += 2 {
+		if doc.Content[0].Content[i].Value == "framework" {
+			fw = doc.Content[0].Content[i+1]
+			break
+		}
+	}
+	if fw == nil || fw.Kind != yaml.MappingNode {
+		return fmt.Errorf("framework.yaml: missing framework mapping")
+	}
+	patched := false
+	for i := 0; i+1 < len(fw.Content); i += 2 {
+		if fw.Content[i].Value == "required_version" {
+			fw.Content[i+1].SetString(version)
+			patched = true
+			break
+		}
+	}
+	if !patched {
+		fw.Content = append(fw.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "required_version"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: version})
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return fmt.Errorf("encoding framework.yaml: %w", err)
+	}
+	return os.WriteFile(path, out, 0o644)
 }

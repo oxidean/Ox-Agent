@@ -18,7 +18,9 @@ overwrite an existing `.ox-agent/` unless `--repair` is passed.
   running binary: rewrite asset files that drifted from the embedded tree,
   remove owned files this binary no longer ships (untouched copies only), and
   reset `framework.yaml`'s `required_version` when it excludes the binary.
-  The asset lock is always refreshed.
+  Drifted files the lock never owned — local extensions colliding with
+  embedded paths — are kept and reported, never overwritten. The asset
+  lock is always refreshed.
 - `ox-agent init --integrate` — additionally wire agent-facing access: create
   `.agents/skills` symlinked to `.ox-agent/skills`, `.claude/skills` pointing at
   it, and a managed block in `AGENTS.md`. Idempotent.
