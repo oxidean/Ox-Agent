@@ -79,17 +79,17 @@ jobs:
           manifest=docs/site/manifest.yaml
           [ -f "$manifest" ] || { echo "no docs/site manifest — skipping"; exit 0; }
           ver="${TAG#v}"
-          current="$(sed -nE 's/^version:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/p' "$manifest" | head -1)"
+          current="$(sed -nE 's/^version[[:space:]]*:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/p' "$manifest" | head -1)"
           if [ "$current" = "$ver" ]; then
             echo "manifest already at $ver"
             exit 0
           fi
-          sed -i -E "s/^version: .*/version: \"$ver\"/" "$manifest"
-          # No-op (e.g. an unparsable or already-matching line) must not
-          # hard-fail the tag — the pack version gate is the real check.
+          sed -i -E "s/^version[[:space:]]*:.*/version: \"$ver\"/" "$manifest"
+          # The version line exists but can't be parsed or rewritten — the
+          # tag would carry a stale manifest and the docs pack fails later.
           if git diff --quiet -- "$manifest"; then
-            echo "manifest unchanged — nothing to commit"
-            exit 0
+            echo "::error::could not set docs manifest version to $ver (missing or unparseable version line)"
+            exit 1
           fi
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
