@@ -1,5 +1,10 @@
 # Ox-Agent
 
+[![CI](https://github.com/oxidean/Ox-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/oxidean/Ox-Agent/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/oxidean/Ox-Agent)](https://github.com/oxidean/Ox-Agent/releases/latest)
+[![Go Report Card](https://goreportcard.com/badge/github.com/oxidean/Ox-Agent)](https://goreportcard.com/report/github.com/oxidean/Ox-Agent)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Repository-local, token-efficient AI-SDLC for coding agents.**
 
 Ox-Agent is a globally installed Go CLI that executes the skills, workflows, and
@@ -42,8 +47,8 @@ Install a specific version:
 
 ```bash
 curl -fsSL \
-  https://github.com/oxidean/Ox-Agent/releases/download/v0.1.0/install.sh \
-  | OX_AGENT_VERSION=v0.1.0 bash
+  https://github.com/oxidean/Ox-Agent/releases/download/v0.1.3/install.sh \
+  | OX_AGENT_VERSION=v0.1.3 bash
 ```
 
 Verify the installation:
@@ -105,22 +110,29 @@ work     = what happened
 ## Current CLI
 
 ```text
-ox-agent version                    Show the installed binary version
-ox-agent init [--repair|--integrate] Initialize or repair .ox-agent/
-ox-agent doctor [--fix]             Validate the local Ox-Agent setup
-ox-agent start <title>              Create a work item
-ox-agent status [work-item]         List or inspect work items
-ox-agent transition <wi> <state>    Move along a legal lifecycle edge
-ox-agent advance <wi>               Advance to the next profile stage
-ox-agent run <wi> [--pipeline p]    Dispatch stage skills or a pipeline
-ox-agent run collect <run-id>       Validate and apply a run's output
-ox-agent review <wi> / ship <wi>    Pipeline shortcuts
-ox-agent discuss open|add|...       Durable discussion threads
-ox-agent state replay|explain|events Inspect the event journal
-ox-agent context index|compile      Context index and packets
-ox-agent eval <skill> [--emit]      Score skill eval cases
-ox-agent update [--check]           Self-update the binary
-ox-agent uninstall --yes            Remove the binary
+ox-agent version                        Show the installed binary version
+ox-agent init [--repair|--integrate]    Initialize or repair .ox-agent/
+ox-agent integrate                      Wire AGENTS.md + .agents/.claude skill links
+ox-agent doctor [--fix]                 Validate the local Ox-Agent setup
+ox-agent skills list|check|update|install|uninstall
+                                        Inspect and maintain the skill set
+ox-agent start <title>                  Create a work item
+ox-agent status [work-item]             List or inspect work items
+ox-agent transition|advance|archive|unblock
+                                        Lifecycle control
+ox-agent input request|list|respond|wait|cancel
+                                        Durable human-input requests
+ox-agent run <wi> [--pipeline p]        Dispatch stage skills or a pipeline
+ox-agent run collect <run-id>           Validate and apply a run's output
+ox-agent review <wi> / ship <wi>        Pipeline shortcuts
+ox-agent discuss open|add|summarize|close
+                                        Durable discussion threads
+ox-agent events [work-item]             Journal viewer
+ox-agent state replay|explain           Fold or narrate the event journal
+ox-agent context index|compile          Context index and packets
+ox-agent eval <skill> [--emit]          Score skill eval cases
+ox-agent update [--check|--version v]   Self-update binary (+ project assets)
+ox-agent uninstall --yes                Remove the binary
 ```
 
 See [`docs/cli.md`](docs/cli.md) for the full reference.
@@ -140,13 +152,18 @@ Available in the standalone distribution:
   enforced on both sides.
 - Pipeline DAG execution honoring `policy.budgets.max_parallel_agents`.
 - Durable discussion threads with compacted summaries.
+- Durable human-input requests for async harness hosts — `await_input`
+  leaves runs pending instead of blocking the turn.
+- Harness dispatch through `manual`, `spawn-cli`, and `webhook` adapters.
+- Remote skill installs pinned to a resolved commit SHA with provenance
+  tracked in `remote-skills.lock`.
+- Snapshot-accelerated journal replay.
 - Skill evaluations scored against output schemas and quality assertions.
-- Checksum-verified self-update and uninstall.
+- Checksum-verified self-update and uninstall, with `.ox-agent` asset sync.
 
 Next:
 
-- API harness adapters.
-- Signed release metadata.
+- Protocol-backed harness adapters, added per concrete consumer.
 - Automated discussion summarization.
 - Live harness-backed eval generation.
 
@@ -177,7 +194,7 @@ binary resolves and validates them without requiring a source checkout.
 ```bash
 ox-agent update --check        # report installed vs latest
 ox-agent update                # verify checksum and replace the binary
-ox-agent update --version v0.1.0
+ox-agent update --version v0.1.3
 ox-agent uninstall --yes
 ```
 
@@ -186,6 +203,8 @@ while preserving every repository's `.ox-agent/` state.
 
 ## Documentation
 
+- [`docs/architecture.md`](docs/architecture.md) — system model and contracts.
+- [`docs/getting-started.md`](docs/getting-started.md) — first work-item walkthrough.
 - [`docs/cli.md`](docs/cli.md) — command behavior.
 - [`docs/install.md`](docs/install.md) — installation and platform details.
 - [`docs/releasing.md`](docs/releasing.md) — binary release process.
@@ -199,3 +218,13 @@ while preserving every repository's `.ox-agent/` state.
 - Profiles are managed by policy; agents may not silently downgrade them.
 - The global binary enforces deterministic contracts; reasoning belongs in
   skills and harnesses.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) — report vulnerabilities through GitHub
+Private Vulnerability Reporting. Release assets are checksum-verified and
+signed with cosign (keyless, GitHub OIDC).
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Oxidean.

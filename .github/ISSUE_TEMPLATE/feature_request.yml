@@ -1,0 +1,26 @@
+name: Feature request
+description: A capability ox-agent should have
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that the tool doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should exist? Command surface, file contract, or behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: Concrete trigger
+      description: |
+        Deferred features activate on a concrete consumer, not speculation.
+        What real work needs this today?
