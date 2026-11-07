@@ -1,0 +1,76 @@
+---
+title: Ox-Agent
+description: "Repository-local, token-efficient AI-SDLC for coding agents: a single Go binary plus .ox-agent/ state next to the code."
+---
+
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Ox-Agent (`ox-agent`) is a globally installed Go CLI that executes the
+skills, workflows, and pipelines each repository defines under `.ox-agent/`.
+Project state, standards, work items, and decisions stay local and
+version-controlled; the binary is the only runtime. MIT-licensed.
+
+## Why
+
+- **Repository-local memory**: durable state under `.ox-agent/`, not a
+  service you have to run.
+- **Token-efficient context**: workflows select only the context the
+  current stage needs (`ox-agent context compile`).
+- **Structured work items**: explicit state, progress, and lifecycle
+  records instead of chat scrollback.
+- **Async-chat native**: `await_input` files a durable request and leaves
+  the run pending; a messenger-style host answers minutes or hours later
+  and the run resumes.
+- **One binary**: no npm, Bun, or project-local runtime dependency.
+  Harness adapters (`manual`, `spawn-cli`, `webhook`) are configuration,
+  and orgs can ship a compatible asset set from their own fork.
+
+## The model
+
+```text
+binary   = how execution works
+skill    = what a role does
+workflow = when capabilities apply
+pipeline = how work is ordered
+work     = what happened
+harness  = who executes
+```
+
+The binary never reasons about the work; it resolves configuration,
+enforces schemas, sequences stages, and journals events. The harness, any
+agent that can read a file and write a file, does the reasoning.
+
+## Where to next
+
+<CardGrid>
+	<LinkCard
+		title="Install"
+		href="./install/"
+		description="The binary lands in ~/.local/bin."
+	/>
+	<LinkCard
+		title="Quickstart"
+		href="./quickstart/"
+		description="init, doctor, and your first work item."
+	/>
+	<LinkCard
+		title="CLI surface"
+		href="./cli/"
+		description="Work items, runs, input requests, state replay, context packets."
+	/>
+	<LinkCard
+		title="Architecture"
+		href="./architecture/"
+		description="The model behind the contracts, commands, and files."
+	/>
+	<LinkCard
+		title="oxidean/Ox-Agent"
+		href="https://github.com/oxidean/Ox-Agent"
+		description="Source, releases, and the full docs set."
+	/>
+</CardGrid>
+
+Security reports follow
+[SECURITY.md](https://github.com/oxidean/Ox-Agent/blob/main/SECURITY.md),
+not public issues. The system model and contracts are documented under
+[Architecture](./architecture/).

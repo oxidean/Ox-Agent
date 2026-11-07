@@ -1,0 +1,136 @@
+---
+title: Ox-Agent quickstart
+description: Initialize a repository, validate the setup, and drive your first work item through the dispatch loop.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+<Steps>
+1. From the repository you want to manage:
+
+   ```bash
+   ox-agent init
+   ox-agent doctor
+   ```
+
+   `init` is non-destructive and refuses to overwrite an existing
+   `.ox-agent/`. `ox-agent init --integrate` additionally wires
+   `AGENTS.md` and `.agents/skills` so agent harnesses discover the
+   materialized skills; `doctor` warns when no integration is detected.
+
+2. Open a work item:
+
+   ```bash
+   ox-agent start "Add a health-check endpoint"
+   # → WI-0001: Add a health-check endpoint
+   ```
+
+3. Dispatch the first stage:
+
+   ```bash
+   ox-agent run WI-0001
+   # run_... dispatched (adapter: manual)
+   #   packet:    .ox-agent/runtime/runs/run_.../packet.json
+   #   write result to: .ox-agent/runtime/runs/run_.../output.json
+   ```
+
+   With the default `manual` adapter, hand `packet.json` and the mapped
+   `SKILL.md` to any agent (or work the skill yourself), then write the
+   skill's output JSON to `output.json`.
+
+4. Collect and loop:
+
+   ```bash
+   ox-agent run collect run_...
+   ```
+
+   `collect` validates the output against the skill's
+   `schemas/output.schema.json`, journals the result, and applies its
+   `next_action`. When every skill for the stage is collected the work
+   item auto-advances; `ox-agent advance`, `transition`, `review`, and
+   `ship` move it along the lifecycle. `ox-agent run pending` lists runs
+   still awaiting output.
+</Steps>
+
+Human-gated transitions file a durable approval request when no `--by` is
+given: `ox-agent input list` shows it, and
+`ox-agent input respond IN-0001 --by <you> --approve` completes it
+whenever answered. Automation should treat that exit as "waiting on the
+human", not a failure.
+
+## Pipelines
+
+`review` and `ship` run the bundled pipelines: DAGs of skill steps that
+dispatch every ready step up to `policy.budgets.max_parallel_agents`:
+
+```bash
+ox-agent review WI-0001    # dispatched: code-review → run_...
+ox-agent run pending       # anything awaiting output.json
+ox-agent ship WI-0001      # verify → ship steps in dependency order
+```
+
+Keep invoking the pipeline command and collecting runs until it prints
+`pipeline <name> complete`.
+
+## What lands in the repo
+
+```text
+.ox-agent/
+├── framework.yaml          # binary + schema compatibility (required_version)
+├── config.yaml             # workflow profile, stage_skills
+├── policy.yaml             # autonomy + budgets (max_parallel_agents)
+├── lifecycle/workflow.yaml # states + legal transition edges + gates
+├── skills/                 # materialized skill packages (owned by the binary)
+├── workflows/              # profiles mapping stages to skills
+├── pipelines/              # DAGs of skill steps (review, ship)
+├── integrations/           # harness adapters (manual.yaml default)
+├── context/                # standards, decisions, project.yaml, index
+├── work/{active,archived}/ # work items: index.json + artifacts
+├── state/
+│   ├── events.ndjson       # append-only journal, the state spine
+│   ├── snapshots/          # folded state checkpoints
+│   └── input/              # durable human-input requests
+├── discussions/            # append-only hash-chained threads
+└── runtime/                # generated packets, runs, cache (gitignored)
+```
+
+<Aside type="tip">
+	`.ox-agent/` is meant to be committed. Work items, decisions, and
+	standards are repo history like the code itself. The scaffold's
+	`.gitattributes` marks the event journal and discussion threads
+	`merge=union` so append-only files merge cleanly; `runtime/` is
+	gitignored generated scratch.
+</Aside>
+
+## Maintaining the skill set
+
+```bash
+ox-agent skills list     # every materialized skill: enabled, drift, compat
+ox-agent skills check    # contract-validate every skill
+ox-agent skills update   # restore missing embedded files; --yes overwrites drift
+```
+
+Drop a directory with a `skill.yaml`, `SKILL.md`, and `schemas/` into
+`.ox-agent/skills/` and it becomes a project-local skill; `skills update`
+never touches it. Remote installs via `ox-agent skills install <git-url>`
+are pinned to a resolved commit SHA in `remote-skills.lock`.
+
+## Dispatching to an agent CLI
+
+The `manual` adapter works with anything that can read a file. To dispatch
+directly, add a `spawn-cli` integration
+(`.ox-agent/integrations/myagent.yaml`):
+
+```yaml
+schema_version: 1
+name: myagent
+adapter: spawn-cli
+command: "myagent run --packet {packet} --write-output {output}"
+timeout_seconds: 600
+```
+
+`{packet}`, `{output}`, and `{run_dir}` expand to run-directory paths; the
+command runs with the project root as working directory. Remote execution
+works the same way (`ssh buildbox /opt/run-skill {packet}`) as long as the
+remote side writes `output.json` back before `collect`. The
+[CLI reference](./cli/) covers the full command surface.

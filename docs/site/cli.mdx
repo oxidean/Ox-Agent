@@ -1,0 +1,96 @@
+---
+title: Ox-Agent CLI
+description: "The ox-agent command surface: work items, runs, input requests, skill maintenance, state replay, and self-update."
+---
+
+```text
+ox-agent version                          Show the installed binary version
+ox-agent init [--repair|--sync|--integrate]
+                                          Materialize or repair .ox-agent/
+ox-agent integrate                        Wire AGENTS.md + .agents/.claude links
+ox-agent doctor [--fix]                   Validate the local Ox-Agent setup
+ox-agent start <title>                    Create a work item
+ox-agent status [work-item]               List or inspect work items
+ox-agent transition <wi> <state>          Move along a legal lifecycle edge
+ox-agent advance <wi>                     Advance to the next profile stage
+ox-agent archive|unblock <wi>             Terminal archive / clear a blocker
+ox-agent run <wi>|pending                 Dispatch stage skills; list awaiting
+                                          output
+ox-agent run collect <run-id>             Validate and apply a run's output
+ox-agent review <wi> / ship <wi>          Pipeline shortcuts
+ox-agent input request|list|respond|wait|cancel
+                                          Durable human-input requests
+ox-agent discuss open|list|show|add|summarize|close
+                                          Hash-chained discussion threads
+ox-agent events [work-item]               Journal viewer
+ox-agent state replay|explain             Fold or narrate the event journal
+ox-agent context index|compile            Context index and packets
+ox-agent skills list|check|update         Inspect and repair the skill set
+ox-agent skills install|uninstall         Remote skills pinned to a commit SHA
+ox-agent eval <skill> [--emit]            Score skill eval cases
+ox-agent update [--check|--version v|--binary-only]
+                                          Self-update binary (+ .ox-agent assets)
+ox-agent completion <shell>               Shell completion script
+ox-agent uninstall --yes                  Remove the binary
+```
+
+`run` dispatches the stage-mapped skill through a configured harness
+adapter. `manual` prints packet and output paths for any agent,
+`spawn-cli` executes a command template, and `webhook` POSTs the packet to
+an HTTP(S) endpoint. `run collect` is the contract boundary: output must
+match the skill's `schemas/output.schema.json` or the run is marked
+failed, and the recorded `next_action` (`advance_stage`, `retry`,
+`escalate`, `await_input`, `complete`) decides what happens next.
+
+A run ends in one of three statuses:
+
+- `collected`: the output was applied. Collected runs count toward skill
+  selection, stage completion, and pipeline progress.
+- `retry`: the output signalled unfinished work (`verdict: needs_rework`,
+  `next_action.type: retry`, or an `await_input` request). The skill
+  stays dispatchable; `await_input` leaves the work item in place and
+  records the filed request on the run.
+- `failed`: schema validation failed or the skill reported
+  `status: failed`.
+
+Completion checks use only the latest run per skill or pipeline step: a
+collected run superseded by a newer retry no longer counts, so the skill
+is re-selected after the item is unblocked.
+
+## Harness adapters
+
+A `spawn-cli` integration shells a command template. `{packet}`,
+`{output}`, and `{run_dir}` expand to paths under the run directory, and
+the command runs with the project root as working directory:
+
+```yaml
+schema_version: 1
+name: myagent
+adapter: spawn-cli
+command: "myagent run --packet {packet} --write-output {output}"
+timeout_seconds: 600
+```
+
+A `webhook` integration POSTs the packet JSON to an HTTP(S) endpoint. In
+`async` mode (default) a 2xx acknowledgement leaves the run pending and
+the remote harness writes `output.json` back through the same file
+contract; in `sync` mode a non-empty 2xx response body is stored as
+`output.json`. A bearer token comes from the environment variable named
+by `token_env`, never from the yaml:
+
+```yaml
+schema_version: 1
+name: fleet
+adapter: webhook
+endpoint: https://agents.internal/ox-agent/dispatch
+mode: async
+token_env: FLEET_TOKEN
+timeout_seconds: 60
+```
+
+The flag-level reference is
+[docs/cli.md](https://github.com/oxidean/Ox-Agent/blob/main/docs/cli.md)
+in the repository, alongside
+[getting-started.md](https://github.com/oxidean/Ox-Agent/blob/main/docs/getting-started.md).
+The model these commands serve is covered under
+[Architecture](./architecture/).
