@@ -26,3 +26,8 @@ jobs:
       - run: go build ./cmd/ox-agent
       - run: scripts/check-assets.sh
         shell: bash
+      - name: Check vendored skill scripts parse
+        shell: bash
+        run: |
+          PY=python3; command -v python3 >/dev/null 2>&1 || PY=python
+          find skills -path '*/scripts/*.py' -exec "$PY" -c 'import sys; [compile(open(f,"rb").read(), f, "exec") for f in sys.argv[1:]]' _ {} +

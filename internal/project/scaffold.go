@@ -29,6 +29,9 @@ var defaultSkills = []string{
 	"discover-context", "brainstorm", "specify", "adr", "multi-stage-plan",
 	"tdd", "implementation", "code-review", "verify", "discussion",
 	"progress", "shipping", "retrospective",
+	// Utility skills ship enabled but stay unmapped from stages: agents
+	// invoke them ad hoc, not through stage dispatch.
+	"clean-user-facing-text", "remove-ai-marks",
 }
 
 var defaultStageSkills = map[string][]string{

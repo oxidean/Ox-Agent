@@ -16,9 +16,9 @@ for dir in skills schemas workflows pipelines lifecycle integrations; do
     status=1
     continue
   fi
-  if ! diff -r --exclude='.*' "$dir" "internal/assets/embedded/$dir" > /dev/null 2>&1; then
+  if ! diff -r --exclude='.*' --exclude='__pycache__' --exclude='*.pyc' "$dir" "internal/assets/embedded/$dir" > /dev/null 2>&1; then
     echo "check-assets: drift between $dir and internal/assets/embedded/$dir:" >&2
-    diff -r --exclude='.*' "$dir" "internal/assets/embedded/$dir" | head -30 >&2 || true
+    diff -r --exclude='.*' --exclude='__pycache__' --exclude='*.pyc' "$dir" "internal/assets/embedded/$dir" | head -30 >&2 || true
     status=1
   fi
 done

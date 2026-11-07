@@ -29,6 +29,8 @@ skills:
     - progress
     - shipping
     - retrospective
+    - clean-user-facing-text
+    - remove-ai-marks
   stage_skills:
     discovery:
       - discover-context

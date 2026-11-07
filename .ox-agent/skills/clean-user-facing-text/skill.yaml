@@ -1,0 +1,19 @@
+schema_version: 1
+name: ox-agent/clean-user-facing-text
+version: 0.1.0
+kind: core
+category: text-hygiene
+description: >-
+  Audit and clean authorized prose of suspicious invisible Unicode and
+  AI-cadence markers while preserving facts, meaning, and the writer's voice.
+
+compatibility:
+  skill_api: 1
+  ox_agent: '>=0.1.0-0 <0.2.0'
+inputs:
+  schema: schemas/input.schema.json
+outputs:
+  schema: schemas/output.schema.json
+evaluation:
+  suite: evals/evals.yaml
+  minimum_pass_rate: 0.9
