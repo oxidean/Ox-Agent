@@ -74,11 +74,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release.outputs.tag }}
         run: |
-          if gh api "repos/$GITHUB_REPOSITORY/contents/docs/site/manifest.yaml?ref=$TAG" >/dev/null 2>&1; then
+          err="$(mktemp)"
+          if gh api "repos/$GITHUB_REPOSITORY/contents/docs/site/manifest.yaml?ref=$TAG" >/dev/null 2>"$err"; then
             echo "has_docs=true" >> "$GITHUB_OUTPUT"
-          else
+          elif grep -qiE '404|not found' "$err"; then
             echo "has_docs=false" >> "$GITHUB_OUTPUT"
             echo "::notice::$TAG predates docs/site — skipping docs pack"
+          else
+            cat "$err" >&2
+            echo "::error::docs/site probe failed for $TAG (not a 404) — refusing to guess; retry the release"
+            exit 1
           fi
 
   docs:
@@ -86,7 +91,7 @@ jobs:
     if: needs.docs-check.outputs.has_docs == 'true'
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.5
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.6
     with:
       tag: ${{ needs.release.outputs.tag }}
       product: ox-agent

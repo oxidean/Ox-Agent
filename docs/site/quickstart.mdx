@@ -132,7 +132,10 @@ timeout_seconds: 600
 `{packet}`, `{output}`, and `{run_dir}` expand to run-directory paths; the
 command runs with the project root as working directory. Remote execution
 needs those paths reachable: either a shared filesystem, or a command that
-copies the packet over first — e.g.
-`scp {packet} buildbox:/tmp/ && ssh buildbox /opt/run-skill /tmp/packet.json`
-— and writes `output.json` back to the local run dir before `collect`. The
+copies the packet into a private remote directory and cleans it up —
+e.g.
+`ssh buildbox 'install -d -m 700 ~/.ox-run' && scp "{packet}" buildbox:.ox-run/packet.json && ssh buildbox '/opt/run-skill ~/.ox-run/packet.json; rm -rf ~/.ox-run'`
+— not world-readable `/tmp`, since packets can carry human-input
+answers — and writes `output.json` back to the local run dir before
+`collect`. The
 [CLI reference](./cli/) covers the full command surface.

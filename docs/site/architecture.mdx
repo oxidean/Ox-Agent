@@ -71,7 +71,9 @@ archive      terminal: move work/active -> work/archived
 A **packet** (`runtime/runs/<run-id>/packet.json`) is the harness
 contract: `{skill, work_item_id, context, constraints, output: {path,
 schema}}`, with `prior_outputs` and `inputs` nested under `context`. The
-harness writes `output.json` at the declared path; `collect` validates it
+harness writes `output.json` at `output.path`, resolved against
+`.ox-agent/` — not the project root the harness runs from; `collect`
+validates it
 against `schemas/output.schema.json` and honors `next_action`
 (`advance_stage | retry | escalate | await_input | complete`).
 
@@ -79,8 +81,10 @@ against `schemas/output.schema.json` and honors `next_action`
 `await_input`, `run collect` files a durable request under `state/input/`
 and marks the run `retry` — collection only accepts `pending` runs, so a
 second `collect` on that run fails. Answer with `input respond`, then
-dispatch a fresh `run`: the new packet carries the answer in
-`context.inputs`.
+dispatch a fresh `run` — for pipeline steps use `review`, `ship`, or
+`run --pipeline <name>` instead, since a plain `run` produces a run
+without the pipeline and step identifiers the pipeline counts on. The
+new packet carries the answer in `context.inputs`.
 
 ## The event journal
 

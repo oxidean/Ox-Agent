@@ -22,6 +22,9 @@ on:
         default: ""
         type: string
 
+# Minimal default — jobs that need the token declare it themselves.
+permissions: {}
+
 jobs:
   guard:
     runs-on: ubuntu-latest
@@ -34,13 +37,16 @@ jobs:
           # Dispatch inputs reach the reusable call as text — validate the tag
           # shape before it can carry anything else into a run step.
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must be a stable vX.Y.Z tag"; exit 1; }
-          [[ -z "$SRC_REF" || "$SRC_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "::error::invalid src_ref charset"; exit 1; }
+          # Restricted to protected refs: a fork PR ref would pack arbitrary
+  # content into a release asset — the manifest gate checks a version
+  # field, not content provenance.
+  [[ -z "$SRC_REF" || "$SRC_REF" =~ ^(main|master|v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*)$ ]] || { echo "::error::src_ref must be main, master, or a vX.Y.Z tag"; exit 1; }
 
   pack:
     needs: guard
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.5
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.6
     with:
       tag: ${{ inputs.tag }}
       src-ref: ${{ inputs.src_ref }}
