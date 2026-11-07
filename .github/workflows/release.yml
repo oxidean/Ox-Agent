@@ -60,8 +60,30 @@ jobs:
   # tag is released via the explicit release.yml dispatch, so this job covers
   # that path and manual tag pushes alike. Running after goreleaser also
   # guarantees the Release the bundle attaches to already exists.
-  docs:
+  docs-check:
     needs: release
+    runs-on: ubuntu-latest
+    outputs:
+      has_docs: ${{ steps.check.outputs.has_docs }}
+    steps:
+      # Tags that predate docs/site cannot carry a bundle — the pack would
+      # fail the manifest gate — so they skip the docs job instead of
+      # failing an otherwise-green re-release.
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/contents/docs/site/manifest.yaml?ref=$TAG" >/dev/null 2>&1; then
+            echo "has_docs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_docs=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG predates docs/site — skipping docs pack"
+          fi
+
+  docs:
+    needs: [release, docs-check]
+    if: needs.docs-check.outputs.has_docs == 'true'
     permissions:
       contents: write
     uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.4

@@ -67,6 +67,29 @@ jobs:
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "tag=v$(awk -F. '{ $3 += 1; print $1 "." $2 "." $3 }' <<< "${latest#v}")" >> "$GITHUB_OUTPUT"
 
+      # The docs bundle packs from the tagged commit and its manifest version
+      # must equal the tag, so the manifest is bumped in a release commit on
+      # main first — the tag below then points at a tree that passes the gate.
+      - name: Sync docs manifest version
+        if: steps.next.outputs.tag != ''
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -euo pipefail
+          manifest=docs/site/manifest.yaml
+          [ -f "$manifest" ] || { echo "no docs/site manifest — skipping"; exit 0; }
+          ver="${TAG#v}"
+          current="$(sed -nE 's/^version: "?(.*)"?$/\1/p' "$manifest" | head -1)"
+          if [ "$current" = "$ver" ]; then
+            echo "manifest already at $ver"
+            exit 0
+          fi
+          sed -i -E "s/^version: .*/version: \"$ver\"/" "$manifest"
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -am "chore(release): bump docs manifest to $ver"
+          git push origin HEAD:main
+
       - name: Create and push tag
         if: steps.next.outputs.tag != ''
         run: |

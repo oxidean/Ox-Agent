@@ -6,7 +6,9 @@ name: docs site release
 # release.yml explicitly, so the docs job rides the same run). This workflow
 # remains for one-off re-attach and for bootstrapping docs bundles onto
 # releases that predate docs/site — dispatch with `tag` = target release and
-# `src_ref` = a ref that carries docs/site (e.g. main).
+# `src_ref` = a ref whose docs/site manifest carries the same version as
+# the target tag — the pack gate rejects a version mismatch, so pick a ref
+# cut right after the docs PR for that version merged.
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +17,7 @@ on:
         required: true
         type: string
       src_ref:
-        description: Ref supplying docs/site content when the tag predates it (default = tag)
+        description: Ref supplying docs/site when the tag predates it; its manifest version must match the tag (default = tag)
         required: false
         default: ""
         type: string

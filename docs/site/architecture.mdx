@@ -68,23 +68,26 @@ transition   any legal lifecycle edge; gates may require --by approver
 archive      terminal: move work/active -> work/archived
 ```
 
-A **packet** (`runtime/packets/<wi>/<run>.json`) is the harness contract:
-`{skill, work_item_id, context, constraints, output: {path, schema},
-prior_outputs}`. The harness writes `output.json` at the declared path;
-`collect` validates it against `schemas/output.schema.json` and honors
-`next_action` (`advance_stage | retry | escalate | await_input | complete`).
+A **packet** (`runtime/runs/<run-id>/packet.json`) is the harness
+contract: `{skill, work_item_id, context, constraints, output: {path,
+schema}}`, with `prior_outputs` and `inputs` nested under `context`. The
+harness writes `output.json` at the declared path; `collect` validates it
+against `schemas/output.schema.json` and honors `next_action`
+(`advance_stage | retry | escalate | await_input | complete`).
 
-**Await input** is the async-chat path: instead of blocking, `run` files a
-durable request under `state/input/`, leaves the run pending, and exits; a
-messenger-style host can answer minutes or hours later via `input
-respond`, then `run collect` resumes.
+**Await input** is the async-chat path: when a skill returns
+`await_input`, `run collect` files a durable request under `state/input/`
+and marks the run `retry` — collection only accepts `pending` runs, so a
+second `collect` on that run fails. Answer with `input respond`, then
+dispatch a fresh `run`: the new packet carries the answer in
+`context.inputs`.
 
 ## The event journal
 
 `state/events.ndjson` is append-only and committed (`.gitattributes`
 applies `merge=union`). Every mutation journals an event:
-`work_item.created | transitioned | shipped`, `skill.dispatched |
-collected`, `pipeline.started | step_ready | completed`,
+`work_item.created | transitioned | shipped`, `skill.invoked |
+completed`, `pipeline.started | step_ready | completed`,
 `input.requested | scoped | answered`, `discussion.*`,
 `snapshot.written`, `eval.completed`, and more.
 

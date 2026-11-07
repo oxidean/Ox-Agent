@@ -131,6 +131,8 @@ timeout_seconds: 600
 
 `{packet}`, `{output}`, and `{run_dir}` expand to run-directory paths; the
 command runs with the project root as working directory. Remote execution
-works the same way (`ssh buildbox /opt/run-skill {packet}`) as long as the
-remote side writes `output.json` back before `collect`. The
+needs those paths reachable: either a shared filesystem, or a command that
+copies the packet over first — e.g.
+`scp {packet} buildbox:/tmp/ && ssh buildbox /opt/run-skill /tmp/packet.json`
+— and writes `output.json` back to the local run dir before `collect`. The
 [CLI reference](./cli/) covers the full command surface.
