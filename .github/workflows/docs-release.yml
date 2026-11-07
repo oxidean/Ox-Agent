@@ -14,6 +14,9 @@ jobs:
   pack:
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.1
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.2
     with:
       tag: ${{ inputs.tag || github.ref_name }}
+      product: ox-agent
+    secrets:
+      site_dispatch_token: ${{ secrets.DOCS_SITE_DISPATCH_TOKEN }}
