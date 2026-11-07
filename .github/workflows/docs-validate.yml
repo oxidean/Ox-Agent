@@ -1,0 +1,12 @@
+name: docs site
+
+on:
+  pull_request:
+    paths:
+      - docs/site/**
+      - .github/workflows/docs-validate.yml
+permissions:
+  contents: read
+jobs:
+  validate:
+    uses: oxidean/docs-manifest/.github/workflows/validate.yml@v0.1.1

@@ -82,4 +82,6 @@ gh release delete v0.1.0 --yes
 gh workflow run release.yml -f tag=v0.1.0
 ```
 
+`version:` in `docs/site/manifest.yaml` must match the tag being cut: bump it before tagging (for auto-tagged merges, before the merge), because `docs-release.yml` packs a docs bundle for every `v*` tag and hard-fails on a mismatch.
+
 The previous npm/GitHub Packages release process is retired.

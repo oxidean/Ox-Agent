@@ -1,0 +1,19 @@
+name: docs site release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the docs bundle to (e.g. v0.1.7)
+        required: true
+        type: string
+jobs:
+  pack:
+    permissions:
+      contents: write
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.1
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
