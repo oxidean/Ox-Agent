@@ -26,13 +26,13 @@ jobs:
         run: echo "tag=${INPUT_TAG:-$EVENT_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag }}
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -45,7 +45,7 @@ jobs:
         uses: sigstore/cosign-installer@v4.1.3
 
       - name: Release binary artifacts
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: '~> v2'

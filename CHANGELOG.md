@@ -8,6 +8,37 @@ work and minor-release summaries.
 
 ## [Unreleased]
 
+### Added
+
+- **Text-hygiene skills** — `clean-user-facing-text` and `remove-ai-marks`
+  now ship in the embedded skill set (utility skills: enabled by default,
+  unmapped from stages). They were previously vendored ad hoc into
+  `.ox-agent/skills/` downstream; the toolkit is now their managed source.
+- Vendored script checks: `internal/assets` tests exercise the embedded
+  Python tooling (binary guards, backup/mode handling, Unicode caps) and the
+  service pin verification end-to-end; CI also parse-checks `skills/*/scripts`.
+
+### Fixed (CodeRabbit on downstream vendors, applied at source)
+
+- `common.py` — ASCII-magic signatures (`BM`, `RIFF`, `OTTO`, `GIF8`, `wOFF*`,
+  `OggS`, `BZh`, `8BPS`, `%PDF-`) validate container structure before refusing
+  text (BMW/BMI/BM25/RIFF/OTTO-prefixed prose is no longer refused); stdout
+  uses `surrogateescape` so undecodable bytes round-trip; in-place writes
+  preserve the existing file's mode and xattrs; `.bak` handling refuses
+  symlinked/non-regular targets and always backs up current input under the
+  next free `.bakN` slot.
+- `score_stylometry.py` — `--force-text` flag parity with `inspect`/`clean`.
+- `text_unicode.py` — flag tag sequences restricted to recognized RGI
+  subdivision flags (tag-encoded text now strips instead of passing);
+  consecutive same-script invisibles capped (Mongolian FVS 1, Khmer inherent
+  vowels 1, Hangul fillers 2) with excess reported as `excess_script_glue`.
+- `oxidean-watermarks-service.sh` — cloned checkout verified against a
+  trusted commit pin (`WATERMARKS_PIN_COMMIT`) before any service code runs.
+- Docs: Gemini API text output **is** SynthID-watermarked (the cited forum
+  answer was corrected by its author) — vendor notes, detectors reference,
+  and SKILL.md corrected; `uncalibrated` density tier now has an explicit
+  rewrite rule.
+
 ## [0.1.3] - 2026-11-07
 
 ### Added

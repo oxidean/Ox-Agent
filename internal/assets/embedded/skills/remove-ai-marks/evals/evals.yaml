@@ -1,0 +1,28 @@
+schema_version: 1
+skill: ox-agent/remove-ai-marks
+cases:
+  - id: classify-marks
+    prompt: >-
+      Inventory the provided files for AI provenance marks and classify each
+      as Layer A Unicode, Layer B statistical, or container metadata before
+      any removal.
+    expected:
+      output_schema_valid: true
+      layers_classified: true
+  - id: honest-claims
+    prompt: >-
+      Remove detectable marks from the supplied text and metadata, reporting
+      clearly which removals are verified and which are best-effort.
+    expected:
+      output_schema_valid: true
+      no_unverifiable_claims: true
+  - id: respects-scope
+    prompt: >-
+      Execute the skill using only the supplied work-item context and
+      constraints.
+    expected:
+      output_schema_valid: true
+      preserves_scope: true
+thresholds:
+  schema_pass_rate: 1.0
+  quality_pass_rate: 0.9

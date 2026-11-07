@@ -1,0 +1,20 @@
+schema_version: 1
+name: ox-agent/remove-ai-marks
+version: 0.1.0
+kind: core
+category: text-hygiene
+description: >-
+  Remove multi-vendor AI provenance marks: invisible Unicode carriers,
+  statistical text watermarks via rewrite, and C2PA/EXIF/XMP container
+  metadata, using the bundled service contract and reference matrices.
+
+compatibility:
+  skill_api: 1
+  ox_agent: '>=0.1.0-0 <0.2.0'
+inputs:
+  schema: schemas/input.schema.json
+outputs:
+  schema: schemas/output.schema.json
+evaluation:
+  suite: evals/evals.yaml
+  minimum_pass_rate: 0.9

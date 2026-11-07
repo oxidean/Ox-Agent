@@ -12,7 +12,7 @@ for dir in skills schemas workflows pipelines lifecycle integrations; do
   fi
   rm -rf "internal/assets/embedded/$dir"
   mkdir -p "internal/assets/embedded/$dir"
-  (cd "$dir" && find . -type f -not -name '.*' -print0 | while IFS= read -r -d '' file; do
+  (cd "$dir" && find . -type f -not -name '.*' -not -path '*/__pycache__/*' -not -name '*.pyc' -print0 | while IFS= read -r -d '' file; do
     mkdir -p "../internal/assets/embedded/$dir/$(dirname "$file")"
     cp "$file" "../internal/assets/embedded/$dir/$file"
   done)
