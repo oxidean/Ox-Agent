@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/oxidean/Ox-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/oxidean/Ox-Agent/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/oxidean/Ox-Agent)](https://github.com/oxidean/Ox-Agent/releases/latest)
-[![Go Report Card](https://goreportcard.com/badge/github.com/oxidean/Ox-Agent)](https://goreportcard.com/report/github.com/oxidean/Ox-Agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Repository-local, token-efficient AI-SDLC for coding agents.**
