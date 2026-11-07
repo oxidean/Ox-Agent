@@ -167,10 +167,8 @@ func TestPlanPipelineChainsPlanBeforeValidate(t *testing.T) {
 	if len(validate.DependsOn) != 1 || validate.DependsOn[0] != "plan" {
 		t.Fatalf("validate depends_on = %v; want [plan]", validate.DependsOn)
 	}
-	for _, dep := range plan.DependsOn {
-		if dep != "specify" {
-			t.Fatalf("plan depends_on = %v; want [specify]", plan.DependsOn)
-		}
+	if len(plan.DependsOn) != 1 || plan.DependsOn[0] != "specify" {
+		t.Fatalf("plan depends_on = %v; want [specify]", plan.DependsOn)
 	}
 	for _, id := range []string{"discover", "brainstorm", "specify"} {
 		seedRun(t, root, "run_"+id, item.ID, "plan", id, "collected")
