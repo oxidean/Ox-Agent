@@ -19,9 +19,13 @@
 set -euo pipefail
 
 WM_URL="${WATERMARKS_SERVICE_URL:-http://127.0.0.1:8765}"
-WM_PORT=8765
 if [[ "$WM_URL" =~ ^[a-zA-Z]+://[^/]+:([0-9]+)(/.*)?$ ]]; then
   WM_PORT="${BASH_REMATCH[1]}"
+else
+  # Without an explicit port the health check would probe the scheme default
+  # (80/443) while the server binds a different port: a guaranteed timeout.
+  echo "error: WATERMARKS_SERVICE_URL must include an explicit port (got: $WM_URL)" >&2
+  exit 2
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OXIDEAN_ROOT="${OXIDEAN_ROOT:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
@@ -62,7 +66,14 @@ verify_checkout() {
   # HEAD alone is not proof of the code that runs: a modified tracked file or
   # an untracked file (e.g. a dropped-in sitecustomize.py) changes what
   # `python3 service/scripts/server.py` executes while rev-parse still passes.
-  if [[ -n "$(git -C "$CHECKOUT" status --porcelain 2>/dev/null)" ]]; then
+  # A failed `git status` must not read as clean, and -uall overrides any
+  # status.showUntrackedFiles=no config that would hide dropped-in files.
+  local porcelain
+  if ! porcelain="$(git -C "$CHECKOUT" status --porcelain --untracked-files=all 2>/dev/null)"; then
+    echo "error: cannot determine working-tree state of $CHECKOUT" >&2
+    return 1
+  fi
+  if [[ -n "$porcelain" ]]; then
     echo "error: $CHECKOUT has a dirty working tree (modified or untracked files)" >&2
     echo "refusing to run unverified service code; reset the checkout to $PIN_TAG" >&2
     return 1
@@ -109,7 +120,10 @@ ensure() {
     return 0
   fi
 
-  ensure_checkout
+  # Bash clears errexit inside the $(ensure) command substitution, so a bare
+  # `ensure_checkout` that fails would not abort: ensure would still launch the
+  # (unverified or missing) server. Propagate explicitly.
+  ensure_checkout || return 1
 
   mkdir -p "$STATE_DIR"
   : >"$LOG_FILE"
@@ -150,15 +164,19 @@ teardown() {
   local started pid
   started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_by_us", False))' "$STATE_FILE")"
   pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("pid") or "")' "$STATE_FILE")"
-  rm -f "$STATE_FILE"
   if [[ "$started" != "True" && "$started" != "true" ]]; then
+    rm -f "$STATE_FILE"
     echo "LEFT_RUNNING"
     return 0
   fi
+  # Stop first, then remove the state file: a signal arriving between the two
+  # would otherwise leave the trap's teardown nothing to act on, stranding a
+  # running server with no record.
   if [[ -n "$pid" && "$pid" != "None" && "$pid" != "null" ]] && is_our_server "$pid"; then
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   fi
+  rm -f "$STATE_FILE"
   echo "STOPPED"
 }
 

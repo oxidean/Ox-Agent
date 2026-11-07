@@ -90,7 +90,7 @@
     "skills/remove-ai-marks/references/vendor-notes.md": "sha256:ef5e5c20dcc50576a0610d7e3171cbe7d8d07d15706599c18dfebacd796e67f4",
     "skills/remove-ai-marks/schemas/input.schema.json": "sha256:c7124f9971a479f1544c42932381aabe4905bbb89aca959d04c6948db35d30e5",
     "skills/remove-ai-marks/schemas/output.schema.json": "sha256:e50d882fe01bbb5bf72512482d75fe9089f6a547e12e695891ec1a2d72aa3312",
-    "skills/remove-ai-marks/scripts/oxidean-watermarks-service.sh": "sha256:162d1f5dffd5ca56a79bc298b82fa3f75e10fb14c409a21572101e4b53ce9e3b",
+    "skills/remove-ai-marks/scripts/oxidean-watermarks-service.sh": "sha256:8569b9f413dd41349922eec58fca601ca3a5bc14180f179e845a163456f1b1a8",
     "skills/remove-ai-marks/skill.yaml": "sha256:87817ac629afdfcb2859bcec4a45a92c5e26adf7a735f25f8ab44b3c1b6f2242",
     "skills/retrospective/SKILL.md": "sha256:b5556d336e96dc4aca0aec22035603dde40f4abf9b43073355415caa712471c8",
     "skills/retrospective/evals/evals.yaml": "sha256:5dc99f1e3a6e573d51db1ea3c377d6bfb3079f1f67f1990d8f12bbfa0f67dd49",
