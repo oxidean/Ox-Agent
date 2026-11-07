@@ -26,7 +26,7 @@ jobs:
         run: echo "tag=${INPUT_TAG:-$EVENT_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag }}
           fetch-depth: 0
