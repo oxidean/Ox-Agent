@@ -23,10 +23,24 @@ on:
         type: string
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TAG: ${{ inputs.tag }}
+          SRC_REF: ${{ inputs.src_ref }}
+        run: |
+          set -euo pipefail
+          # Dispatch inputs reach the reusable call as text — validate the tag
+          # shape before it can carry anything else into a run step.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must be a stable vX.Y.Z tag"; exit 1; }
+          [[ -z "$SRC_REF" || "$SRC_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "::error::invalid src_ref charset"; exit 1; }
+
   pack:
+    needs: guard
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.4
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.5
     with:
       tag: ${{ inputs.tag }}
       src-ref: ${{ inputs.src_ref }}

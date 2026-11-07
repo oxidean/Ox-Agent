@@ -86,7 +86,7 @@ jobs:
     if: needs.docs-check.outputs.has_docs == 'true'
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.4
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.5
     with:
       tag: ${{ needs.release.outputs.tag }}
       product: ox-agent
