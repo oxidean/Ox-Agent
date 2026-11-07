@@ -1,26 +1,47 @@
 name: Feature request
-description: A capability ox-agent should have
-title: "feat: "
+description: Suggest an idea or improvement for ox-agent.
+title: "[Feature]: "
 labels: [enhancement]
 body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What are you trying to do that the tool doesn't support today?
+      label: What problem does this solve?
+      description: Who is affected, and what can they not do today? Deferred features activate on a concrete consumer — name the real work that needs this.
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposal
-      description: What should exist? Command surface, file contract, or behavior.
+      label: Proposed solution
+      description: What should ox-agent do? Command surface, file contracts, packet shapes, and examples all help.
     validations:
       required: true
   - type: textarea
-    id: trigger
+    id: alternatives
     attributes:
-      label: Concrete trigger
-      description: |
-        Deferred features activate on a concrete consumer, not speculation.
-        What real work needs this today?
+      label: Alternatives considered
+      description: Workarounds you use today, or other designs you ruled out.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - CLI commands (init, doctor, run, collect, ...)
+        - Skills, workflows, or pipelines
+        - Project state / events journal
+        - Install scripts (install.sh / install.ps1)
+        - Update / releases
+        - Harness integrations
+        - Documentation
+        - Other
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the roadmap for duplicates.
+          required: true
+        - label: I am interested in contributing this myself (see CONTRIBUTING.md).
+          required: false

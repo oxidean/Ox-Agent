@@ -1,8 +1,14 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Security vulnerability
-    url: https://github.com/oxidean/Ox-Agent/security/advisories/new
-    about: Report vulnerabilities privately — do not file a public issue.
+  - name: Contributor guide
+    url: https://github.com/oxidean/Ox-Agent/blob/main/CONTRIBUTING.md
+    about: Development setup, PR conventions, and verification steps. Start here before opening a PR.
   - name: Documentation
     url: https://github.com/oxidean/Ox-Agent/tree/main/docs
-    about: Check the docs before filing — CLI reference, install, and releasing.
+    about: CLI reference, install, releasing, and architecture.
+  - name: Security vulnerability
+    url: https://github.com/oxidean/Ox-Agent/security/advisories/new
+    about: Report vulnerabilities privately via GitHub Private Vulnerability Reporting — do not file a public issue.
+  - name: Oxidean website
+    url: https://oxidean.dev
+    about: Product overview and other Oxidean projects.
