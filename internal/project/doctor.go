@@ -284,7 +284,7 @@ func (r *DoctorReport) checkLifecycle(base string) {
 		if tr.From != "*" && !states[tr.From] {
 			bad = append(bad, "from:"+tr.From)
 		}
-		if tr.To != "*" && !states[tr.To] {
+		if tr.To != "*" && tr.To != "blocked_from" && !states[tr.To] {
 			bad = append(bad, "to:"+tr.To)
 		}
 	}

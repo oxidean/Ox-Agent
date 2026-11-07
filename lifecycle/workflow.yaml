@@ -37,6 +37,6 @@ transitions:
   - from: "*"
     to: blocked
   - from: blocked
-    to: "*"
+    to: blocked_from
   - from: "*"
     to: archived

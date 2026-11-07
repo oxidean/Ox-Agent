@@ -97,9 +97,9 @@ func (item *WorkItem) Transition(root, to, actor, approver, reason string) error
 	if from == "blocked" && item.BlockedFrom != "" && to != item.BlockedFrom {
 		return fmt.Errorf("%s is blocked from %s; unblock it or archive it", item.ID, item.BlockedFrom)
 	}
-	gate, ok := life.Find(from, to)
+	gate, ok := life.Find(from, to, item.BlockedFrom)
 	if !ok {
-		targets := life.LegalTargets(from)
+		targets := life.LegalTargets(from, item.BlockedFrom)
 		return fmt.Errorf("transition %s → %s is not legal (from %s: %s)", from, to, from, strings.Join(targets, ", "))
 	}
 	if gate == "human" && approver == "" {
@@ -169,7 +169,7 @@ func (item *WorkItem) Archive(root, actor, approver, reason string) error {
 	if err != nil {
 		return err
 	}
-	gate, ok := life.Find(item.State, "archived")
+	gate, ok := life.Find(item.State, "archived", item.BlockedFrom)
 	if !ok {
 		return fmt.Errorf("%s cannot be archived from state %s", item.ID, item.State)
 	}
@@ -284,7 +284,7 @@ func (item *WorkItem) Advance(root, actor string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		gate, legal := life.Find(item.State, target)
+		gate, legal := life.Find(item.State, target, item.BlockedFrom)
 		if !legal {
 			return "", fmt.Errorf("no lifecycle path %s → %s; transition the work item manually", item.State, target)
 		}

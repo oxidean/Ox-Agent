@@ -56,12 +56,24 @@ func LoadLifecycle(root string) (*Lifecycle, error) {
 }
 
 // Find reports whether the transition from→to is legal and returns the gate
-// required on the edge, if any. A "*" endpoint is constrained by target:
-// nothing leaves archived, and shipped items cannot become blocked.
-func (l *Lifecycle) Find(from, to string) (gate string, ok bool) {
+// required on the edge, if any. A "*" source is constrained by target:
+// nothing leaves archived, and shipped items cannot become blocked. The
+// symbolic "blocked_from" target resolves against blockedFrom — the state the
+// work item recorded when it entered blocked — so a blocked item can only
+// return to where it was blocked from (terminal gates still apply there).
+// Wildcard targets are not supported: a "*" in to never matches.
+func (l *Lifecycle) Find(from, to, blockedFrom string) (gate string, ok bool) {
 	for _, tr := range l.Transitions {
 		fromOK := tr.From == from || (tr.From == "*" && wildcardFrom(from, to))
-		toOK := tr.To == to || (tr.To == "*" && wildcardTo(to))
+		var toOK bool
+		switch tr.To {
+		case "blocked_from":
+			toOK = from == "blocked" && blockedFrom != "" && to == blockedFrom
+		case "*":
+			toOK = false
+		default:
+			toOK = tr.To == to
+		}
 		if fromOK && toOK && from != to {
 			return tr.Gate, true
 		}
@@ -80,22 +92,14 @@ func wildcardFrom(from, to string) bool {
 	return true
 }
 
-// wildcardTo reports whether a "*" target edge may enter to. Wildcard targets
-// only reach ordinary in-flight states, not terminal or side states.
-func wildcardTo(to string) bool {
-	switch to {
-	case "blocked", "shipped", "archived":
-		return false
-	}
-	return true
-}
-
 // LegalTargets lists the states reachable from from in one transition.
-func (l *Lifecycle) LegalTargets(from string) []string {
+// blockedFrom carries the work item's recorded blocked_from state so the
+// blocked return edge resolves to the origin state.
+func (l *Lifecycle) LegalTargets(from, blockedFrom string) []string {
 	var targets []string
 	seen := map[string]bool{}
 	for _, state := range l.States {
-		if _, ok := l.Find(from, state); ok && !seen[state] {
+		if _, ok := l.Find(from, state, blockedFrom); ok && !seen[state] {
 			targets = append(targets, state)
 			seen[state] = true
 		}
