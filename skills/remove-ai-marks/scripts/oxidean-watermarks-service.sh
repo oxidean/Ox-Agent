@@ -41,12 +41,32 @@ health_ok() {
   curl -sf --max-time 2 "${WM_URL}/health" >/dev/null 2>&1
 }
 
-is_our_server() {
-  # PID files outlive processes; the OS may reuse the PID. Only treat the PID
-  # as ours when it still belongs to the service this script can start.
-  case "$(ps -p "$1" -o args= 2>/dev/null)" in
-    *service/scripts/server.py*) return 0 ;;
-  esac
+# Ownership is a three-state question: 0 = confirmed ours, 1 = confirmed
+# gone (exited or the PID was recycled), 2 = alive but identity unverifiable.
+# Callers must signal only on 0 and must keep ownership records on 2.
+server_state() {
+  local pid="$1" args=""
+  if [[ -d "/proc/$pid" ]]; then
+    if [[ -r "/proc/$pid/cmdline" ]]; then
+      # stderr first: the process may exit between the -r test and the read,
+      # and a failed "<" redirect reports before a later 2>/dev/null applies.
+      args="$(tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline" || true)"
+      case "$args" in
+        *service/scripts/server.py*) return 0 ;;
+      esac
+    fi
+    return 1  # entry exists but isn't our server (incl. zombies/recycled PIDs)
+  fi
+  [[ -d /proc ]] && return 1  # procfs present, entry absent: process is gone
+  # No procfs (macOS, minimal images): ps identifies, kill -0 verifies liveness.
+  if args="$(ps -p "$pid" -o args= 2>/dev/null)"; then
+    case "$args" in
+      *service/scripts/server.py*) return 0 ;;
+      "") ;;                    # empty args: fall through to liveness check
+      *) return 1 ;;            # alive, verifiably not ours: recycled PID
+    esac
+  fi
+  kill -0 "$pid" 2>/dev/null && return 2
   return 1
 }
 
@@ -110,9 +130,16 @@ ensure() {
       local started pid
       started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_by_us", False))' "$STATE_FILE")"
       pid="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])).get("pid"); print(p if p not in (None, "null") else "")' "$STATE_FILE")"
-      if [[ "$started" == "True" || "$started" == "true" ]] && [[ -n "$pid" ]] && is_our_server "$pid"; then
-        echo "REUSED"
-        return 0
+      if [[ "$started" == "True" || "$started" == "true" ]] && [[ -n "$pid" ]]; then
+        local st=0
+        server_state "$pid" || st=$?
+        # Confirmed-gone is the only state that drops the claim: teardown
+        # re-verifies before signalling, so keeping it when unverifiable is
+        # safe, while losing it would orphan a server we still own.
+        if [[ "$st" -ne 1 ]]; then
+          echo "REUSED"
+          return 0
+        fi
       fi
     fi
     write_state false null
@@ -172,20 +199,33 @@ teardown() {
   # Stop first, then remove the state file: a signal arriving between the two
   # would otherwise leave the trap's teardown nothing to act on, stranding a
   # running server with no record.
-  if [[ -n "$pid" && "$pid" != "None" && "$pid" != "null" ]] && is_our_server "$pid"; then
-    kill "$pid" 2>/dev/null || true
-    # `wait` only works on our own children; this server was started by an
-    # earlier shell. Poll instead — is_our_server also guards against PID
-    # reuse, so it stops being true once the process is gone.
-    local i=0
-    while is_our_server "$pid"; do
-      if (( i >= 40 )); then
-        echo "error: watermarks service pid $pid still running after SIGTERM; state kept for retry" >&2
+  if [[ -n "$pid" && "$pid" != "None" && "$pid" != "null" ]]; then
+    local st=0
+    server_state "$pid" || st=$?
+    case "$st" in
+      0)
+        kill "$pid" 2>/dev/null || true
+        # `wait` only works on our own children; this server was started by
+        # an earlier shell. Poll server_state until confirmed-gone (1); an
+        # indeterminate (2) check counts as "not proven dead".
+        local i=0
+        while (( i < 40 )); do
+          server_state "$pid" || st=$?
+          [[ "$st" -eq 1 ]] && break
+          sleep 0.25
+          (( i++ )) || true
+        done
+        if [[ "$st" -ne 1 ]]; then
+          echo "error: watermarks service pid $pid not confirmed stopped; state kept for retry" >&2
+          return 1
+        fi
+        ;;
+      1) ;;  # already confirmed gone
+      2)
+        echo "error: cannot verify watermarks service pid $pid identity; not signalled, state kept" >&2
         return 1
-      fi
-      sleep 0.25
-      (( i++ )) || true
-    done
+        ;;
+    esac
   fi
   rm -f "$STATE_FILE"
   echo "STOPPED"
