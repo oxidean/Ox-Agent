@@ -41,10 +41,81 @@
       "type": "string"
     },
     "artifacts": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      },
+      "description": "Paths (or {path, ...} objects) of files the review produced or touched."
     },
     "findings": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "severity",
+          "message",
+          "citation"
+        ],
+        "properties": {
+          "severity": {
+            "enum": [
+              "critical",
+              "major",
+              "minor",
+              "trivial",
+              "info"
+            ],
+            "description": "Review severity rank \u2014 findings are expected severity-ranked."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "citation": {
+            "type": "string",
+            "pattern": "\\S+:\\d+",
+            "description": "file:line citation for the finding."
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "eval": {
+      "type": "object",
+      "properties": {
+        "reviewed_changed_paths": {
+          "type": "boolean"
+        },
+        "findings_cited": {
+          "type": "boolean"
+        },
+        "severity_ranked": {
+          "type": "boolean"
+        },
+        "preserves_scope": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Self-reported quality flags \u2014 only the declared flags are meaningful; misspellings are rejected."
     },
     "next_action": {
       "type": "object",
@@ -77,5 +148,91 @@
       },
       "additionalProperties": true
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "enum": [
+              "pass",
+              "pass_with_notes"
+            ]
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_action": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "advance_stage",
+                  "complete"
+                ]
+              }
+            },
+            "description": "a passing verdict may only advance the stage or complete the run"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "needs_rework"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_action": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "retry",
+                  "escalate"
+                ]
+              }
+            },
+            "description": "needs_rework must retry the run or escalate \u2014 never advance"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "blocked"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_action": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "escalate",
+                  "await_input"
+                ]
+              }
+            },
+            "description": "a blocked verdict escalates or files an input request"
+          }
+        }
+      }
+    }
+  ]
 }

@@ -8,6 +8,22 @@ work and minor-release summaries.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Lifecycle gate bypass** — `blocked → "*"` let a work item route
+  `shipping → blocked → shipped` without the human gate and could resurrect
+  archived items. The blocked return edge is now the symbolic
+  `blocked → blocked_from`, resolved against the item's recorded origin;
+  wildcard targets are no longer supported (`to: "*"` fails schema
+  validation and never matches at runtime). (#30)
+- **Plan pipeline** — `plan.yaml` now includes a `multi-stage-plan` step at
+  the planning stage that `validate` depends on, so `verify` receives the
+  plan artifact it checks instead of running with no upstream output. (#31)
+- **Code-review output contract** — `verdict` is now coupled to
+  `next_action.type` (`needs_rework` can no longer advance a stage),
+  findings require a severity rank and a `file:line` citation, artifacts are
+  typed, and `eval` rejects undeclared or non-boolean quality flags. (#32)
+
 ### Added
 
 - **Text-hygiene skills** — `clean-user-facing-text` and `remove-ai-marks`

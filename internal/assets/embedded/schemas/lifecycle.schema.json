@@ -29,11 +29,16 @@
         "properties": {
           "from": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Source state name, or \"*\" for any non-archived state (shipped cannot enter blocked)."
           },
           "to": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "not": {
+              "const": "*"
+            },
+            "description": "Target state name. Edges leaving \"blocked\" use the symbolic \"blocked_from\" to return to the recorded origin state; wildcard targets are not permitted."
           },
           "gate": {
             "type": "string",

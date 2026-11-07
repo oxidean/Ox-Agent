@@ -11,7 +11,11 @@ steps:
     skill: specify
     stage: specification
     depends_on: [discover, brainstorm]
+  - id: plan
+    skill: multi-stage-plan
+    stage: planning
+    depends_on: [specify]
   - id: validate
     skill: verify
     stage: verification
-    depends_on: [specify]
+    depends_on: [plan]

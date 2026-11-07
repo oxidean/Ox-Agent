@@ -140,3 +140,56 @@ func TestProgressUsesLatestStepRun(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanPipelineChainsPlanBeforeValidate verifies the plan pipeline produces
+// a plan artifact (multi-stage-plan) that validate/verify can consume — the
+// validate step must wait on plan, not specify.
+func TestPlanPipelineChainsPlanBeforeValidate(t *testing.T) {
+	root, item := initProject(t)
+	pipe, err := Load(root, "plan")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	steps := map[string]Step{}
+	var ids []string
+	for _, step := range pipe.Steps {
+		steps[step.ID] = step
+		ids = append(ids, step.ID)
+	}
+	plan, ok := steps["plan"]
+	if !ok {
+		t.Fatalf("plan pipeline has no plan step: %v", ids)
+	}
+	if plan.Skill != "multi-stage-plan" || plan.Stage != "planning" {
+		t.Fatalf("plan step = skill %q stage %q; want multi-stage-plan/planning", plan.Skill, plan.Stage)
+	}
+	validate := steps["validate"]
+	if len(validate.DependsOn) != 1 || validate.DependsOn[0] != "plan" {
+		t.Fatalf("validate depends_on = %v; want [plan]", validate.DependsOn)
+	}
+	if len(plan.DependsOn) != 1 || plan.DependsOn[0] != "specify" {
+		t.Fatalf("plan depends_on = %v; want [specify]", plan.DependsOn)
+	}
+	for _, id := range []string{"discover", "brainstorm", "specify"} {
+		seedRun(t, root, "run_"+id, item.ID, "plan", id, "collected")
+	}
+	progress, err := Progress(root, pipe, item)
+	if err != nil {
+		t.Fatalf("Progress() error = %v", err)
+	}
+	status := map[string]string{}
+	for _, s := range progress {
+		status[s.Step.ID] = s.Status
+	}
+	if status["plan"] != "ready" || status["validate"] != "waiting" {
+		t.Fatalf("after specify: plan should be ready, validate waiting: %v", status)
+	}
+	seedRun(t, root, "run_plan", item.ID, "plan", "plan", "collected")
+	progress, _ = Progress(root, pipe, item)
+	for _, s := range progress {
+		status[s.Step.ID] = s.Status
+	}
+	if status["validate"] != "ready" {
+		t.Fatalf("validate should be ready once plan is collected: %v", status)
+	}
+}
