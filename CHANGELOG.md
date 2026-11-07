@@ -8,6 +8,27 @@ work and minor-release summaries.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-07
+
+### Added
+
+- **Durable human-input requests** — `next_action.type: await_input` files a
+  request under `.ox-agent/state/input/` and leaves the run pending instead
+  of blocking the turn, so async hosts (chat, messengers) can answer minutes
+  or hours later. New `input` command: `request`, `list`, `respond`, `wait`,
+  `cancel`.
+- `input.scoped` journal events prove request/work-item ownership across
+  backfills and retries.
+
+### Fixed
+
+- `webhook` adapter negotiates HTTP/2, dials every resolved loopback address
+  (a `localhost` endpoint no longer fails when it listens on only one
+  family), and routes every failure path through run-failure recording —
+  no run can strand `pending` on a transport error.
+
+## [0.1.2] - 2026-11-06
+
 ### Added
 
 - **`skills install`/`uninstall`** — fetch skill packages from git remotes

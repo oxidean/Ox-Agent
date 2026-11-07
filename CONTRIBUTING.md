@@ -66,18 +66,15 @@ before installing a binary.
 
 ## Releases
 
-Tag the commit to release on `main` with an annotated `v*.*.*` tag and push it:
+Merges to `main` release automatically — `.github/workflows/tag-release.yml`
+tags the next patch version on the merge commit and dispatches
+`release.yml`, which builds cross-platform archives, signs `checksums.txt`
+with cosign, and creates the GitHub Release. Do not tag releases manually.
 
-```bash
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
-```
-
-The tag triggers `.github/workflows/release.yml`, which builds the Go binary,
-creates archives for supported platforms, generates checksums, and creates the
-GitHub Release. To republish an existing tag, first delete the published
-release (`gh release delete <tag> --yes`, which keeps the tag), then dispatch
-`release.yml` manually with the tag as input.
+To republish an existing tag, first delete the published release
+(`gh release delete <tag> --yes`, which keeps the tag), then dispatch
+`release.yml` manually with the tag as input. See
+[`docs/releasing.md`](docs/releasing.md) for the full process.
 
 ## Documentation changes
 

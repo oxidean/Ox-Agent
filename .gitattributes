@@ -1,0 +1,7 @@
+# Keep everything LF-normalized; shell scripts must never get CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
+
+# The committed dogfood journal and discussion threads append concurrently;
+# union-merge them instead of conflicting.
+*.ndjson merge=union

@@ -1,0 +1,52 @@
+name: Bug report
+description: Something ox-agent does wrong or fails to do
+title: "bug: "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `ox-agent version`
+      placeholder: "0.1.3"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and arch, e.g. linux/amd64, darwin/arm64, windows/amd64
+      placeholder: "linux/amd64"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include the exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Commands or setup that triggers it — a fresh `ox-agent init` repro is ideal.
+      placeholder: |
+        ox-agent init
+        ox-agent doctor
+        ...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`ox-agent doctor` output"
+      description: Paste if the failure is project-state related.
+      render: text
