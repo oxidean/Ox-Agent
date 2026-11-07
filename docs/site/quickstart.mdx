@@ -134,8 +134,8 @@ command runs with the project root as working directory. Remote execution
 needs those paths reachable: either a shared filesystem, or a command that
 copies the packet into a private remote directory and cleans it up —
 e.g.
-`ssh buildbox 'install -d -m 700 ~/.ox-run' && scp "{packet}" buildbox:.ox-run/packet.json && ssh buildbox '/opt/run-skill ~/.ox-run/packet.json; rc=$?; rm -rf ~/.ox-run; exit $rc'`
+`ssh buildbox 'install -d -m 700 ~/.ox-run' && scp "{packet}" buildbox:.ox-run/packet.json && ssh buildbox '/opt/run-skill ~/.ox-run/packet.json'; rc=$?; scp -q buildbox:.ox-run/output.json "{output}"; ssh buildbox 'rm -rf ~/.ox-run'; exit $rc`
 — not world-readable `/tmp`, since packets can carry human-input
-answers — and writes `output.json` back to the local run dir before
-`collect`. The
+answers — and copies `output.json` back to the local run dir before
+`collect`, keeping the remote run's exit status. The
 [CLI reference](./cli/) covers the full command surface.

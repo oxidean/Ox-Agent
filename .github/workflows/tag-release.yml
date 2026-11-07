@@ -94,7 +94,14 @@ jobs:
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -am "chore(release): bump docs manifest to $ver"
-          git push origin HEAD:main
+          # main can advance between checkout and this push — concurrency
+          # serializes runs, not merges. Rebase the bump commit and retry.
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then break; fi
+            [ "$i" = 3 ] && { echo "::error::main advanced past this run — push failed after 3 tries; rerun tag-release"; exit 1; }
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort; echo "::error::rebase onto advancing main failed"; exit 1; }
+          done
 
       - name: Create and push tag
         if: steps.next.outputs.tag != ''
