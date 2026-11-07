@@ -69,7 +69,7 @@ out = subprocess.run(
 check("surrogate round-trip", b"\xff\xfe" in out.stdout, out.stdout[:40])
 
 # -- --in-place preserves restrictive modes and exec bits --
-if hasattr(os, "chmod"):
+if os.name != "nt" and hasattr(os, "chmod"):
     with tempfile.TemporaryDirectory() as td:
         for mode, label in ((0o600, "mode 0600"), (0o755, "mode 0755")):
             f = Path(td) / "t.txt"
@@ -86,21 +86,25 @@ if hasattr(os, "chmod"):
 if hasattr(os, "symlink"):
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / "doc.txt"
-        src.write_text("v1\n")
+        src.write_bytes(b"v1\n")
         bak, created = common.backup_path(src)
         check("bak1 created", created and bak.name == "doc.txt.bak" and bak.read_bytes() == b"v1\n")
-        src.write_text("v2\n")
+        src.write_bytes(b"v2\n")
         bak2, created2 = common.backup_path(src)
         check("bak2 preserves v2", created2 and bak2.name == "doc.txt.bak2" and bak2.read_bytes() == b"v2\n", bak2.name)
         check("bak1 intact", (Path(td) / "doc.txt.bak").read_bytes() == b"v1\n")
         evil = Path(td) / "evil.txt"
         evil.write_text("x\n")
-        os.symlink(Path(td) / "nonexistent-target", Path(str(evil) + ".bak"))
         try:
-            common.backup_path(evil)
-            check("dangling bak refused", False, "no SystemExit")
-        except SystemExit as e:
-            check("dangling bak refused", e.code == 2)
+            os.symlink(Path(td) / "nonexistent-target", Path(str(evil) + ".bak"))
+        except OSError:
+            pass  # no symlink privilege (e.g. Windows without dev mode)
+        else:
+            try:
+                common.backup_path(evil)
+                check("dangling bak refused", False, "no SystemExit")
+            except SystemExit as e:
+                check("dangling bak refused", e.code == 2)
 
 # -- tag sequences: RGI flags survive, tag-encoded text strips --
 def tags(word):
