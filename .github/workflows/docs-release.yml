@@ -1,22 +1,33 @@
 name: docs site release
 
+# Dispatch-only: the normal path is the `docs` job inside release.yml, which
+# runs after goreleaser publishes the GitHub release (tag-release.yml pushes
+# tags with GITHUB_TOKEN, which never fires push.tags workflows — it dispatches
+# release.yml explicitly, so the docs job rides the same run). This workflow
+# remains for one-off re-attach and for bootstrapping docs bundles onto
+# releases that predate docs/site — dispatch with `tag` = target release and
+# `src_ref` = a ref that carries docs/site (e.g. main).
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag:
         description: Release tag to attach the docs bundle to (e.g. v0.1.7)
         required: true
         type: string
+      src_ref:
+        description: Ref supplying docs/site content when the tag predates it (default = tag)
+        required: false
+        default: ""
+        type: string
+
 jobs:
   pack:
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.2
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.4
     with:
-      tag: ${{ inputs.tag || github.ref_name }}
+      tag: ${{ inputs.tag }}
+      src-ref: ${{ inputs.src_ref }}
       product: ox-agent
     secrets:
       site_dispatch_token: ${{ secrets.DOCS_SITE_DISPATCH_TOKEN }}

@@ -17,6 +17,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Resolve release tag
         id: release
@@ -52,3 +54,19 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Docs pack runs as a job here rather than on push.tags: tags pushed by
+  # tag-release.yml use GITHUB_TOKEN and never fire tag-push workflows — the
+  # tag is released via the explicit release.yml dispatch, so this job covers
+  # that path and manual tag pushes alike. Running after goreleaser also
+  # guarantees the Release the bundle attaches to already exists.
+  docs:
+    needs: release
+    permissions:
+      contents: write
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.4
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      product: ox-agent
+    secrets:
+      site_dispatch_token: ${{ secrets.DOCS_SITE_DISPATCH_TOKEN }}
