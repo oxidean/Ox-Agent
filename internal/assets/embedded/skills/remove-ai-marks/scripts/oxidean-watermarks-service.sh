@@ -92,7 +92,7 @@ ensure_checkout() {
   fi
   echo "cloning watermarks-remover ${PIN_TAG} → ${CHECKOUT}" >&2
   git clone --depth 1 --branch "$PIN_TAG" \
-    "$CLONE_URL" "$CHECKOUT"
+    "$CLONE_URL" "$CHECKOUT" || return 1
   verify_checkout
 }
 
@@ -128,7 +128,7 @@ ensure() {
   mkdir -p "$STATE_DIR"
   : >"$LOG_FILE"
   (
-    cd "$CHECKOUT"
+    cd "$CHECKOUT" || exit 1
     # make serve blocks; run server directly so we own the PID
     exec python3 service/scripts/server.py --host 127.0.0.1 --port "$WM_PORT"
   ) >>"$LOG_FILE" 2>&1 &
@@ -174,7 +174,18 @@ teardown() {
   # running server with no record.
   if [[ -n "$pid" && "$pid" != "None" && "$pid" != "null" ]] && is_our_server "$pid"; then
     kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
+    # `wait` only works on our own children; this server was started by an
+    # earlier shell. Poll instead — is_our_server also guards against PID
+    # reuse, so it stops being true once the process is gone.
+    local i=0
+    while is_our_server "$pid"; do
+      if (( i >= 40 )); then
+        echo "error: watermarks service pid $pid still running after SIGTERM; state kept for retry" >&2
+        return 1
+      fi
+      sleep 0.25
+      (( i++ )) || true
+    done
   fi
   rm -f "$STATE_FILE"
   echo "STOPPED"
