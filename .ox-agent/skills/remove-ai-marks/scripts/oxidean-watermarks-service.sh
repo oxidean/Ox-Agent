@@ -54,10 +54,17 @@ server_state() {
       case "$args" in
         *service/scripts/server.py*) return 0 ;;
       esac
+      return 1  # readable entry that isn't our server: gone or recycled PID
     fi
-    return 1  # entry exists but isn't our server (incl. zombies/recycled PIDs)
+    # Unreadable cmdline: either the process just exited (entry now gone too)
+    # or the kernel hides its details (hidepid, permissions). Only a still-
+    # present-but-unreadable entry is genuinely unverifiable.
+    [[ -d "/proc/$pid" ]] || return 1
+    return 2
   fi
-  [[ -d /proc ]] && return 1  # procfs present, entry absent: process is gone
+  # /proc the directory can exist while procfs sits unmounted (empty dirs in
+  # minimal images); /proc/self only resolves on a live mount.
+  [[ -e /proc/self ]] && return 1
   # No procfs (macOS, minimal images): ps identifies, kill -0 verifies liveness.
   if args="$(ps -p "$pid" -o args= 2>/dev/null)"; then
     case "$args" in
