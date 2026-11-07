@@ -235,18 +235,10 @@ def looks_binary(data: bytes) -> str | None:
     return None
 
 
-# Advice for the text-only scripts: another tool in this repo handles the file.
+# Advice for the text-only scripts: point at the inspector that ships here.
 TEXT_TOOL_ADVICE = (
-    "Use inspect_file.py / clean_file.py, which route by format,",
+    "Run inspect_text.py to see what the bytes contain,",
     "or pass --force-text to scan the raw bytes anyway.",
-)
-
-# Advice for the routers themselves. They *are* inspect_file.py / clean_file.py,
-# and classify() has already ruled out every known container, so pointing back
-# at them would be circular.
-ROUTER_ADVICE = (
-    "These bytes match no supported text, image or container format.",
-    "Pass --force-text to handle them as text anyway, or --as to force a format.",
 )
 
 
@@ -360,9 +352,12 @@ def _read_stdin_capped(
 
 def write_text_output(text: str, path: str | None) -> None:
     if path is None or path == "-":
-        sys.stdout.write(text)
-        if text and not text.endswith("\n"):
-            sys.stdout.write("\n")
+        # Byte-exact contract: write the encoded text verbatim — no appended
+        # newline and no text-layer newline translation (Windows). Flush the
+        # text layer first so earlier eprint output keeps its order.
+        sys.stdout.flush()
+        sys.stdout.buffer.write(text.encode("utf-8", "surrogateescape"))
+        sys.stdout.buffer.flush()
         return
     safe_write_text(path, text)
 

@@ -42,7 +42,7 @@ Apply a final text-hygiene pass to prose the user owns or is authorized to proce
    - preserve the requested language, tone, structure, and formatting; never translate unless asked
    - for non-English text, use fluent constructions native to that language rather than English sentence patterns
    - do not add or remove claims merely to increase variation
-8. **Layer A again.** Run the deterministic Unicode pass on the rewritten result to catch any artifacts the rewrite introduced (smart quotes, em dashes, homoglyphs):
+8. **Layer A again.** Run the deterministic Unicode pass on the rewritten result to catch any artifacts the rewrite introduced:
 
    ```bash
    PYTHON "$SCRIPTS/clean_text.py" OUTPUT -o FINAL --stats --no-normalize-spaces

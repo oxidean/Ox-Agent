@@ -44,7 +44,7 @@ afterward** — do not ask the user to run `make serve` first.
 Helper (preferred):
 
 ```bash
-HELPER=".agents/skills/remove-ai-marks/scripts/oxidean-watermarks-service.sh"
+HELPER=".ox-agent/skills/remove-ai-marks/scripts/oxidean-watermarks-service.sh"
 # from Oxidean repo root:
 "$HELPER" ensure      # prints STARTED or REUSED; clones tmp/watermarks-remover if needed
 # … inspect / clean / audit via curl or service scripts …
@@ -71,7 +71,7 @@ Rules:
    `ensure` (same lifecycle).
 
 If `WATERMARKS_SERVER_API_KEY` is set on the service, every request needs
-`-H "Authorization: Bearer $WATERMARKS_SERVICE_API_KEY"`.
+`-H "Authorization: Bearer $WATERMARKS_SERVER_API_KEY"`.
 
 ### Capabilities
 

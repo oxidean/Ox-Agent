@@ -60,9 +60,10 @@ property of "AI-ness" the way perplexity is.
   verified without the applicable detector and key, so no rewrite removes a
   watermark with certainty.
 
-Vendor status notes: Google retired SynthID text watermarking on the Generative
-Language API (mid-2026), so current API output is no longer watermarked.
-Anthropic's text-watermark detection API is not public, so no local tool can
+Vendor status notes: Gemini API text output is SynthID-watermarked (the cited
+Google AI forum answer was corrected by its author), but Google exposes no
+public detector for it, so presence cannot be verified locally. Anthropic's
+text-watermark detection API is not public either, so no local tool can
 verify a Claude watermark.
 
 ## What the vendored scorer measures

@@ -70,21 +70,26 @@ def main() -> int:
     )
 
     out = args.output
+    skip_write = False
     if args.in_place:
         if args.path in (None, "-"):
             eprint("--in-place requires a file path")
             return 2
         src = Path(args.path)
-        bak, created = backup_path(src)
-        if created:
-            eprint(f"backup written to {bak}")
+        if cleaned == text:
+            # Nothing to change: skip the backup and the rewrite entirely so
+            # repeated hook runs do not accumulate .bakN files until the
+            # backup_path attempt cap refuses.
+            skip_write = True
         else:
-            eprint(f"backup {bak} already exists from an earlier run; keeping the original backup")
+            bak, _ = backup_path(src)
+            eprint(f"backup written to {bak}")
         out = str(src)
     elif out is None and args.path not in (None, "-"):
         out = str(cleaned_path(Path(args.path)))
 
-    write_text_output(cleaned, out)
+    if not skip_write:
+        write_text_output(cleaned, out)
 
     if args.stats:
         eprint(json.dumps(stats, indent=2, ensure_ascii=False))
