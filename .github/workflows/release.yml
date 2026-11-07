@@ -77,7 +77,7 @@ jobs:
           err="$(mktemp)"
           if gh api "repos/$GITHUB_REPOSITORY/contents/docs/site/manifest.yaml?ref=$TAG" >/dev/null 2>"$err"; then
             echo "has_docs=true" >> "$GITHUB_OUTPUT"
-          elif grep -qiE '404|not found' "$err"; then
+          elif grep -qE 'HTTP 404' "$err"; then
             echo "has_docs=false" >> "$GITHUB_OUTPUT"
             echo "::notice::$TAG predates docs/site — skipping docs pack"
           else

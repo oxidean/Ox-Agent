@@ -38,9 +38,9 @@ jobs:
           # shape before it can carry anything else into a run step.
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must be a stable vX.Y.Z tag"; exit 1; }
           # Restricted to protected refs: a fork PR ref would pack arbitrary
-  # content into a release asset — the manifest gate checks a version
-  # field, not content provenance.
-  [[ -z "$SRC_REF" || "$SRC_REF" =~ ^(main|master|v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*)$ ]] || { echo "::error::src_ref must be main, master, or a vX.Y.Z tag"; exit 1; }
+          # content into a release asset — the manifest gate checks a version
+          # field, not content provenance.
+          [[ -z "$SRC_REF" || "$SRC_REF" =~ ^(main|master|v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*)$ ]] || { echo "::error::src_ref must be main, master, or a vX.Y.Z tag"; exit 1; }
 
   pack:
     needs: guard
