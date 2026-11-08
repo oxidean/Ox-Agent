@@ -4,12 +4,6 @@ reviews:
   profile: chill
   auto_approvals:
     enabled: true
-  auto_review:
-    ignore_title_keywords:
-      # Bot-opened manifest-sync PRs from tag-release.yml must merge
-      # unattended — required_review_thread_resolution would deadlock them
-      # on a stray comment.
-      - "bump docs manifest to"
   pre_merge_checks:
     docstrings:
       # CLI/toolchain repo — doc comments welcome but unmeasured (same

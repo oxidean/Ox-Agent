@@ -99,7 +99,15 @@ jobs:
           # opening a second bump PR.
           bumped="$(git show "origin/main:$manifest" 2>/dev/null | getver || true)"
           if [ "$bumped" = "$ver" ]; then
-            emit "$(git rev-list -n1 --first-parent origin/main -- "$manifest")"
+            # Tag the commit that set the version, not the latest commit
+            # that touched the manifest — a later non-version edit must
+            # not become the release cut.
+            for c in $(git rev-list --first-parent origin/main -- "$manifest"); do
+              v="$(git show "$c:$manifest" 2>/dev/null | getver || true)"
+              [ "$v" = "$ver" ] || break
+              target="$c"
+            done
+            emit "$target"
             exit 0
           fi
           sed -i -E "s/^version[[:space:]]*:.*/version: \"$ver\"/" "$manifest"
@@ -122,7 +130,7 @@ jobs:
           if [ -z "$pr" ]; then
             gh pr create --base main --head "$branch" \
               --title "chore(release): bump docs manifest to $ver" \
-              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag."
+              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore"
             # gh pr create prints only the URL — re-read the number via list.
             pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
           fi
