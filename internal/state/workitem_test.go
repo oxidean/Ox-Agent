@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/oxidean/Ox-Agent/internal/project"
 )
@@ -111,22 +110,21 @@ func TestStartSerializesConcurrentAllocation(t *testing.T) {
 	}
 }
 
-// TestStartReclaimsStaleAllocationLock verifies a stale lock file is reclaimed rather than blocking forever.
+// TestStartReclaimsStaleAllocationLock verifies a leftover allocation-lock
+// file never blocks: under kernel locking the file is not held state, so a
+// dead holder's file must not stall Start — and it may persist afterward,
+// since lock files live in gitignored runtime/locks.
 func TestStartReclaimsStaleAllocationLock(t *testing.T) {
 	root := initProject(t)
-	lockPath := filepath.Join(root, ".ox-agent", "work", ".allocate.lock")
-	if err := os.WriteFile(lockPath, []byte("pid=0\n"), 0o644); err != nil {
+	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "work-allocate.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		t.Fatalf("seeding stale lock: %v", err)
 	}
-	stale := time.Now().Add(-time.Minute)
-	if err := os.Chtimes(lockPath, stale, stale); err != nil {
-		t.Fatalf("backdating stale lock: %v", err)
+	if err := os.WriteFile(lockPath, []byte("dead-holder\n"), 0o644); err != nil {
+		t.Fatalf("seeding stale lock: %v", err)
 	}
 	if _, err := Start(root, "After stale lock"); err != nil {
 		t.Fatalf("Start() error = %v", err)
-	}
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("lock file remains after start: %v", err)
 	}
 	workDir := filepath.Join(root, ".ox-agent", "work", "active", "WI-0001-after-stale-lock")
 	if _, err := os.Stat(filepath.Join(workDir, "index.json")); err != nil {

@@ -10,6 +10,17 @@ work and minor-release summaries.
 
 ### Fixed
 
+- **Input/work-item lock race** — replaced the lock-file protocol
+  (O_EXCL create + stale-mtime reclaim) with kernel file locks via a new
+  `internal/filelock` package (`flock` on unix, `LockFileEx` on Windows).
+  The old stat-then-rename window let a reclaimer steal a freshly created
+  lock and strand the real holder — observed as duplicate `IN-0001`
+  allocation in a concurrent create. Kernel locks release on descriptor
+  close, so crashes and slow holders need no stale-window heuristics, and
+  lock files now live in gitignored `runtime/locks/`. Also fixes the
+  work-item allocation lock's bare-remove reclaim and its
+  delete-on-return cleanup that could remove a replacement lock. (#39)
+
 - **`clean-user-facing-text` backup fallback mode** — when `src.stat()`
   fails, `backup_path` now falls back to `0o600` (owner-only) instead of
   the umask default, so an unexpected success in the read path can't

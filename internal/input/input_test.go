@@ -299,22 +299,18 @@ func TestWaitTimeoutReportsPending(t *testing.T) {
 	}
 }
 
-// TestConcurrentStaleReclaimCreates verifies a stale create lock can be
-// reclaimed by exactly one waiter: competing reclaims must not delete a
-// replacement lock, and every concurrent Create lands a unique request.
+// TestConcurrentStaleReclaimCreates verifies a leftover create-lock file
+// never blocks: under kernel locking a dead holder's file is not held
+// state, and every concurrent Create still lands a unique request.
 func TestConcurrentStaleReclaimCreates(t *testing.T) {
 	root := setup(t)
-	// Plant a stale create lock older than the reclaim window.
-	lockPath := filepath.Join(dir(root), ".create.lock")
-	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+	// Plant a leftover create-lock file as a dead holder would leave it.
+	lockPath := filepath.Join(locksDir(root), "input-create.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(lockPath, []byte("dead-holder\n"), 0o644); err != nil {
 		t.Fatalf("plant lock: %v", err)
-	}
-	stale := time.Now().Add(-2 * lockStaleAfter)
-	if err := os.Chtimes(lockPath, stale, stale); err != nil {
-		t.Fatalf("backdate lock: %v", err)
 	}
 	const n = 8
 	var wg sync.WaitGroup
@@ -402,7 +398,7 @@ func TestConcurrentApproveExecutesOnce(t *testing.T) {
 }
 
 // TestRequestLockRejectsTraversalIDs verifies an ID like ../../x can never
-// mint a lock file outside state/input — validation precedes acquireLock.
+// mint a lock file outside runtime/locks — validation precedes filelock.With.
 func TestRequestLockRejectsTraversalIDs(t *testing.T) {
 	root := setup(t)
 	for _, id := range []string{"../../x", "..%2F..%2Fx", "IN-", "IN-XXXX"} {
@@ -410,9 +406,9 @@ func TestRequestLockRejectsTraversalIDs(t *testing.T) {
 			t.Fatalf("Respond(%q) succeeded; want invalid-id error", id)
 		}
 	}
-	outside := filepath.Join(dir(root), "..", "..", "x.lock")
+	outside := filepath.Join(locksDir(root), "..", "x.lock")
 	if _, err := os.Stat(outside); !os.IsNotExist(err) {
-		t.Fatalf("lock escaped input dir: %s exists", outside)
+		t.Fatalf("lock escaped locks dir: %s exists", outside)
 	}
 }
 

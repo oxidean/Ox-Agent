@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oxidean/Ox-Agent/internal/filelock"
 )
 
 // WorkItem is a work item index record under .ox-agent/work.
@@ -42,7 +44,7 @@ func Start(root, title string) (_ *WorkItem, err error) {
 	work := workRoot(root)
 	var id, dir string
 	created := false
-	err = withWorkItemLock(work, func() error {
+	err = withWorkItemLock(root, func() error {
 		next, err := nextWorkItemNumber(work)
 		if err != nil {
 			return err
@@ -149,35 +151,11 @@ func nextWorkItemNumber(workRoot string) (int, error) {
 	return highest + 1, nil
 }
 
-// allocationLockStaleAfter bounds how long an orphaned allocation lock file is
-// trusted before a waiting process reclaims it.
-const allocationLockStaleAfter = 30 * time.Second
-
 // withWorkItemLock serializes work-item ID allocation across concurrent
 // ox-agent processes. The scan-and-create critical section runs while holding
-// an atomic lock file so two start commands cannot claim the same WI-NNNN
+// a kernel file lock so two start commands cannot claim the same WI-NNNN
 // number under different directory slugs.
-func withWorkItemLock(workRoot string, fn func() error) error {
-	lockPath := filepath.Join(workRoot, ".allocate.lock")
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err == nil {
-			fmt.Fprintf(lock, "pid=%d\n", os.Getpid())
-			lock.Close()
-			defer os.Remove(lockPath)
-			return fn()
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("acquiring work item lock: %w", err)
-		}
-		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > allocationLockStaleAfter {
-			os.Remove(lockPath)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return errors.New("timed out waiting for work item allocation lock")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+func withWorkItemLock(root string, fn func() error) error {
+	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "work-allocate.lock")
+	return filelock.With(lockPath, filelock.DefaultTimeout, fn)
 }
