@@ -432,6 +432,12 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			if !info.Mode().IsRegular() {
 				continue
 			}
+			// Lstat only checks the final component — a symlinked parent
+			// can still resolve target outside the project. Verify the
+			// resolved path stays under resolvedBase before chmod.
+			if _, ok := assets.LockedTarget(resolvedBase, base, rel); !ok {
+				continue
+			}
 			want := os.FileMode(0o644)
 			if assets.IsExecutable(rel) {
 				want = 0o755

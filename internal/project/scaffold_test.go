@@ -1015,6 +1015,61 @@ func TestRepairRestoresExecBits(t *testing.T) {
 	}
 }
 
+// TestRepairModePassConfinesChmod verifies the mode pass never chmods
+// through a symlinked parent directory pointing outside the project.
+func TestRepairModePassConfinesChmod(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bits are not representable on Windows")
+	}
+	execs := assets.Executables()
+	if len(execs) == 0 {
+		t.Skip("no executable assets recorded")
+	}
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	// Point the scripts dir at an outside directory holding copies of every
+	// embedded file (content-identical so the file loop skips them before
+	// confinement) with the exec file's mode dropped — the chmod must not
+	// reach it.
+	rel := filepath.FromSlash(execs[0])
+	linkTarget := filepath.Join(base, filepath.Dir(rel))
+	outside := filepath.Join(t.TempDir(), "outside")
+	entries, err := os.ReadDir(linkTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(linkTarget, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(outside, entry.Name()), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(linkTarget); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, outside, linkTarget)
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	decoy := filepath.Join(outside, filepath.Base(rel))
+	info, err := os.Stat(decoy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("decoy mode = %o, want untouched 644 — chmod escaped the project", got)
+	}
+}
+
 // TestDoctorFlagsLostExecBits verifies the doctor→repair round trip: a
 // lost executable bit fails the asset modes check and repair clears it.
 func TestDoctorFlagsLostExecBits(t *testing.T) {
