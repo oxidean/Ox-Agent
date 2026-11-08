@@ -5,4 +5,5 @@ dist/
 .ox-agent/runtime/packets/
 .ox-agent/runtime/runs/
 .ox-agent/runtime/locks/
+__pycache__/
 .DS_Store

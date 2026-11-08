@@ -491,7 +491,10 @@ def backup_path(src: Path) -> tuple[Path, bool]:
     try:
         src_mode = stat.S_IMODE(src.stat().st_mode)
     except OSError:
-        src_mode = _default_file_mode()
+        # Never fall back to the umask default: an unstat-able source must
+        # not produce a group/other-readable backup even if the later read
+        # unexpectedly succeeds.
+        src_mode = 0o600
     attempts = 0
     while True:
         if bak.is_symlink() or (bak.exists() and not bak.is_file()):

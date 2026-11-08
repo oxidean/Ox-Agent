@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "WI-0004",
+  "title": "tighten backup fallback mode in clean-user-facing-text",
+  "state": "shipping",
+  "profile": "normal",
+  "current_stage": "shipping",
+  "created_at": "2026-11-08T15:24:25Z",
+  "updated_at": "2026-11-08T15:25:57Z"
+}
