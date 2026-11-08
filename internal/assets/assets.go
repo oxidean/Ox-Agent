@@ -8,11 +8,30 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 //go:embed all:embedded
 var tree embed.FS
+
+// executables.txt records which canonical asset files carry the executable
+// bit — embed.FS drops file modes, so sync-assets.sh emits this manifest
+// alongside the embedded tree. It lives outside embedded/ so Materialize
+// never ships it into projects.
+//
+//go:embed executables.txt
+var executablesManifest string
+
+var executables = func() map[string]bool {
+	set := map[string]bool{}
+	for _, line := range strings.Split(executablesManifest, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			set[line] = true
+		}
+	}
+	return set
+}()
 
 const root = "embedded"
 
@@ -38,7 +57,7 @@ func Materialize(base string) (written []string, err error) {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
+		if err := WriteAsset(target, rel, data); err != nil {
 			return err
 		}
 		written = append(written, rel)
@@ -70,4 +89,43 @@ func List(dir string) ([]string, error) {
 		return nil
 	})
 	return out, err
+}
+
+// IsExecutable reports whether rel is a canonical asset recorded with the
+// executable bit in executables.txt.
+func IsExecutable(rel string) bool {
+	return executables[rel]
+}
+
+// Executables returns the sorted canonical asset paths recorded as
+// executable.
+func Executables() []string {
+	out := make([]string, 0, len(executables))
+	for rel := range executables {
+		out = append(out, rel)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// WriteAsset writes data to target as the canonical asset rel: mode 0755
+// when the manifest records rel as executable, 0644 otherwise. The mode is
+// applied explicitly because os.WriteFile only honors its perm argument on
+// newly created files.
+func WriteAsset(target, rel string, data []byte) error {
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		return err
+	}
+	want := os.FileMode(0o644)
+	if IsExecutable(rel) {
+		want = 0o755
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm() == want {
+		return nil
+	}
+	return os.Chmod(target, want)
 }

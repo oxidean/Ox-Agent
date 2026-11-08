@@ -355,7 +355,7 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 			if err := project.ConfinedTarget(resolvedBase, target); err != nil {
 				return nil, err
 			}
-			if err := write(target, want); err != nil {
+			if err := write(target, rel, want); err != nil {
 				return nil, err
 			}
 			report.Restored = append(report.Restored, rel)
@@ -369,7 +369,7 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 			if err := project.ConfinedTarget(resolvedBase, target); err != nil {
 				return nil, err
 			}
-			if err := write(target, want); err != nil {
+			if err := write(target, rel, want); err != nil {
 				return nil, err
 			}
 			report.Replaced = append(report.Replaced, rel)
@@ -390,10 +390,11 @@ func Update(root string, overwrite bool) (*UpdateReport, error) {
 	return report, nil
 }
 
-// write creates parent directories and writes data to path.
-func write(path string, data []byte) error {
+// write creates parent directories and writes data to path with the
+// canonical asset mode for rel (0755 when recorded executable).
+func write(path, rel string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return assets.WriteAsset(path, rel, data)
 }

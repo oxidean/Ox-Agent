@@ -10,6 +10,18 @@ work and minor-release summaries.
 
 ### Fixed
 
+- **Materialized assets lose executable file modes** — `embed.FS` drops
+  mode bits, so `init`/`init --repair`/`skills update`/`skills install`
+  wrote every file `0644` and bundled scripts (e.g.
+  `clean-user-facing-text/scripts/*.py`,
+  `remove-ai-marks/scripts/oxidean-watermarks-service.sh`) shipped
+  non-executable. `sync-assets.sh` now emits
+  `internal/assets/executables.txt` recording canonical exec bits; every
+  write path restores `0755`/`0644` from it, remote installs preserve the
+  checkout's normalized mode, doctor gains an `asset modes` check, and
+  `init --repair` restores modes even when content is unchanged (POSIX
+  only — Windows file modes are synthetic). (#43)
+
 - **Input/work-item lock race** — replaced the lock-file protocol
   (O_EXCL create + stale-mtime reclaim) with kernel file locks via a new
   `internal/filelock` package (`flock` on unix, `LockFileEx` on Windows).

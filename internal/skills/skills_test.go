@@ -104,6 +104,35 @@ func TestUpdateRestoresDrift(t *testing.T) {
 	}
 }
 
+// TestUpdateRestoresExecBit verifies a rewritten file gets the canonical
+// mode from the executable manifest, not just default bits — even when the
+// drift that triggered the rewrite was content, not mode.
+func TestUpdateRestoresExecBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bits are not representable on Windows")
+	}
+	execs := assets.Executables()
+	if len(execs) == 0 {
+		t.Skip("no executable assets recorded")
+	}
+	root := initProject(t)
+	base := project.Base(root)
+	target := filepath.Join(base, filepath.FromSlash(execs[0]))
+	if err := os.WriteFile(target, []byte("local edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Update(root, true); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("mode = %o, want 755 after update rewrite", got)
+	}
+}
+
 // TestCheckFindings verifies check reports a modified skill as a warning and
 // a skill with a missing declared schema as an error.
 func TestCheckFindings(t *testing.T) {

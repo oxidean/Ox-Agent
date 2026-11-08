@@ -12,6 +12,21 @@ cd "$(dirname "$0")/.."
 status=0
 asset_dirs="skills schemas workflows pipelines lifecycle integrations"
 
+# Mode bits are not reliably observable on Windows checkouts (Git Bash
+# reports synthetic permissions), so the executable-manifest and dogfood
+# exec legs run on POSIX only — the ubuntu CI leg covers them.
+posix_modes=yes
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) posix_modes=no ;;
+esac
+expected_exec=""
+if [ "$posix_modes" = yes ]; then
+  expected_exec="$({ for dir in $asset_dirs; do
+    [ -d "$dir" ] || continue
+    (cd "$dir" && find . -type f -perm -u+x -not -name '.*' -not -path '*/__pycache__/*' -not -name '*.pyc' | sed "s|^\\./|$dir/|")
+  done } | LC_ALL=C sort)"
+fi
+
 for dir in $asset_dirs; do
   if [ ! -d "$dir" ]; then
     echo "check-assets: canonical directory $dir missing" >&2
@@ -47,6 +62,25 @@ if [ -n "$cache_hits" ]; then
   status=1
 fi
 
+# The executable manifest must list exactly the canonical +x files — a
+# chmod without a sync drifts it.
+if [ "$posix_modes" = yes ]; then
+  manifest_ok=yes
+  if [ ! -f internal/assets/executables.txt ]; then
+    manifest_ok=no
+  else
+    if [ -n "$expected_exec" ]; then
+      printf '%s\n' "$expected_exec" | cmp -s - internal/assets/executables.txt || manifest_ok=no
+    else
+      [ -s internal/assets/executables.txt ] && manifest_ok=no
+    fi
+  fi
+  if [ "$manifest_ok" = no ]; then
+    echo "check-assets: executables.txt drifted from canonical exec bits (run scripts/sync-assets.sh)" >&2
+    status=1
+  fi
+fi
+
 # Dogfood drift: every canonical asset file must reach .ox-agent unchanged.
 # One-directional on purpose: .ox-agent may legitimately carry extras
 # (README.md, remote or project-local skills), but a canonical file missing
@@ -65,6 +99,17 @@ if [ -d .ox-agent ]; then
       fi
     done < <(cd "$dir" && find . -type f -not -name '.*' -not -name '*.pyc' -not -path '*/__pycache__/*' -print0)
   done
+  # Exec-bit drift: a canonical +x file present but non-executable under
+  # .ox-agent means materialization dropped its mode.
+  if [ "$posix_modes" = yes ]; then
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      if [ -f ".ox-agent/$rel" ] && [ ! -x ".ox-agent/$rel" ]; then
+        echo "check-assets: .ox-agent/$rel lost its executable bit (run: ox-agent init --repair --sync)" >&2
+        status=1
+      fi
+    done <<< "$expected_exec"
+  fi
 fi
 
 if [ "$status" -eq 0 ]; then
