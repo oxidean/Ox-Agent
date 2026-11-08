@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "WI-0001",
   "title": "Surface completion: skills, events, signing, E2E",
-  "state": "brainstorming",
+  "state": "archived",
   "profile": "normal",
-  "current_stage": "brainstorming",
+  "current_stage": "shipping",
   "created_at": "2026-11-05T17:13:50Z",
-  "updated_at": "2026-11-05T17:13:56Z"
+  "updated_at": "2026-11-08T18:31:41Z"
 }
