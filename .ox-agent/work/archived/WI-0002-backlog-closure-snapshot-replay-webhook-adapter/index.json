@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "WI-0002",
   "title": "Backlog closure: snapshot replay, webhook adapter, remote skills install",
-  "state": "shipping",
+  "state": "archived",
   "profile": "normal",
   "current_stage": "shipping",
   "created_at": "2026-11-06T12:04:11Z",
-  "updated_at": "2026-11-06T12:12:14Z"
+  "updated_at": "2026-11-08T18:31:38Z"
 }
