@@ -10,6 +10,16 @@ work and minor-release summaries.
 
 ### Fixed
 
+- **`clean-user-facing-text` backup fallback mode** — when `src.stat()`
+  fails, `backup_path` now falls back to `0o600` (owner-only) instead of
+  the umask default, so an unexpected success in the read path can't
+  produce a group/other-readable backup. Adds a stdlib-unittest
+  regression suite for the vendored script helpers, exercised in CI. (#34)
+
+## [0.1.7] - 2026-11-07
+
+### Fixed
+
 - **Lifecycle gate bypass** — `blocked → "*"` let a work item route
   `shipping → blocked → shipped` without the human gate and could resurrect
   archived items. The blocked return edge is now the symbolic
@@ -23,6 +33,8 @@ work and minor-release summaries.
   `next_action.type` (`needs_rework` can no longer advance a stage),
   findings require a severity rank and a `file:line` citation, artifacts are
   typed, and `eval` rejects undeclared or non-boolean quality flags. (#32)
+
+## [0.1.6] - 2026-11-07
 
 ### Added
 
