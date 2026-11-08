@@ -51,6 +51,9 @@ func Start(root, title string) (_ *WorkItem, err error) {
 		}
 		id = fmt.Sprintf("WI-%04d", next)
 		dir = filepath.Join(work, "active", id+"-"+slugify(title))
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+			return fmt.Errorf("creating work item: %w", err)
+		}
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			return fmt.Errorf("creating work item: %w", err)
 		}
@@ -96,6 +99,9 @@ func Start(root, title string) (_ *WorkItem, err error) {
 func ListActive(root string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(workRoot(root), "active"))
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("reading active work items: %w", err)
 	}
 	var names []string

@@ -331,3 +331,35 @@ func TestBlockedTransitionReturnsToBlockedFrom(t *testing.T) {
 		t.Fatalf("state = %s after unblock transition, want intake", item.State)
 	}
 }
+
+// TestStartRecreatesMissingActiveDir verifies start works on a checkout whose
+// committed tree lost the empty work/active directory.
+func TestStartRecreatesMissingActiveDir(t *testing.T) {
+	root := initProject(t)
+	work := filepath.Join(root, ".ox-agent", "work")
+	if err := os.RemoveAll(filepath.Join(work, "active")); err != nil {
+		t.Fatalf("removing active dir: %v", err)
+	}
+	if _, err := Start(root, "Fresh checkout item"); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "active", "WI-0001-fresh-checkout-item", "index.json")); err != nil {
+		t.Fatalf("work item index missing: %v", err)
+	}
+}
+
+// TestListActiveToleratesMissingDir verifies a missing active bucket reports no
+// items rather than failing, matching nextWorkItemNumber's tolerance.
+func TestListActiveToleratesMissingDir(t *testing.T) {
+	root := initProject(t)
+	if err := os.RemoveAll(filepath.Join(root, ".ox-agent", "work", "active")); err != nil {
+		t.Fatalf("removing active dir: %v", err)
+	}
+	names, err := ListActive(root)
+	if err != nil {
+		t.Fatalf("ListActive() error = %v", err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("ListActive() = %v, want empty", names)
+	}
+}
