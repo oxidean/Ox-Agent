@@ -326,8 +326,8 @@ func (r *DoctorReport) checkGlobDir(base, dir, schema string, missingOK, yamlOnl
 			continue
 		}
 		// In request directories only *.yaml files are schema-bound —
-		// lockfiles (.create.lock, IN-NNNN.lock) and other runtime
-		// residue must not be validated as request documents.
+		// lock residue from older versions (.create.lock, IN-NNNN.lock)
+		// and other runtime files must not be validated as requests.
 		if yamlOnly && !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
 		}

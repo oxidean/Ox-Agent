@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"github.com/oxidean/Ox-Agent/internal/state"
 	"gopkg.in/yaml.v3"
 )
@@ -72,65 +72,15 @@ type Request struct {
 // IDs can never resolve outside state/input.
 var idPattern = regexp.MustCompile(`^IN-[0-9]+$`)
 
-// lockStaleAfter bounds how long an orphaned lock file is honored before a
-// waiting process reclaims it.
-const lockStaleAfter = 30 * time.Second
-
 func dir(root string) string {
 	return filepath.Join(root, ".ox-agent", "state", "input")
 }
 
-// fileLock is an ownership token over a lock path. The token lets release
-// remove only the lock this process created — never a replacement a
-// reclaimer installed after this holder ran past the stale window.
-type fileLock struct {
-	path  string
-	token string
-}
-
-// acquireLock takes an exclusive lockfile. Reclaiming a stale lock goes
-// through an atomic rename-claim rather than a bare remove: competing
-// reclaimers race on the same source path, so only one rename wins — the
-// winner removes the stale file and retries creation, the losers loop back
-// and either find the fresh lock or the (now absent) source. A bare
-// check-then-remove could delete a replacement lock a rival just created.
-func acquireLock(path string) (*fileLock, error) {
-	token := fmt.Sprintf("%d-%d", os.Getpid(), rand.Uint64N(1<<32))
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err == nil {
-			if _, werr := fmt.Fprintln(f, token); werr != nil {
-				f.Close()
-				os.Remove(path)
-				return nil, werr
-			}
-			f.Close()
-			return &fileLock{path: path, token: token}, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("acquiring lock %s: %w", path, err)
-		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
-			reclaim := fmt.Sprintf("%s.reclaim.%s", path, token)
-			if rerr := os.Rename(path, reclaim); rerr == nil {
-				os.Remove(reclaim)
-			}
-			continue
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for lock %s", path)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// release removes the lock only if it still carries this holder's token —
-// a reclaimed-and-replaced lock belongs to its new holder.
-func (l *fileLock) release() {
-	if data, err := os.ReadFile(l.path); err == nil && strings.TrimSpace(string(data)) == l.token {
-		os.Remove(l.path)
-	}
+// locksDir returns the runtime/locks directory under root. Kernel file
+// locks live there — runtime/ is gitignored scratch space, and lock files
+// are not durable state.
+func locksDir(root string) string {
+	return filepath.Join(root, ".ox-agent", "runtime", "locks")
 }
 
 // withLock serializes the dedupe + ID-allocation + save + journal critical
@@ -140,27 +90,17 @@ func withLock(root string, fn func() error) error {
 	if err := os.MkdirAll(dir(root), 0o755); err != nil {
 		return err
 	}
-	lock, err := acquireLock(filepath.Join(dir(root), ".create.lock"))
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	return fn()
+	return filelock.With(filepath.Join(locksDir(root), "input-create.lock"), filelock.DefaultTimeout, fn)
 }
 
 // withRequestLock serializes read-modify-write of a single request so
 // concurrent respond/approve/cancel/expiry cannot interleave — the lock
-// file is per-request and independent of the create lock.
+// is per-request and independent of the create lock.
 func withRequestLock(root, id string, fn func() error) error {
 	if !idPattern.MatchString(id) {
 		return fmt.Errorf("invalid request id %q", id)
 	}
-	lock, err := acquireLock(filepath.Join(dir(root), id+".lock"))
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	return fn()
+	return filelock.With(filepath.Join(locksDir(root), "input-"+id+".lock"), filelock.DefaultTimeout, fn)
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
