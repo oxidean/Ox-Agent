@@ -21,6 +21,15 @@ import common  # noqa: E402
 
 @unittest.skipUnless(os.name == "posix", "mode bits are advisory on Windows")
 class BackupPathModeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # umask is process-wide and applied by os.open on top of the passed
+        # mode. Pin a known umask so a strict test-runner umask can neither
+        # false-fail the preserve test nor mask a fallback regression.
+        self._old_umask = os.umask(0o022)
+
+    def tearDown(self) -> None:
+        os.umask(self._old_umask)
+
     def test_backup_mode_fallback_is_owner_only_when_stat_fails(self) -> None:
         """src.stat() OSError must not fall back to the umask default (0644)."""
         with tempfile.TemporaryDirectory() as tmp:
