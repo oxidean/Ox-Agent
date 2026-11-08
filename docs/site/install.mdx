@@ -1,0 +1,76 @@
+---
+title: Install Ox-Agent
+description: "Install the ox-agent binary: one Go executable, no project-local runtime."
+---
+
+import { Aside, TabItem, Tabs } from "@astrojs/starlight/components";
+
+<Tabs>
+	<TabItem label="macOS / Linux">
+		Install the latest release globally:
+
+		```bash
+		curl -fsSL \
+		  https://github.com/oxidean/Ox-Agent/releases/latest/download/install.sh \
+		  | bash
+		```
+
+		The installer detects the platform, downloads the matching release
+		archive, verifies its SHA-256 checksum, and installs `ox-agent` to
+		`~/.local/bin`; make sure that directory is on your `PATH`. Set
+		`OX_AGENT_INSTALL_DIR` to install somewhere else user-owned.
+
+		Pin a specific version:
+
+		```bash
+		curl -fsSL \
+		  https://github.com/oxidean/Ox-Agent/releases/download/v0.1.7/install.sh \
+		  | OX_AGENT_VERSION=v0.1.7 bash
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		Run the PowerShell installer from a release:
+
+		```powershell
+		$env:OX_AGENT_VERSION = "v0.1.7"
+		irm https://github.com/oxidean/Ox-Agent/releases/download/v0.1.7/install.ps1 | iex
+		```
+
+		Release targets cover macOS and Linux on amd64 and arm64, plus
+		Windows. On Windows, `ox-agent init --integrate` needs Developer Mode
+		or an elevated shell to create symlinks; it warns and leaves the rest
+		of the wiring in place when it cannot link.
+	</TabItem>
+</Tabs>
+
+Verify the installation:
+
+```bash
+ox-agent version
+```
+
+Prefer manual? Download the archive for your platform from the [release
+page](https://github.com/oxidean/Ox-Agent/releases), verify it against the
+published `checksums.txt`, extract `ox-agent`, and place it on `PATH`.
+
+## Staying current
+
+```bash
+ox-agent update --check            # is a newer release out?
+ox-agent update                    # verify checksum and replace the binary
+ox-agent update --version v0.1.7   # pin the jump
+ox-agent uninstall --yes           # remove the binary
+```
+
+`update` also re-executes the new binary's repair when run inside a
+project, syncing every ox-agent-owned asset in `.ox-agent/` to the tree
+embedded in the new release (`--binary-only` skips the sync). For a full
+reconcile without a binary change, run `ox-agent init --repair --sync`.
+`uninstall` removes the binary only; project `.ox-agent/` directories are
+never touched.
+
+<Aside type="note">
+	The binary is the only required runtime and should never be installed
+	into `node_modules`, `.ox-agent/`, or a project vendor directory. What
+	lives in the repo is state and assets; what runs them is global.
+</Aside>

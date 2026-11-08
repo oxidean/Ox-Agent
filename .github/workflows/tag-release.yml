@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: write
   actions: write
+  # The docs-manifest bump merges through a bot-opened PR — main's ruleset
+  # requires changes to arrive via pull request.
+  pull-requests: write
 
 jobs:
   tag:
@@ -67,13 +70,105 @@ jobs:
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "tag=v$(awk -F. '{ $3 += 1; print $1 "." $2 "." $3 }' <<< "${latest#v}")" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push tag
+      # The docs bundle packs from the tagged commit and its manifest version
+      # must equal the tag, so the manifest is bumped in a release commit on
+      # main first — the tag below then points at a tree that passes the gate.
+      - name: Sync docs manifest version
         if: steps.next.outputs.tag != ''
+        id: sync
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          emit() { echo "sha=$1" >> "$GITHUB_OUTPUT"; }
+          manifest=docs/site/manifest.yaml
+          head="$(git rev-parse HEAD)"
+          [ -f "$manifest" ] || { echo "no docs/site manifest — skipping"; emit "$head"; exit 0; }
+          ver="${TAG#v}"
+          getver() { sed -nE 's/^version[[:space:]]*:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/p' | head -1; }
+          current="$(getver < "$manifest")"
+          if [ "$current" = "$ver" ]; then
+            echo "manifest already at $ver"
+            emit "$head"
+            exit 0
+          fi
+          git fetch origin main -q
+          # A previous attempt may have merged the bump but died before
+          # tagging — reuse the commit that set the version rather than
+          # opening a second bump PR.
+          bumped="$(git show "origin/main:$manifest" 2>/dev/null | getver || true)"
+          if [ "$bumped" = "$ver" ]; then
+            # Tag the commit that set the version, not the latest commit
+            # that touched the manifest — a later non-version edit must
+            # not become the release cut.
+            for c in $(git rev-list --first-parent origin/main -- "$manifest"); do
+              v="$(git show "$c:$manifest" 2>/dev/null | getver || true)"
+              [ "$v" = "$ver" ] || break
+              target="$c"
+            done
+            emit "$target"
+            exit 0
+          fi
+          sed -i -E "s/^version[[:space:]]*:.*/version: \"$ver\"/" "$manifest"
+          # The version line exists but can't be parsed or rewritten — the
+          # tag would carry a stale manifest and the docs pack fails later.
+          if git diff --quiet -- "$manifest"; then
+            echo "::error::could not set docs manifest version to $ver (missing or unparseable version line)"
+            exit 1
+          fi
+          # Open the bump as a PR and squash-merge it: main rejects direct
+          # pushes. The merge commit carries the matching manifest and sits
+          # on main, so it is the tag target.
+          branch="docs-manifest-bump/$TAG"
+          git checkout -b "$branch"
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              tag -a "${{ steps.next.outputs.tag }}" -m "Release ${{ steps.next.outputs.tag }}"
-          git push origin "${{ steps.next.outputs.tag }}"
+              commit -am "chore(release): bump docs manifest to $ver"
+          git push -f origin "$branch"
+          pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          if [ -z "$pr" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore(release): bump docs manifest to $ver" \
+              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore"
+            # gh pr create prints only the URL — re-read the number via list.
+            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          fi
+          m=""
+          for i in $(seq 1 30); do
+            m="$(gh pr view "$pr" --json mergeable --jq '.mergeable')"
+            [ "$m" = "MERGEABLE" ] && break
+            if [ "$m" = "CONFLICTING" ]; then
+              echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
+              exit 1
+            fi
+            sleep 2
+          done
+          [ "$m" = "MERGEABLE" ] || { echo "::error::bump PR #$pr never became mergeable"; exit 1; }
+          gh pr merge "$pr" --squash --delete-branch
+          mc=""
+          for i in $(seq 1 15); do
+            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid')"
+            [ -n "$mc" ] && break
+            sleep 2
+          done
+          [ -n "$mc" ] || { echo "::error::bump PR #$pr did not report merged"; exit 1; }
+          emit "$mc"
+
+      - name: Create and push tag
+        if: steps.next.outputs.tag != ''
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          SHA: ${{ steps.sync.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # The tag target may be a remote-only bump merge commit — refresh
+          # origin/main so it resolves locally.
+          git fetch origin main -q
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              tag -a "$TAG" -m "Release $TAG" "$SHA"
+          git push origin "$TAG"
 
       # Tags pushed by GITHUB_TOKEN do not trigger `on: push: tags` workflows,
       # so the release is dispatched explicitly against the tag. Dispatch is

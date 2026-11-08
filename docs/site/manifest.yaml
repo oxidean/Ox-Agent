@@ -1,0 +1,18 @@
+manifest_version: 1
+product:
+  slug: ox-agent
+  name: Ox-Agent
+  repo: oxidean/Ox-Agent
+  tag_pattern: "v*"
+version: "0.1.7"
+pages:
+  - label: Ox-Agent
+    link: /
+  - label: Install
+    link: /install/
+  - label: Quickstart
+    link: /quickstart/
+  - label: CLI
+    link: /cli/
+  - label: Architecture
+    link: /architecture/

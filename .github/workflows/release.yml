@@ -17,6 +17,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - name: Resolve release tag
         id: release
@@ -52,3 +54,46 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Docs pack runs as a job here rather than on push.tags: tags pushed by
+  # tag-release.yml use GITHUB_TOKEN and never fire tag-push workflows — the
+  # tag is released via the explicit release.yml dispatch, so this job covers
+  # that path and manual tag pushes alike. Running after goreleaser also
+  # guarantees the Release the bundle attaches to already exists.
+  docs-check:
+    needs: release
+    runs-on: ubuntu-latest
+    outputs:
+      has_docs: ${{ steps.check.outputs.has_docs }}
+    steps:
+      # Tags that predate docs/site cannot carry a bundle — the pack would
+      # fail the manifest gate — so they skip the docs job instead of
+      # failing an otherwise-green re-release.
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          err="$(mktemp)"
+          if gh api "repos/$GITHUB_REPOSITORY/contents/docs/site/manifest.yaml?ref=$TAG" >/dev/null 2>"$err"; then
+            echo "has_docs=true" >> "$GITHUB_OUTPUT"
+          elif grep -qE 'HTTP 404' "$err"; then
+            echo "has_docs=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG predates docs/site — skipping docs pack"
+          else
+            cat "$err" >&2
+            echo "::error::docs/site probe failed for $TAG (not a 404) — refusing to guess; retry the release"
+            exit 1
+          fi
+
+  docs:
+    needs: [release, docs-check]
+    if: needs.docs-check.outputs.has_docs == 'true'
+    permissions:
+      contents: write
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.6
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      product: ox-agent
+    secrets:
+      site_dispatch_token: ${{ secrets.DOCS_SITE_DISPATCH_TOKEN }}

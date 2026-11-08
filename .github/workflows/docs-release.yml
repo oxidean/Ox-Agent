@@ -1,0 +1,55 @@
+name: docs site release
+
+# Dispatch-only: the normal path is the `docs` job inside release.yml, which
+# runs after goreleaser publishes the GitHub release (tag-release.yml pushes
+# tags with GITHUB_TOKEN, which never fires push.tags workflows — it dispatches
+# release.yml explicitly, so the docs job rides the same run). This workflow
+# remains for one-off re-attach and for bootstrapping docs bundles onto
+# releases that predate docs/site — dispatch with `tag` = target release and
+# `src_ref` = a ref whose docs/site manifest carries the same version as
+# the target tag — the pack gate rejects a version mismatch, so pick a ref
+# cut right after the docs PR for that version merged.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the docs bundle to (e.g. v0.1.7)
+        required: true
+        type: string
+      src_ref:
+        description: Ref supplying docs/site when the tag predates it; its manifest version must match the tag (default = tag)
+        required: false
+        default: ""
+        type: string
+
+# Minimal default — jobs that need the token declare it themselves.
+permissions: {}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TAG: ${{ inputs.tag }}
+          SRC_REF: ${{ inputs.src_ref }}
+        run: |
+          set -euo pipefail
+          # Dispatch inputs reach the reusable call as text — validate the tag
+          # shape before it can carry anything else into a run step.
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must be a stable vX.Y.Z tag"; exit 1; }
+          # Restricted to protected refs: a fork PR ref would pack arbitrary
+          # content into a release asset — the manifest gate checks a version
+          # field, not content provenance.
+          [[ -z "$SRC_REF" || "$SRC_REF" =~ ^(main|master|v[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*)$ ]] || { echo "::error::src_ref must be main, master, or a vX.Y.Z tag"; exit 1; }
+
+  pack:
+    needs: guard
+    permissions:
+      contents: write
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.6
+    with:
+      tag: ${{ inputs.tag }}
+      src-ref: ${{ inputs.src_ref }}
+      product: ox-agent
+    secrets:
+      site_dispatch_token: ${{ secrets.DOCS_SITE_DISPATCH_TOKEN }}
