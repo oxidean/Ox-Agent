@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -285,6 +286,7 @@ type RepairReport struct {
 	FilesSynced     []string // drifted asset files rewritten (--sync)
 	FilesRemoved    []string // owned files the binary no longer ships (--sync)
 	FilesConflicted []string // drifted paths protected as local, not ox-owned (--sync)
+	ModesFixed      []string // asset file modes reset to canonical (POSIX)
 	SeedsWritten    []string
 	PinUpdated      string // framework.yaml required_version range rewritten to (--sync)
 }
@@ -386,7 +388,7 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			if err := ConfinedTarget(resolvedBase, target); err != nil {
 				return nil, err
 			}
-			if err := os.WriteFile(target, data, 0o644); err != nil {
+			if err := assets.WriteAsset(target, rel, data); err != nil {
 				return nil, err
 			}
 			report.FilesSynced = append(report.FilesSynced, rel)
@@ -399,10 +401,48 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return nil, err
 			}
-			if err := os.WriteFile(target, data, 0o644); err != nil {
+			if err := assets.WriteAsset(target, rel, data); err != nil {
 				return nil, err
 			}
 			report.FilesRestored = append(report.FilesRestored, rel)
+		}
+	}
+	// Restore canonical file modes: embed cannot carry the executable bit,
+	// so projects materialized by older binaries — or chmod'ed locally —
+	// drift from the modes the canonical tree recorded. Content-identical
+	// files skip the rewrite loop above entirely, which is exactly the
+	// legacy case this pass exists for. Protected local extensions keep
+	// whatever mode they carry. Windows file modes are synthetic — no exec
+	// bit exists there to restore.
+	if runtime.GOOS != "windows" {
+		for _, rel := range files {
+			if unowned[rel] {
+				continue
+			}
+			target := filepath.Join(base, filepath.FromSlash(rel))
+			info, err := os.Lstat(target)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					return nil, err
+				}
+				continue
+			}
+			// A symlinked asset path is a confinement problem the write
+			// path handles; never chmod through it.
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			want := os.FileMode(0o644)
+			if assets.IsExecutable(rel) {
+				want = 0o755
+			}
+			if info.Mode().Perm() == want {
+				continue
+			}
+			if err := os.Chmod(target, want); err != nil {
+				return nil, err
+			}
+			report.ModesFixed = append(report.ModesFixed, rel)
 		}
 	}
 	// Remove files the old lock owned that this binary no longer ships —

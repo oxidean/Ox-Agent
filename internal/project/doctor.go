@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -85,6 +86,7 @@ func Doctor(root string) *DoctorReport {
 	report.checkGlob(base, "integrations", "integration")
 	report.checkGlobMissingOK(base, "state/input", "input-request")
 	report.checkAssets(base)
+	report.checkAssetModes(base)
 	report.checkIntegration(root)
 	return report
 }
@@ -433,6 +435,51 @@ func (r *DoctorReport) checkAssets(base string) {
 	}
 	if len(stale) > 0 {
 		r.Warnings = append(r.Warnings, fmt.Sprintf("assets no longer shipped by this binary (init --repair --sync removes unmodified copies; locally modified files are kept): %v", stale))
+	}
+}
+
+// checkAssetModes verifies materialized assets carry the modes the canonical
+// tree recorded: embed cannot store the executable bit, so projects synced
+// by older binaries lose script executability. Skipped on Windows, where
+// file mode bits are synthetic and no exec bit exists to lose.
+func (r *DoctorReport) checkAssetModes(base string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	files, err := assets.List("")
+	if err != nil {
+		r.add("asset modes", err, false)
+		return
+	}
+	var lost, extra []string
+	for _, rel := range files {
+		target := filepath.Join(base, filepath.FromSlash(rel))
+		info, err := os.Lstat(target)
+		if err != nil {
+			continue // missing files are the asset lock check's finding
+		}
+		// Never report on or through a symlinked asset path — confinement
+		// owns that problem.
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		exec := info.Mode().Perm()&0o111 != 0
+		switch {
+		case assets.IsExecutable(rel) && !exec:
+			lost = append(lost, rel)
+		case !assets.IsExecutable(rel) && exec:
+			extra = append(extra, rel)
+		}
+	}
+	if len(lost) > 0 {
+		sort.Strings(lost)
+		r.add("asset modes", fmt.Errorf("lost executable bit (init --repair --sync restores): %v", lost), true)
+	} else {
+		r.add("asset modes", nil, false)
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		r.Warnings = append(r.Warnings, fmt.Sprintf("unexpected executable bit on assets (init --repair --sync resets): %v", extra))
 	}
 }
 

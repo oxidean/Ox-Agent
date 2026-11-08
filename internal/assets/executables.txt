@@ -1,0 +1,4 @@
+skills/clean-user-facing-text/scripts/clean_text.py
+skills/clean-user-facing-text/scripts/inspect_text.py
+skills/clean-user-facing-text/scripts/text_unicode.py
+skills/remove-ai-marks/scripts/oxidean-watermarks-service.sh

@@ -969,3 +969,90 @@ func TestDoctorValidatesNonYAMLIntegration(t *testing.T) {
 		t.Fatal("Doctor missed a malformed .yml integration")
 	}
 }
+
+// TestRepairRestoresExecBits verifies the mode pass repairs files that
+// skipped content rewrite: a lost executable bit is restored and an
+// unexpected one reset — both directions from one repair run.
+func TestRepairRestoresExecBits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bits are not representable on Windows")
+	}
+	execs := assets.Executables()
+	if len(execs) == 0 {
+		t.Skip("no executable assets recorded")
+	}
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	execFile := filepath.Join(base, filepath.FromSlash(execs[0]))
+	if err := os.Chmod(execFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plainFile := filepath.Join(base, "skills", "adr", "SKILL.md")
+	if err := os.Chmod(plainFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Repair(root, false)
+	if err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	for rel, want := range map[string]os.FileMode{
+		execs[0]:              0o755,
+		"skills/adr/SKILL.md": 0o644,
+	} {
+		info, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %o, want %o", rel, got, want)
+		}
+	}
+	if len(report.ModesFixed) != 2 {
+		t.Fatalf("ModesFixed = %v, want 2 entries", report.ModesFixed)
+	}
+}
+
+// TestDoctorFlagsLostExecBits verifies the doctor→repair round trip: a
+// lost executable bit fails the asset modes check and repair clears it.
+func TestDoctorFlagsLostExecBits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bits are not representable on Windows")
+	}
+	execs := assets.Executables()
+	if len(execs) == 0 {
+		t.Skip("no executable assets recorded")
+	}
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	target := filepath.Join(Base(root), filepath.FromSlash(execs[0]))
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := Doctor(root)
+	found := false
+	for _, check := range report.Checks {
+		if check.Name == "asset modes" {
+			found = true
+			if check.OK {
+				t.Fatal("asset modes check passed with a lost exec bit")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("asset modes check not reported")
+	}
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	report = Doctor(root)
+	for _, check := range report.Checks {
+		if check.Name == "asset modes" && !check.OK {
+			t.Fatalf("asset modes still failing after repair: %s", check.Detail)
+		}
+	}
+}

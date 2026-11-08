@@ -326,3 +326,31 @@ func TestInstallRejectsEscapingPath(t *testing.T) {
 		}
 	}
 }
+
+// TestCopyPackagePreservesExecBit verifies remote skill installs keep the
+// checkout's executability — copying must not flatten modes to 0644.
+func TestCopyPackagePreservesExecBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec bits are not representable on Windows")
+	}
+	src := t.TempDir()
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "run.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyPackage(src, dst); err != nil {
+		t.Fatalf("copyPackage: %v", err)
+	}
+	for rel, want := range map[string]os.FileMode{"run.sh": 0o755, "README.md": 0o644} {
+		info, err := os.Stat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %o, want %o", rel, got, want)
+		}
+	}
+}

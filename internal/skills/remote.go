@@ -354,7 +354,21 @@ func copyPackage(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0o644)
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return err
+		}
+		// Preserve the checkout's executability, normalized to git's
+		// 0644/0755 file modes; os.WriteFile's perm only applies to new
+		// files, so fix the mode explicitly after writing.
+		mode := os.FileMode(0o644)
+		if info.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		if err := os.WriteFile(target, data, mode); err != nil {
+			return err
+		}
+		return os.Chmod(target, mode)
 	})
 }
 
