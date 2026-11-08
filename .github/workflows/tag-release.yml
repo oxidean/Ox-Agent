@@ -120,10 +120,11 @@ jobs:
           git push -f origin "$branch"
           pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
           if [ -z "$pr" ]; then
-            pr="$(gh pr create --base main --head "$branch" \
+            gh pr create --base main --head "$branch" \
               --title "chore(release): bump docs manifest to $ver" \
-              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag." \
-              --json number --jq '.number')"
+              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag."
+            # gh pr create prints only the URL — re-read the number via list.
+            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
           fi
           m=""
           for i in $(seq 1 30); do
