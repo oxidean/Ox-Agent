@@ -46,8 +46,15 @@ tracked by ` + "`assets.lock`" + `. ` + "`kind: core`" + ` in a skill manifest m
 with the distribution and sync-owned (repaired on ` + "`init --repair --sync`" + `);
 ` + "`kind: extension`" + ` means added post-init and never reconciled. To customize a
 core skill, fork it under a new directory name and set its manifest ` + "`kind:`" + `
-to ` + "`extension`" + `; enable the new name under ` + "`skills.enabled`" + ` and map
-it in ` + "`skills.stage_skills`" + ` where it should run.
+to ` + "`extension`" + `; enable the new name under ` + "`skills.enabled`" + ` and replace
+the original name in the ` + "`skills.stage_skills`" + ` entries where it should run —
+appending leaves the original selected first. Update hard-coded asset paths
+in the fork's instructions too: a copied SKILL.md that still points at the
+core skill's scripts executes the core helper. An extension dir that reuses
+a bundled skill's name can still be overwritten by ` + "`skills update --yes`" + ` —
+pick a distinct name. If ` + "`assets.lock`" + ` is missing or corrupt, repair keeps
+drifted files and reports them as conflicts instead of rewriting — review
+conflicts before assuming sync ownership was restored.
 ` + markerEnd + `
 `
 

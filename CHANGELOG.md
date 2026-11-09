@@ -10,6 +10,28 @@ work and minor-release summaries.
 
 ### Fixed
 
+- **CodeRabbit review hardening (OxL findings round 2)** — `Collect` now
+  records a pending lifecycle event on the run when `skill.failed`
+  journaling fails and replays it on a later collect, keeping the journal
+  recoverable; `clean_text.py --in-place` reports `Path.resolve()`
+  failures (e.g. symlink loops) as status 2 instead of a traceback; the
+  watermarks service gains authenticated health checks
+  (`Authorization: Bearer $WATERMARKS_SERVER_API_KEY`), per-lease holds
+  under `tmp/watermarks-service.leases/<token>/` so workflows sharing a
+  parent no longer cancel each other, `run` leases owned by the helper
+  PID, atomic lease writes that fail `ensure` on error, conservative
+  owner checks that distinguish inaccessible procfs from confirmed-dead
+  owners (zombie detection, PID-reuse protection via start time, `ps`
+  fallback), and a lifecycle lock that fails safe on timeout with a
+  mkdir-based fallback when `flock` is absent. `generate-core-skills.mjs`
+  emits the full invocation contract, packet-path operating rules, and
+  per-skill `## Evaluation` sections, and only bootstraps
+  `skill.yaml`/schemas/evals for new skills — regenerating no longer
+  clobbers curated content. Docs clarify `kind` semantics, pipeline
+  forking (copy the pipeline, point it at the forked skill, invoke with
+  `--pipeline`), and that changing an in-flight item's stage mapping can
+  repeat already-collected stages. (#53)
+
 - **Materialized assets lose executable file modes** — `embed.FS` drops
   mode bits, so `init`/`init --repair`/`skills update`/`skills install`
   wrote every file `0644` and bundled scripts (e.g.

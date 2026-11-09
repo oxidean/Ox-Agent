@@ -23,6 +23,15 @@ runtime. Project state, skills, and contracts live under `.ox-agent/`.
 - `ox-agent doctor` validates the setup; `ox-agent start <title>` opens work items.
 - Work items carry state in `index.json`; drive them with
   `ox-agent transition|archive|unblock|status`.
+- Human input is durable, never synchronous. When you need an answer or a
+  gated approval, file `ox-agent input request` and END THE TURN —
+  chat prompts expire before humans see them. Poll with
+  `ox-agent input pending` / `input wait --timeout <budget>`;
+  answers arrive via `input respond <id> --by <name> --answer "..."`
+  (approvals: `--approve|--reject`). Escalated runs and gate hits file
+  these requests automatically; a skill asks a
+  question with `next_action.type: await_input` — the run stays
+  dispatchable and the answer lands in the next packet under `context.inputs`.
 - Skills are contracts, not free-form prompts: `.ox-agent/skills/<name>/SKILL.md`
   plus input/output `schemas/`.
 - Compile the bounded packet (`ox-agent context compile <wi> --skill <s>`)
@@ -36,7 +45,14 @@ Do not edit `.ox-agent/skills`, `schemas`, `workflows`, `pipelines`,
 tracked by `assets.lock`. `kind: core` in a skill manifest means bundled
 with the distribution and sync-owned (repaired on `init --repair --sync`);
 `kind: extension` means added post-init and never reconciled. To customize a
-core skill, fork it under a new directory name, set its manifest `kind:` to
-`extension`, enable the new name under `skills.enabled`, and map it in
-`skills.stage_skills` where it should run.
+core skill, fork it under a new directory name and set its manifest `kind:`
+to `extension`; enable the new name under `skills.enabled` and replace
+the original name in the `skills.stage_skills` entries where it should run —
+appending leaves the original selected first. Update hard-coded asset paths
+in the fork's instructions too: a copied SKILL.md that still points at the
+core skill's scripts executes the core helper. An extension dir that reuses
+a bundled skill's name can still be overwritten by `skills update --yes` —
+pick a distinct name. If `assets.lock` is missing or corrupt, repair keeps
+drifted files and reports them as conflicts instead of rewriting — review
+conflicts before assuming sync ownership was restored.
 <!-- ox-agent:end -->

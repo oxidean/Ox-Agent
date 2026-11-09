@@ -63,7 +63,20 @@ to sync-owned files are reconciled away. Set the fork's manifest `kind:` to
 upstream fixes reach it), add the new directory name to `skills.enabled` in
 `.ox-agent/config.yaml`, and replace the original name in the relevant
 `skills.stage_skills` entries — otherwise stage runs keep selecting the
-original.
+original. Update hard-coded asset paths in the fork's instructions too: a
+copied SKILL.md that still points at the core skill's scripts executes the
+core helper.
+
+Two caveats when forking. First, `stage_skills` does not affect pipelines:
+`ox-agent review`/`ship` dispatch the bundled `pipelines/*.yaml` steps by
+skill name. Fork a pipeline skill by copying the pipeline file under a new
+name (e.g. `pipelines/review-mine.yaml`), updating its `skill:` references,
+and running `ox-agent run <wi> --pipeline review-mine`. Second, replace a
+mapping only between stages: an in-flight item that already collected the
+original skill keeps that completion under the old name, so the fork does
+not inherit it — the next dispatch can re-run the same unit of work under
+the fork. Finish the affected stage (or start the item fresh) before
+swapping the mapping.
 
 ## The work loop
 

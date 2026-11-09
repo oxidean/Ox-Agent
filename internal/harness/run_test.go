@@ -904,3 +904,73 @@ func TestCollectAcceptsValidArtifactPaths(t *testing.T) {
 		t.Fatalf("run status = %s, want collected", run.Status)
 	}
 }
+
+// TestCollectReplaysPendingEventAfterJournalFailure covers the failure
+// where the run record persisted but the skill.failed append failed: a
+// failed run is never collected again, so the event rides on the record
+// and the next collect for the same work item replays it (#53).
+func TestCollectReplaysPendingEventAfterJournalFailure(t *testing.T) {
+	root, item := initProject(t)
+	runA, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	// Block journal appends: a directory where events.ndjson belongs
+	// makes every open fail on all platforms.
+	journal := filepath.Join(root, ".ox-agent", "state", "events.ndjson")
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("removing journal: %v", err)
+	}
+	if err := os.Mkdir(journal, 0o755); err != nil {
+		t.Fatalf("blocking journal path: %v", err)
+	}
+	out := validOutput("specify")
+	out["artifacts"] = []any{"WI-0005*/plan.md"}
+	writeOutput(t, root, runA.RunID, out)
+	if _, _, err := Collect(root, runA.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite blocked journal; want error")
+	}
+	reloaded, err := LoadRun(root, runA.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("run status = %s, want failed", reloaded.Status)
+	}
+	if reloaded.PendingEvent != "skill.failed" {
+		t.Fatalf("pending_event = %q, want skill.failed", reloaded.PendingEvent)
+	}
+	// Restore the journal, then collect another run for the same item —
+	// the reconcile step must replay run A's dropped event.
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("restoring journal path: %v", err)
+	}
+	runB, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "verify", Stage: "verification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, runB.RunID, validOutput("verify"))
+	if _, _, err := Collect(root, runB.RunID); err != nil {
+		t.Fatalf("Collect() after journal restore error = %v", err)
+	}
+	reloaded, err = LoadRun(root, runA.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.PendingEvent != "" {
+		t.Fatalf("pending_event = %q after replay, want cleared", reloaded.PendingEvent)
+	}
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	var replayed bool
+	for _, ev := range events {
+		if ev.Type == "skill.failed" && ev.Data["run_id"] == runA.RunID {
+			replayed = true
+		}
+	}
+	if !replayed {
+		t.Fatal("journal lacks skill.failed event for run A after replay")
+	}
+}

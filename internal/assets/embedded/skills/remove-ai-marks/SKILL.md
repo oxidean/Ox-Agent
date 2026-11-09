@@ -66,13 +66,15 @@ Rules:
    Ownership is per-run: `ensure` files a lease under
    `tmp/watermarks-service.leases/` keyed by `WATERMARKS_RUN_TOKEN`
    (default: the calling shell's pid) and owned by that parent shell's pid.
-   `teardown` drops **its own** lease (ownership is verified before unlink)
-   and only stops an agent-started service when **no** leases remain, so
-   overlapping runs never kill each other's service. `ensure`/`teardown`
-   must run under the same parent shell; when they can't, set
-   `WATERMARKS_RUN_TOKEN` to the same value for both calls — a leaked lease
-   is reaped once its recorded owner verifiably dies, so favor leakage over
-   borrowing another run's identity.
+   `teardown` drops **one of its own** holds (ownership is verified before
+   unlink — a shared token across *different* parents cannot release the
+   lease) and only stops an agent-started service when **no** holds remain,
+   so overlapping runs never kill each other's service. `ensure`/`teardown`
+   must share both token and parent shell — when they can't, prefer
+   `run -- <cmd>` (the helper owns the lease itself) or set
+   `WATERMARKS_RUN_TOKEN` to the same value for both calls under the same
+   parent. A leaked hold is reaped once its recorded owner verifiably dies,
+   so favor leakage over borrowing another run's identity.
 3. **Never** kill a listener you did not start (`REUSED` / `LEFT_RUNNING`).
 4. Checkout lives at `tmp/watermarks-remover` (gitignored). The helper clones
    pin `v0.7.0` if missing. Do **not** fall back to inventing local cleaners
@@ -82,7 +84,8 @@ Rules:
    `ensure` (same lifecycle).
 
 If `WATERMARKS_SERVER_API_KEY` is set on the service, every request needs
-`-H "Authorization: Bearer ***"`.
+`-H "Authorization: Bearer $WATERMARKS_SERVER_API_KEY"` — the helper's
+health checks send it too.
 
 ### Capabilities
 

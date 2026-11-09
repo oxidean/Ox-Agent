@@ -69,7 +69,14 @@ def main() -> int:
         if args.path in (None, "-"):
             eprint("--in-place requires a file path")
             return 2
-        in_place_src = Path(args.path).resolve()
+        # resolve() raises on unreadable or looping links — a traceback
+        # here would bypass the clean exit-2 contract (RuntimeError on
+        # Python <3.10 for symlink loops, OSError elsewhere).
+        try:
+            in_place_src = Path(args.path).resolve()
+        except (OSError, RuntimeError) as e:
+            eprint(f"cannot resolve {args.path}: {e}")
+            return 2
 
     text = read_text_input(
         str(in_place_src) if in_place_src is not None else args.path,

@@ -17,13 +17,20 @@
 #   WATERMARKS_PIN_COMMIT    commit v0.7.0 must resolve to (tags are movable;
 #                          the clone is verified against this before use)
 #   WATERMARKS_CLONE_URL     clone source (default upstream GitHub repo)
-#   WATERMARKS_RUN_TOKEN     lease identity for a run's ensure→teardown pair;
-#                          default $PPID. Lease ownership binds to the
-#                          calling shell's pid, so ensure and teardown must
-#                          share BOTH token and parent shell; set the token
-#                          explicitly when they run under different parents
-#                          that share a supervisor, and never let two
-#                          concurrent runs share one token.
+#   WATERMARKS_RUN_TOKEN     lease identity for a run's ensure→teardown
+#                          pair; default $PPID. Ownership binds to the
+#                          parent shell's pid, so ensure and teardown must
+#                          share BOTH token and parent — a matching token
+#                          across different parents cannot release the
+#                          lease (owner check fails) and the service keeps
+#                          running while the original owner lives. For
+#                          one-shot workflows prefer `run --` which binds
+#                          the lease to this helper process; concurrent
+#                          workflows under one parent get distinct holds
+#                          under the shared token (each teardown consumes
+#                          exactly one), but distinct tokens stay safer.
+#   WATERMARKS_SERVER_API_KEY  when set, sent as a bearer token on health
+#                          checks so an authenticated service answers them.
 
 set -euo pipefail
 
@@ -49,7 +56,14 @@ LEASES_DIR="${STATE_DIR}/watermarks-service.leases"
 ENSURE_LOCK="${STATE_DIR}/watermarks-service.ensure.lock"
 
 health_ok() {
-  curl -sf --max-time 2 "${WM_URL}/health" >/dev/null 2>&1
+  # The pinned service rejects unauthenticated requests when its API key
+  # is configured — a bare probe would read healthy-as-down and ensure
+  # would cold-start against a live, authenticated service (#53).
+  if [[ -n "${WATERMARKS_SERVER_API_KEY:-}" ]]; then
+    curl -sf --max-time 2       -H "Authorization: Bearer ${WATERMARKS_SERVER_API_KEY}"       "${WM_URL}/health" >/dev/null 2>&1
+  else
+    curl -sf --max-time 2 "${WM_URL}/health" >/dev/null 2>&1
+  fi
 }
 
 # Ownership is a three-state question: 0 = confirmed ours, 1 = confirmed
@@ -84,8 +98,83 @@ server_state() {
       *) return 1 ;;            # alive, verifiably not ours: recycled PID
     esac
   fi
-  kill -0 "$pid" 2>/dev/null && return 2
-  return 1
+  # kill -0 fails on ESRCH (truly gone) and EPERM (alive but unsignalable —
+  # another user's pid under hidepid). Only ESRCH may read as gone.
+  if kill -0 "$pid" 2>/dev/null; then
+    return 2
+  fi
+  if owner_confirmed_absent "$pid"; then
+    return 1
+  fi
+  return 2
+}
+
+# --- process-identity helpers ----------------------------------------------
+# A pid alone is not an identity: the kernel recycles them, and kill -0
+# conflates "no such process" (ESRCH) with "not yours to signal" (EPERM).
+
+# 0 = confirmed absent (ESRCH — nothing answers the pid), 1 = present or
+# merely inaccessible. Under hidepid an accessible /proc entry may be
+# missing for a live foreign pid, so absence there is not proof of death.
+owner_confirmed_absent() {
+  local owner="$1" kerr
+  if kill -0 "$owner" 2>/dev/null; then
+    return 1
+  fi
+  kerr="$(LC_ALL=C kill -0 "$owner" 2>&1 >/dev/null || true)"
+  case "$kerr" in
+    *"o such process"*|*"o such pid"*) return 0 ;;
+    *"ot permitted"*|*"ermission denied"*|*EPERM*) return 1 ;;
+  esac
+  # Ambiguous wording (non-English locale, unusual kill): fall back to the
+  # filesystem oracles.
+  if [[ -e /proc/self ]]; then
+    [[ -d "/proc/$owner" ]] && return 1
+    return 0
+  fi
+  command -v ps >/dev/null 2>&1 || return 1
+  ps -p "$owner" >/dev/null 2>&1 && return 1
+  return 0
+}
+
+# An exited-but-unreaped owner still answers kill -0 and reports its old
+# starttime — only the stat state field proves it is gone for good.
+owner_is_zombie() {
+  local st
+  st="$(python3 - "$1" <<'PY' 2>/dev/null
+import sys
+try:
+    with open("/proc/" + sys.argv[1] + "/stat") as fh:
+        data = fh.read()
+except OSError:
+    sys.exit(1)
+print(data.rsplit(")", 1)[1].split()[0])
+PY
+)" || return 1
+  [[ "$st" == "Z" ]]
+}
+
+# A lifetime identity stronger than a bare pid: procfs starttime (field 22
+# of /proc/<pid>/stat, jiffies since boot) on Linux, `ps -o lstart=` on
+# hosts without procfs. A recycled pid never reports the recorded value.
+owner_lifetime_id() {
+  local pid="$1"
+  if [[ -e /proc/self ]]; then
+    python3 - "$pid" <<'PY' 2>/dev/null
+import sys
+try:
+    with open("/proc/" + sys.argv[1] + "/stat") as fh:
+        data = fh.read()
+except OSError:
+    sys.exit(1)
+# comm may contain spaces/parens; fields after its closing ')' shift by two,
+# so starttime (field 22) sits at index 19 of the remainder.
+print(data.rsplit(")", 1)[1].split()[19])
+PY
+    return
+  fi
+  command -v ps >/dev/null 2>&1 || return 1
+  ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' '
 }
 
 # --- run leases -------------------------------------------------------------
@@ -120,115 +209,154 @@ run_token() {
   printf '%s' "$t"
 }
 
-# A pid alone is not an identity: the kernel recycles them. starttime (field
-# 22 of /proc/<pid>/stat, jiffies since boot) is bound to one process
-# lifetime — a recycled pid never reports the recorded value, so a mismatch
-# is proof the lease owner is gone rather than merely unverifiable.
-pid_start_time() {
-  python3 - "$1" <<'PY' 2>/dev/null
-import sys
-try:
-    with open("/proc/" + sys.argv[1] + "/stat") as fh:
-        data = fh.read()
-except OSError:
-    sys.exit(1)
-# comm may contain spaces/parens; fields after its closing ')' shift by two,
-# so starttime (field 22) sits at index 19 of the remainder.
-print(data.rsplit(")", 1)[1].split()[19])
-PY
-}
 
-lease_file() {
+# One token owns a directory of holds — a semaphore, not a file: each
+# ensure call adds exactly one hold, each teardown consumes exactly one.
+# Two workflows sharing a parent (and therefore the default token) then
+# get distinct holds, so the first teardown can no longer delete the
+# lease out from under the second (#53). A workflow that ensures twice
+# without tearing down leaks the extra hold until its owner dies and the
+# reaper collects it — leakage beats killing a live run's service.
+lease_dir() {
   printf '%s/%s' "$LEASES_DIR" "$(run_token)"
 }
 
-write_lease() {
-  mkdir -p "$LEASES_DIR"
-  # Publish atomically (temp + rename): a torn write would leave a lease
-  # whose owner_pid fails to parse — unverifiable, and therefore held
-  # forever by the conservative reap. The dot-prefixed temp stays out of
-  # the reap glob.
-  local target tmp start
-  target="$(lease_file)"
-  tmp="$LEASES_DIR/.lease.tmp.$$"
-  # The owning process is the caller's parent: the shell driving the run.
-  # Subshells inherit $PPID, so `$(ensure)` and `run` see the same token.
-  start="$(pid_start_time "$PPID" || true)"
-  printf '{"owner_pid":%s,"owner_start":"%s"}\n' "$PPID" "$start" >"$tmp"
-  mv -f "$tmp" "$target"
+lease_field() {
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("" if v is None else v)' "$1" "$2" 2>/dev/null || true
 }
 
-# Drop only the lease this run wrote. The path is keyed by token, but the
-# record inside names the owner — deleting by name alone could remove a
-# successor's lease that rewrote the same token, so ownership is verified
-# against the recorded pid before unlinking.
+lease_owner() {
+  # The lease's owning process: LEASE_OWNER_PID when the caller set it
+  # (`run` binds holds to the helper process itself), else the parent —
+  # the shell driving the workflow, stable across ensure and teardown.
+  printf '%s' "${LEASE_OWNER_PID:-$PPID}"
+}
+
+WROTE_HOLD=""
+
+write_lease() {
+  local dir tmp hold owner start
+  dir="$(lease_dir)"
+  owner="$(lease_owner)"
+  mkdir -p "$dir"
+  # Publish atomically (temp + rename): a torn write would leave a hold
+  # whose owner_pid fails to parse — unverifiable, and therefore held
+  # forever by the conservative reap. A failed write must abort the
+  # ensure: publishing a partial or empty hold is worse than failing.
+  tmp="$dir/.hold.tmp.$BASHPID"
+  start="$(owner_lifetime_id "$owner" || true)"
+  if ! printf '{"owner_pid":%s,"owner_start":"%s"}\n' "$owner" "$start" >"$tmp"; then
+    rm -f "$tmp"
+    echo "error: cannot write lease into $dir" >&2
+    return 1
+  fi
+  # hold-<time>-<pid> sorts oldest-first in the drop glob below.
+  hold="$dir/hold-$(date +%s%N 2>/dev/null || date +%s)-$BASHPID"
+  if ! mv -f "$tmp" "$hold"; then
+    rm -f "$tmp"
+    echo "error: cannot publish lease into $dir" >&2
+    return 1
+  fi
+  WROTE_HOLD="$hold"
+}
+
+# Drop the hold this process's ensure just wrote — used by ensure's own
+# failure paths, where the target is known exactly rather than consumed
+# oldest-first.
+drop_wrote_lease() {
+  [[ -n "$WROTE_HOLD" && -e "$WROTE_HOLD" ]] && rm -f "$WROTE_HOLD"
+  rmdir "$(lease_dir)" 2>/dev/null || true
+}
+
+# Consume exactly one of this run's outstanding holds — the oldest owned
+# by our parent. Holds under a shared token are fungible: a teardown that
+# consumes one hold leaves the remaining runs' claims intact, so an
+# interleaved workflow's teardown can never delete a sibling's claim
+# (#53). A successor's hold under the same token is never taken —
+# ownership is verified against the recorded pid before unlinking.
 drop_own_lease() {
-  local lease owner
-  lease="$(lease_file)"
-  [[ -f "$lease" ]] || return 0
-  owner="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("owner_pid") or "")' "$lease" 2>/dev/null || true)"
-  [[ "$owner" == "$PPID" ]] || return 0
-  rm -f "$lease"
+  local dir owner hold o
+  dir="$(lease_dir)"
+  [[ -d "$dir" ]] || return 0
+  owner="$(lease_owner)"
+  for hold in "$dir"/hold-*; do
+    [[ -e "$hold" ]] || continue
+    o="$(lease_field "$hold" owner_pid)"
+    if [[ "$o" == "$owner" ]]; then
+      rm -f "$hold"
+      break
+    fi
+  done
+  rmdir "$dir" 2>/dev/null || true
 }
 
 # 0 = owner confirmed alive, 1 = confirmed dead, 2 = unverifiable.
 lease_owner_state() {
   local owner="$1" recorded_start="${2:-}"
   [[ "$owner" =~ ^[0-9]+$ ]] || return 2
-  # A recorded starttime upgrades identity from "pid exists" to "same
-  # process": a live pid whose starttime differs was recycled after the
+  # A recorded lifetime id upgrades identity from "pid exists" to "same
+  # process": a live pid whose identity differs was recycled after the
   # owner's death and the lease is confirmed-stale.
-  if [[ -n "$recorded_start" && -e /proc/self ]]; then
-    [[ -d "/proc/$owner" ]] || return 1
-    local now
-    if now="$(pid_start_time "$owner")"; then
-      [[ "$now" == "$recorded_start" ]] && return 0
+  if [[ -n "$recorded_start" ]]; then
+    local now=""
+    now="$(owner_lifetime_id "$owner" 2>/dev/null)" || now=""
+    if [[ -n "$now" ]]; then
+      if [[ "$now" == "$recorded_start" ]]; then
+        # Same lifetime, but an unreaped zombie is still gone — check the
+        # stat state field, not just existence.
+        owner_is_zombie "$owner" && return 1
+        return 0
+      fi
       return 1
     fi
-    # Present but stat unreadable: identity can't be confirmed — keep.
+    # Identity oracle silent: only a confirmed-absent pid counts as dead —
+    # under hidepid a live foreign pid keeps its lease.
+    owner_confirmed_absent "$owner" && return 1
     return 2
   fi
   if kill -0 "$owner" 2>/dev/null; then
+    owner_is_zombie "$owner" && return 1
     return 0
   fi
-  # EPERM reports as failure but proves the pid exists — only an absent
-  # /proc entry (on a live procfs) or a failed ps lookup means dead.
-  if [[ -d "/proc/$owner" ]]; then
-    return 0
-  fi
-  if [[ -e /proc/self ]]; then
-    return 1
-  fi
-  # No procfs (macOS, minimal images): ps is the oracle — a nonzero exit on
-  # `ps -p` is confirmed-absent, not merely unverifiable. Without ps there is
-  # no oracle at all, so stay conservative.
-  if command -v ps >/dev/null 2>&1; then
-    if ps -p "$owner" >/dev/null 2>&1; then
-      return 0
-    fi
+  # kill -0 conflates ESRCH (dead) with EPERM (alive, not ours — e.g.
+  # hidepid). Only a confirmed-absent verdict may reap.
+  if owner_confirmed_absent "$owner"; then
     return 1
   fi
   return 2
 }
 
 reap_leases() {
-  local lease owner owner_start st
-  for lease in "$LEASES_DIR"/*; do
-    [[ -e "$lease" ]] || continue
-    owner="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("owner_pid") or "")' "$lease" 2>/dev/null || true)"
-    owner_start="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("owner_start") or "")' "$lease" 2>/dev/null || true)"
+  local dir hold owner owner_start st
+  for dir in "$LEASES_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    for hold in "$dir"hold-*; do
+      [[ -e "$hold" ]] || continue
+      owner="$(lease_field "$hold" owner_pid)"
+      owner_start="$(lease_field "$hold" owner_start)"
+      st=0
+      lease_owner_state "$owner" "$owner_start" || st=$?
+      [[ "$st" -eq 1 ]] && rm -f "$hold"
+    done
+    rmdir "$dir" 2>/dev/null || true
+  done
+  # Pre-holds layout left single-file leases keyed by token; reap them
+  # with the same owner rules.
+  local legacy
+  for legacy in "$LEASES_DIR"/*; do
+    [[ -f "$legacy" ]] || continue
+    owner="$(lease_field "$legacy" owner_pid)"
+    owner_start="$(lease_field "$legacy" owner_start)"
     st=0
     lease_owner_state "$owner" "$owner_start" || st=$?
-    if [[ "$st" -eq 1 ]]; then
-      rm -f "$lease"
-    fi
+    [[ "$st" -eq 1 ]] && rm -f "$legacy"
   done
 }
 
 leases_held() {
-  local lease
-  for lease in "$LEASES_DIR"/*; do
-    [[ -e "$lease" ]] && return 0
+  local entry
+  for entry in "$LEASES_DIR"/*; do
+    [[ -e "$entry" ]] && return 0
   done
   return 1
 }
@@ -309,32 +437,81 @@ reuse_existing() {
   return 0
 }
 
-# Serialize the whole ensure/teardown lifecycle on ENSURE_LOCK where flock
-# exists (Linux). Lease-write + health-check + start must be atomic against
-# teardown's check-and-stop: without one lock, a reuse decision can land
-# between teardown's empty-lease check and the kill, pinning a lease on a
-# service about to die. A stuck holder must not wedge later ops, so the
-# wait is bounded and a timeout degrades to the unserialized behavior.
+# Serialize the whole ensure/teardown lifecycle on ENSURE_LOCK. Lease-write
+# + health-check + start must be atomic against teardown's check-and-stop:
+# without one lock, a reuse decision can land between teardown's
+# empty-lease check and the kill, pinning a lease on a service about to
+# die. flock does the job on Linux; where it is absent (macOS), a mkdir
+# lock works — mkdir is atomic and stale dirs are reclaimed once their
+# recorded owner is confirmed dead. A timed-out wait FAILS the operation:
+# proceeding unserialized reopens the check-and-stop gap the lock exists
+# to close (#53).
 take_lifecycle_lock() {
   LOCK_FD=""
-  command -v flock >/dev/null 2>&1 || return 0
+  LOCK_DIR=""
   mkdir -p "$STATE_DIR"
-  exec {LOCK_FD}>"$ENSURE_LOCK"
-  if ! flock -w 60 "$LOCK_FD"; then
-    echo "warning: timed out acquiring $ENSURE_LOCK; proceeding unserialized" >&2
+  if command -v flock >/dev/null 2>&1; then
+    exec {LOCK_FD}>"$ENSURE_LOCK"
+    if flock -w 60 "$LOCK_FD"; then
+      return 0
+    fi
+    eval "exec ${LOCK_FD}>&-"
+    LOCK_FD=""
+    echo "error: timed out acquiring $ENSURE_LOCK" >&2
+    return 1
+  fi
+  local lockdir="${ENSURE_LOCK}.d" tries=0 owner st
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    owner="$(cat "$lockdir/owner" 2>/dev/null || true)"
+    if [[ -n "$owner" ]]; then
+      st=0
+      lease_owner_state "$owner" || st=$?
+      if [[ "$st" -eq 1 ]]; then
+        # Confirmed-dead holder: reclaim rather than wait out the timeout.
+        rm -rf "$lockdir"
+        continue
+      fi
+    fi
+    tries=$((tries + 1))
+    if (( tries > 120 )); then
+      echo "error: timed out acquiring lifecycle lock $lockdir" >&2
+      return 1
+    fi
+    sleep 0.5
+  done
+  if ! printf '%s\n' "$$" >"$lockdir/owner"; then
+    rm -rf "$lockdir"
+    echo "error: cannot record lifecycle lock owner" >&2
+    return 1
+  fi
+  LOCK_DIR="$lockdir"
+}
+
+release_lifecycle_lock() {
+  if [[ -n "${LOCK_DIR:-}" ]]; then
+    rm -rf "$LOCK_DIR"
+    LOCK_DIR=""
+  fi
+  if [[ -n "${LOCK_FD:-}" ]]; then
     eval "exec ${LOCK_FD}>&-"
     LOCK_FD=""
   fi
 }
 
 ensure() {
-  local LOCK_FD=""
-  take_lifecycle_lock
+  local LOCK_FD="" LOCK_DIR=""
+  take_lifecycle_lock || return 1
+  local ec=0
+  ensure_locked || ec=$?
+  release_lifecycle_lock
+  return "$ec"
+}
 
-  # The lease goes down before anything else: teardown only ever removes it.
-  # Under the lock, the health check that follows can race nothing — a
-  # teardown's check-and-stop is serialized behind us.
-  write_lease
+ensure_locked() {
+  # The hold goes down before anything else: teardown only ever consumes
+  # it. Under the lock, the health check that follows can race nothing —
+  # a teardown's check-and-stop is serialized behind us.
+  write_lease || return 1
 
   if health_ok; then
     reuse_existing
@@ -343,10 +520,10 @@ ensure() {
 
   # Bash clears errexit inside the $(ensure) command substitution, so a bare
   # `ensure_checkout` that fails would not abort: ensure would still launch the
-  # (unverified or missing) server. Propagate explicitly — and release only
-  # the lease this attempt wrote, verified by owner pid, since the traps
-  # that would normally clean up are not yet installed.
-  ensure_checkout || { drop_own_lease; return 1; }
+  # (unverified or missing) server. Propagate explicitly — and release the
+  # exact hold this attempt wrote, since the traps that would normally
+  # clean up are not yet installed.
+  ensure_checkout || { drop_wrote_lease; return 1; }
 
   mkdir -p "$STATE_DIR"
   : >"$LOG_FILE"
@@ -371,7 +548,7 @@ ensure() {
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "error: watermarks service exited before becoming healthy; see $LOG_FILE" >&2
       write_state false null
-      drop_own_lease
+      drop_wrote_lease
       return 1
     fi
     sleep 0.25
@@ -382,16 +559,23 @@ ensure() {
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   write_state false null
-  drop_own_lease
+  drop_wrote_lease
   return 1
 }
 
 teardown() {
+  local LOCK_FD="" LOCK_DIR=""
+  take_lifecycle_lock || return 1
+  local ec=0
+  teardown_locked || ec=$?
+  release_lifecycle_lock
+  return "$ec"
+}
+
+teardown_locked() {
   # Check-and-stop holds the same lifecycle lock as ensure, so a concurrent
-  # ensure cannot file a lease and reuse the service in the gap between the
+  # ensure cannot file a hold and reuse the service in the gap between the
   # empty-check and the kill.
-  local LOCK_FD=""
-  take_lifecycle_lock
 
   # This run is done with the service: drop its lease (verified by owner pid,
   # never a bare name-delete), then reap leases whose owners died without
@@ -473,11 +657,14 @@ case "$cmd" in
       echo "usage: $0 run -- <command...>" >&2
       exit 2
     fi
-    # ensure+teardown happen inside this one process, so the script's own
-    # pid is a lease token unique to this invocation — two `run` commands
-    # under one parent must never share the $PPID default and steal each
-    # other's lease (#47).
+    # ensure+teardown happen inside this one process: the script's own pid
+    # is a lease token unique to this invocation AND the correct owner —
+    # the hold lives and dies with the helper, not whoever launched it, so
+    # a backgrounded `run` keeps its claim after the launcher exits and a
+    # killed helper's claim is reaped (#53).
     WATERMARKS_RUN_TOKEN="${WATERMARKS_RUN_TOKEN:-run-$$}"
+    LEASE_OWNER_PID=$$
+    export WATERMARKS_RUN_TOKEN LEASE_OWNER_PID
     run_with_service "$@"
     ;;
   *)

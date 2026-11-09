@@ -80,5 +80,23 @@ class InPlaceWriteFailureTest(unittest.TestCase):
             )
 
 
+class InPlaceResolveFailureTest(unittest.TestCase):
+    def test_unresolvable_path_exits_cleanly_without_traceback(self) -> None:
+        """A resolve() failure must be a clean exit 2, not a traceback (#53).
+
+        Python <3.10 raises RuntimeError on symlink loops and every runtime
+        can raise OSError for unresolvable paths — both must be reported.
+        """
+        argv = ["clean_text.py", "loop.txt", "--in-place"]
+        for exc in (RuntimeError("Symlink loop"), OSError("cannot resolve")):
+            with self.subTest(exc=type(exc).__name__):
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch.object(Path, "resolve", side_effect=exc),
+                ):
+                    rc = clean_text.main()
+                self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

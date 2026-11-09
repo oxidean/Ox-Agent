@@ -145,12 +145,12 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
             json.dumps({"started_by_us": False, "pid": None, "url": "", "checkout": ""})
         )
         self.leases_dir.mkdir()
-        # Above the kernel's maximum possible pid: deterministically absent.
-        # 4_000_000 was not — 64-bit pid_max can reach 4_194_304.
-        try:
-            dead_pid = int(Path("/proc/sys/kernel/pid_max").read_text()) + 1
-        except (OSError, ValueError):
-            dead_pid = 1 << 22  # linux pid_max ceiling (also above macOS 99998)
+        # A real exited child is a deterministically dead owner — unlike
+        # pid_max+1, which can stay alive when the limit was lowered under
+        # running processes.
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        dead_pid = dead.pid
         (self.leases_dir / "crashed").write_text(json.dumps({"owner_pid": dead_pid}))
         (self.leases_dir / "live").write_text(json.dumps({"owner_pid": os.getpid()}))
 
@@ -260,10 +260,48 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
         done = self._call("teardown")
         self.assertEqual(done.stdout.strip(), "STOPPED", done.stderr)
 
+    def test_shared_parent_workflows_hold_distinct_leases(self) -> None:
+        """Two runs under one parent + default token: distinct holds (#53).
+
+        Each ensure files its own hold under the shared token dir and each
+        teardown consumes exactly one — the first teardown must not delete
+        the sibling workflow's claim.
+        """
+        service_pid = self._spawn_fake_service()
+        self.state_file.write_text(
+            json.dumps(
+                {
+                    "started_by_us": True,
+                    "pid": service_pid,
+                    "url": self.env["WATERMARKS_SERVICE_URL"],
+                    "checkout": str(self.root / "x"),
+                }
+            )
+        )
+
+        a = self._call("ensure")
+        self.assertEqual(a.stdout.strip(), "REUSED", a.stderr)
+        b = self._call("ensure")
+        self.assertEqual(b.stdout.strip(), "REUSED", b.stderr)
+        # Both calls share the test process as parent → shared token dir.
+        tok_dir = self.leases_dir / str(os.getpid())
+        self.assertTrue(tok_dir.is_dir(), "holds must live under a per-token dir")
+        self.assertEqual(len(list(tok_dir.iterdir())), 2)
+
+        first = self._call("teardown")
+        self.assertEqual(first.stdout.strip(), "LEFT_RUNNING", first.stderr)
+        self.assertEqual(len(list(tok_dir.iterdir())), 1, "one hold consumed")
+        self.assertIsNone(self._service_proc.poll(), "service killed too early")
+
+        second = self._call("teardown")
+        self.assertEqual(second.stdout.strip(), "STOPPED", second.stderr)
+        self.assertFalse(tok_dir.is_dir(), "empty token dir must be removed")
+
     def test_run_subcommand_uses_one_token(self) -> None:
         """`run` must ensure+teardown under a single lease identity."""
         proc = self._call(
-            "run", "--", "bash", "-c", "cat \"$OXIDEAN_ROOT/tmp/watermarks-service.leases\"/* 2>/dev/null; true",
+            "run", "--", "bash", "-c",
+            "cat \"$OXIDEAN_ROOT/tmp/watermarks-service.leases\"/*/hold-* 2>/dev/null; true",
             token="one-shot",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

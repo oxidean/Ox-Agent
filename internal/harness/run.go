@@ -36,7 +36,13 @@ type Run struct {
 	CollectedAt   string `json:"collected_at,omitempty"`
 	AwaitingInput string `json:"awaiting_input,omitempty"`
 	Error         string `json:"error,omitempty"`
-	Dir           string `json:"-"`
+	// PendingEvent holds a journal event whose append failed after the
+	// run was already persisted. A failed run is never collected again,
+	// so the type and payload ride on the record until a later collect
+	// for the same work item retries the append (#53).
+	PendingEvent     string         `json:"pending_event,omitempty"`
+	PendingEventData map[string]any `json:"pending_event_data,omitempty"`
+	Dir              string         `json:"-"`
 }
 
 // DispatchRequest describes one skill invocation to dispatch.
@@ -192,9 +198,58 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 
 // Collect validates a pending run's output.json against the skill's output
 // schema, journals the outcome, and applies the declared next_action.
+// rememberPendingEvent stores a standard skill.failed payload for
+// replay; callers re-save after invoking it.
+func (r *Run) rememberPendingEvent(eventType string) {
+	r.PendingEvent = eventType
+	r.PendingEventData = map[string]any{"run_id": r.RunID, "skill": r.Skill, "stage": r.Stage, "error": r.Error}
+}
+
+// reconcilePendingEvents retries journal appends that failed after their
+// runs were already persisted. A failed run is never collected again, so
+// without this the event is lost for good once journal access returns.
+func reconcilePendingEvents(root, itemID string) error {
+	entries, err := os.ReadDir(runsDir(root))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		r, err := LoadRun(root, entry.Name())
+		if err != nil || r.WorkItemID != itemID || r.PendingEvent == "" {
+			continue
+		}
+		if err := state.Append(root, state.Event{
+			Type:       r.PendingEvent,
+			WorkItemID: r.WorkItemID,
+			Actor:      "ox-agent",
+			Data:       r.PendingEventData,
+		}); err != nil {
+			return fmt.Errorf("replaying pending event for run %s: %w", r.RunID, err)
+		}
+		r.PendingEvent, r.PendingEventData = "", nil
+		if err := r.save(root); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Collect(root, runID string) (*Run, map[string]any, error) {
 	run, err := LoadRun(root, runID)
 	if err != nil {
+		return nil, nil, err
+	}
+	// Replay events that could not be journaled on an earlier collect for
+	// this work item: the journal is the audit and replay source, so a
+	// missing skill.failed must not be lost just because that run is no
+	// longer pending.
+	if err := reconcilePendingEvents(root, run.WorkItemID); err != nil {
 		return nil, nil, err
 	}
 	if run.Status != "pending" {
@@ -215,12 +270,15 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		run.Status = "failed"
 		run.Error = "output failed schema validation: " + err.Error()
 		_ = run.save(root)
-		_ = state.Append(root, state.Event{
+		if appendErr := state.Append(root, state.Event{
 			Type:       "skill.failed",
 			WorkItemID: item.ID,
 			Actor:      "ox-agent",
 			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-		})
+		}); appendErr != nil {
+			run.rememberPendingEvent("skill.failed")
+			_ = run.save(root)
+		}
 		return run, nil, fmt.Errorf("output for %s failed validation: %w", runID, err)
 	}
 	var output map[string]any
@@ -241,6 +299,12 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 			Actor:      "ox-agent",
 			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
 		})
+		if appendErr != nil {
+			run.rememberPendingEvent("skill.failed")
+			if saveErr == nil {
+				saveErr = run.save(root)
+			}
+		}
 		// Surface persistence failures alongside the path error: a run
 		// that stayed pending or failed without its event must be visible,
 		// not silently reconcilable.
@@ -287,12 +351,16 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	if run.Status == "failed" {
 		eventType = "skill.failed"
 	}
+	eventData := map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action}
 	if err := state.Append(root, state.Event{
 		Type:       eventType,
 		WorkItemID: item.ID,
 		Actor:      "ox-agent",
-		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action},
+		Data:       eventData,
 	}); err != nil {
+		run.PendingEvent = eventType
+		run.PendingEventData = eventData
+		_ = run.save(root)
 		return run, output, err
 	}
 	if run.Status == "collected" || blocking || needsInput {
