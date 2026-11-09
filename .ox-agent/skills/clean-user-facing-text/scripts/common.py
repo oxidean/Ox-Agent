@@ -350,6 +350,56 @@ def _read_stdin_capped(
     return b"".join(chunks).decode("utf-8", errors="surrogateescape")
 
 
+def read_text_input_fd(
+    fd: int,
+    name: str,
+    *,
+    allow_binary: bool = False,
+    advice: tuple[str, ...] | None = None,
+) -> str:
+    """read_text_input over an already-open fd.
+
+    The caller owns *fd*: it was opened on the resolved in-place target, so
+    the bytes read here are bound to that inode even if the path later
+    resolves elsewhere.
+    """
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        eprint(f"refusing non-regular input (not a regular file): {name}")
+        raise SystemExit(2)
+    if st.st_size > MAX_INPUT_BYTES:
+        eprint(f"refusing input larger than {MAX_INPUT_BYTES} bytes: {name}")
+        raise SystemExit(2)
+    try:
+        with os.fdopen(os.dup(fd), "rb") as f:
+            data = f.read(MAX_INPUT_BYTES + 1)
+    except OSError as e:
+        eprint(f"cannot read {name}: {e}")
+        raise SystemExit(2) from None
+    if len(data) > MAX_INPUT_BYTES:
+        eprint(f"refusing input larger than {MAX_INPUT_BYTES} bytes: {name}")
+        raise SystemExit(2)
+    guard_binary(data, name, allow_binary=allow_binary, advice=advice)
+    return data.decode("utf-8", errors="surrogateescape")
+
+
+def rewrite_file_fd(fd: int, data: bytes) -> None:
+    """Overwrite the file behind *fd* in place (truncate + write + fsync).
+
+    Unlike temp+os.replace, this never re-resolves a path: the write is bound
+    to the same inode the caller read and backed up, so a parent-directory
+    swap mid-run cannot redirect the overwrite onto an unbacked-up file. The
+    tradeoff is atomicity — a failed write may leave the file partial, which
+    is why callers must retain the backup on failure.
+    """
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+    os.fsync(fd)
+
+
 def write_text_output(text: str, path: str | None) -> None:
     if path is None or path == "-":
         # Byte-exact contract: write the encoded text verbatim — no appended

@@ -32,6 +32,26 @@ work and minor-release summaries.
   `--pipeline`), and that changing an in-flight item's stage mapping can
   repeat already-collected stages. (#53)
 
+- **CodeRabbit review hardening (OxL findings round 3)** —
+  `clean_text.py --in-place` now binds the read, backup, and rewrite to
+  one inode (open fd at resolve time), so a parent-directory swap
+  mid-run cannot redirect the overwrite onto an unbacked-up file — the
+  in-place write is no longer atomic, so a failed rewrite retains the
+  `.bak` as the recovery copy. The watermarks helper hardens further:
+  `BASHPID` falls back to `$$` for Bash 3.2 (macOS), lease owner
+  lifetimes are recorded TZ-independent (`TZ=UTC ps -o lstart`) with a
+  legacy-format comparator so pre-fix leases are not misreaped, live
+  pre-holds file leases migrate into the per-token dir as `hold-legacy-*`
+  instead of blocking `ensure`, `ensure` publishes `lease-hold=<name>` on
+  stderr for `WATERMARKS_HOLD`-targeted teardowns (a repeated teardown
+  releases nothing rather than eating a sibling's hold), hold selection
+  prefers the current owner incarnation over pid-only matches, stale
+  `.hold.tmp.*` publication files are reaped after a grace period, and
+  the mkdir fallback lock reclaims dead/ownerless dirs via rename-claim
+  so a concurrent waiter can never delete a successor's fresh lock.
+  `docs/architecture.md` notes that forked pipelines need a unique
+  `name:` to avoid sharing progress state. (#53)
+
 - **Materialized assets lose executable file modes** — `embed.FS` drops
   mode bits, so `init`/`init --repair`/`skills update`/`skills install`
   wrote every file `0644` and bundled scripts (e.g.

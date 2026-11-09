@@ -29,6 +29,17 @@
 #                          workflows under one parent get distinct holds
 #                          under the shared token (each teardown consumes
 #                          exactly one), but distinct tokens stay safer.
+#   WATERMARKS_HOLD        exact hold name (hold-<time>-<pid>) for teardown
+#                          to release; ensure prints it on stderr as
+#                          "lease-hold=<name>". Set it when several workflows
+#                          share a parent AND token: a repeated teardown then
+#                          finds its own hold already gone and releases
+#                          nothing — without it, an extra teardown silently
+#                          consumes a sibling's hold.
+#   LEASE_OWNER_PID        override for the recorded lease owner pid (the
+#                          `run` subcommand binds holds to the helper pid).
+#   WATERMARKS_NO_FLOCK    when set, skip flock and use the mkdir fallback
+#                          lock — testing/debug escape hatch.
 #   WATERMARKS_SERVER_API_KEY  when set, sent as a bearer token on health
 #                          checks so an authenticated service answers them.
 
@@ -174,6 +185,22 @@ PY
     return
   fi
   command -v ps >/dev/null 2>&1 || return 1
+  # lstart renders in the caller's TZ: two helpers under different TZ values
+  # would record different identities for the SAME live owner, and teardown
+  # could then reap that owner's lease as "recycled". Pin UTC+C locale so the
+  # identity is timezone-independent.
+  TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' '
+}
+
+# The pre-UTC form leases recorded before the TZ pin — only ever compared
+# against already-recorded values so a live pre-fix owner is not misread as
+# a recycled pid. Never used when writing new records.
+owner_lifetime_id_legacy() {
+  local pid="$1"
+  # procfs starttime is already TZ-independent: on hosts with procfs the
+  # legacy form could never have been recorded, so there is nothing to match.
+  [[ -e /proc/self ]] && return 1
+  command -v ps >/dev/null 2>&1 || return 1
   ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' '
 }
 
@@ -221,6 +248,47 @@ lease_dir() {
   printf '%s/%s' "$LEASES_DIR" "$(run_token)"
 }
 
+# A lease written before the holds layout is a single FILE at the token
+# path — where the per-token dir must now live. migrate moves a live (or
+# unverifiable) claim into the dir as a hold so its owner can still release
+# it and the reaper still sees it; a confirmed-dead one is removed in place.
+# Callers run under the lifecycle lock, so this is already serialized.
+migrate_legacy_lease() {
+  local legacy staging f owner st
+  legacy="$(lease_dir)"
+  # Recover a migration killed mid-move first: its staging dir can still
+  # hold the claim file — put it back at the token path before proceeding.
+  for staging in "${legacy}".migrate.*; do
+    [[ -d "$staging" ]] || continue
+    for f in "$staging"/hold-*; do
+      [[ -e "$f" && ! -e "$legacy" ]] && mv "$f" "$legacy" 2>/dev/null
+    done
+    rm -rf "$staging" 2>/dev/null || true
+  done
+  [[ -f "$legacy" ]] || return 0
+  owner="$(lease_field "$legacy" owner_pid)"
+  st=0
+  lease_owner_state "$owner" "$(lease_field "$legacy" owner_start)" || st=$?
+  if [[ "$st" -eq 1 ]]; then
+    rm -f "$legacy"
+    return 0
+  fi
+  # Live/unverifiable: keep the claim. Park the file aside, create the dir,
+  # and move the record in as a hold — owner identity travels with it.
+  staging="${legacy}.migrate.$$"
+  if mkdir "$staging" 2>/dev/null \
+    && mv "$legacy" "$staging/hold-legacy-${owner:-unknown}" 2>/dev/null \
+    && mv "$staging" "$legacy" 2>/dev/null; then
+    return 0
+  fi
+  # Put back whatever moved rather than strand the claim.
+  if [[ -e "$staging/hold-legacy-${owner:-unknown}" && ! -e "$legacy" ]]; then
+    mv "$staging/hold-legacy-${owner:-unknown}" "$legacy" 2>/dev/null || true
+  fi
+  rmdir "$staging" 2>/dev/null || true
+  return 1
+}
+
 lease_field() {
   python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print("" if v is None else v)' "$1" "$2" 2>/dev/null || true
 }
@@ -236,6 +304,7 @@ WROTE_HOLD=""
 
 write_lease() {
   local dir tmp hold owner start
+  migrate_legacy_lease || true
   dir="$(lease_dir)"
   owner="$(lease_owner)"
   mkdir -p "$dir"
@@ -243,7 +312,10 @@ write_lease() {
   # whose owner_pid fails to parse — unverifiable, and therefore held
   # forever by the conservative reap. A failed write must abort the
   # ensure: publishing a partial or empty hold is worse than failing.
-  tmp="$dir/.hold.tmp.$BASHPID"
+  # ${BASHPID:-$$}: macOS ships Bash 3.2, which has no BASHPID — under
+  # set -u a bare expansion would abort ensure outright. $$ is unique per
+  # helper process and safe here (the calls are never made in a subshell).
+  tmp="$dir/.hold.tmp.${BASHPID:-$$}"
   start="$(owner_lifetime_id "$owner" || true)"
   if ! printf '{"owner_pid":%s,"owner_start":"%s"}\n' "$owner" "$start" >"$tmp"; then
     rm -f "$tmp"
@@ -251,13 +323,17 @@ write_lease() {
     return 1
   fi
   # hold-<time>-<pid> sorts oldest-first in the drop glob below.
-  hold="$dir/hold-$(date +%s%N 2>/dev/null || date +%s)-$BASHPID"
+  hold="$dir/hold-$(date +%s%N 2>/dev/null || date +%s)-${BASHPID:-$$}"
   if ! mv -f "$tmp" "$hold"; then
     rm -f "$tmp"
     echo "error: cannot publish lease into $dir" >&2
     return 1
   fi
   WROTE_HOLD="$hold"
+  # Channel for callers juggling several workflows under one parent: capture
+  # this and export WATERMARKS_HOLD=<name> so the matching teardown releases
+  # exactly this hold instead of consuming an arbitrary sibling hold.
+  printf 'lease-hold=%s\n' "$(basename "$hold")" >&2
 }
 
 # Drop the hold this process's ensure just wrote — used by ensure's own
@@ -268,25 +344,68 @@ drop_wrote_lease() {
   rmdir "$(lease_dir)" 2>/dev/null || true
 }
 
-# Consume exactly one of this run's outstanding holds — the oldest owned
-# by our parent. Holds under a shared token are fungible: a teardown that
-# consumes one hold leaves the remaining runs' claims intact, so an
-# interleaved workflow's teardown can never delete a sibling's claim
-# (#53). A successor's hold under the same token is never taken —
-# ownership is verified against the recorded pid before unlinking.
+# Consume exactly one of this run's outstanding holds. Holds under a shared
+# token are fungible: a teardown that consumes one hold leaves the remaining
+# runs' claims intact, so an interleaved workflow's teardown can never
+# delete a sibling's claim (#53). A successor's hold under the same token is
+# never taken — ownership is verified against the recorded pid before
+# unlinking, and a hold whose recorded lifetime is a DIFFERENT incarnation
+# of our pid is a stale claim left for the reaper, not ours to consume.
 drop_own_lease() {
-  local dir owner hold o
+  local dir owner hold o os_ now legacy_now named picked
+  migrate_legacy_lease || true
   dir="$(lease_dir)"
-  [[ -d "$dir" ]] || return 0
   owner="$(lease_owner)"
+  # WATERMARKS_HOLD names the exact hold this run's ensure published (it is
+  # printed on ensure's stderr as lease-hold=<name>). With it set, a repeated
+  # teardown finds its own hold already gone and releases nothing — it can
+  # no longer eat a sibling workflow's hold under a shared token (#53).
+  if [[ -n "${WATERMARKS_HOLD:-}" ]]; then
+    case "$WATERMARKS_HOLD" in
+      hold-*[!/]*) ;;
+      *)
+        echo "error: WATERMARKS_HOLD must be a hold-* name (got: $WATERMARKS_HOLD)" >&2
+        return 1
+        ;;
+    esac
+    named="$dir/$WATERMARKS_HOLD"
+    if [[ -f "$named" ]] && [[ "$(lease_field "$named" owner_pid)" == "$owner" ]]; then
+      rm -f "$named"
+    fi
+    rmdir "$dir" 2>/dev/null || true
+    return 0
+  fi
+  [[ -d "$dir" ]] || return 0
+  now="$(owner_lifetime_id "$owner" 2>/dev/null)" || now=""
+  legacy_now=""
+  picked=""
   for hold in "$dir"/hold-*; do
     [[ -e "$hold" ]] || continue
     o="$(lease_field "$hold" owner_pid)"
-    if [[ "$o" == "$owner" ]]; then
-      rm -f "$hold"
+    [[ "$o" == "$owner" ]] || continue
+    os_="$(lease_field "$hold" owner_start)"
+    if [[ -n "$now" && "$os_" == "$now" ]]; then
+      picked="$hold"
       break
     fi
+    if [[ -n "$os_" && "$os_" != "$now" ]]; then
+      # A recorded lifetime that differs from the owner's current one is a
+      # stale incarnation — unless it is the pre-UTC legacy form of the same
+      # live owner. Either way it is only consumed when it provably matches.
+      if [[ -z "$legacy_now" ]]; then
+        legacy_now="$(owner_lifetime_id_legacy "$owner" 2>/dev/null)" || legacy_now=""
+      fi
+      if [[ -n "$legacy_now" && "$os_" == "$legacy_now" ]]; then
+        picked="$hold"
+        break
+      fi
+      continue
+    fi
+    # Unverifiable (empty owner_start, or our own oracle is silent): keep as
+    # fallback rather than taking it eagerly ahead of a provable match.
+    [[ -z "$picked" ]] && picked="$hold"
   done
+  [[ -n "$picked" ]] && rm -f "$picked"
   rmdir "$dir" 2>/dev/null || true
 }
 
@@ -301,13 +420,20 @@ lease_owner_state() {
     local now=""
     now="$(owner_lifetime_id "$owner" 2>/dev/null)" || now=""
     if [[ -n "$now" ]]; then
-      if [[ "$now" == "$recorded_start" ]]; then
-        # Same lifetime, but an unreaped zombie is still gone — check the
-        # stat state field, not just existence.
-        owner_is_zombie "$owner" && return 1
-        return 0
+      if [[ "$now" != "$recorded_start" ]]; then
+        # Maybe a lease recorded before the TZ pin — the same live owner can
+        # legitimately carry the caller-locale lstart. Only when neither the
+        # canonical nor the legacy form matches is the pid truly recycled.
+        local legacy_now=""
+        legacy_now="$(owner_lifetime_id_legacy "$owner" 2>/dev/null)" || legacy_now=""
+        if [[ -z "$legacy_now" || "$legacy_now" != "$recorded_start" ]]; then
+          return 1
+        fi
       fi
-      return 1
+      # Same lifetime, but an unreaped zombie is still gone — check the
+      # stat state field, not just existence.
+      owner_is_zombie "$owner" && return 1
+      return 0
     fi
     # Identity oracle silent: only a confirmed-absent pid counts as dead —
     # under hidepid a live foreign pid keeps its lease.
@@ -327,9 +453,19 @@ lease_owner_state() {
 }
 
 reap_leases() {
-  local dir hold owner owner_start st
+  local dir hold owner owner_start st tmp
   for dir in "$LEASES_DIR"/*/; do
     [[ -d "$dir" ]] || continue
+    # Abandoned publication temporaries: an ensure killed between the tmp
+    # write and the rename leaves .hold.tmp.* behind, which would pin the
+    # token dir (and therefore the service) forever. A real publish moves in
+    # milliseconds — anything older than a minute cannot be in-flight.
+    for tmp in "$dir".hold.tmp.*; do
+      [[ -e "$tmp" ]] || continue
+      if python3 -c 'import os,sys,time; sys.exit(0 if time.time()-os.stat(sys.argv[1]).st_mtime>60 else 1)' "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+      fi
+    done
     for hold in "$dir"hold-*; do
       [[ -e "$hold" ]] || continue
       owner="$(lease_field "$hold" owner_pid)"
@@ -446,11 +582,28 @@ reuse_existing() {
 # recorded owner is confirmed dead. A timed-out wait FAILS the operation:
 # proceeding unserialized reopens the check-and-stop gap the lock exists
 # to close (#53).
+# Reclaim a stale lockdir without racing a successor: rename is atomic, so
+# the move either wins the dir we observed or loses to someone else. Verify
+# the moved dir still carries the owner we acted on — a different owner
+# means a successor's fresh lock was taken instead, and it goes back.
+reclaim_lockdir() {
+  local lockdir="$1" expect="$2" reclaim moved
+  reclaim="${ENSURE_LOCK}.reclaim.$$"
+  mv "$lockdir" "$reclaim" 2>/dev/null || return 1
+  moved="$(cat "$reclaim/owner" 2>/dev/null || true)"
+  if [[ "$moved" != "$expect" ]]; then
+    mv "$reclaim" "$lockdir" 2>/dev/null || rm -rf "$reclaim"
+    return 1
+  fi
+  rm -rf "$reclaim"
+  return 0
+}
+
 take_lifecycle_lock() {
   LOCK_FD=""
   LOCK_DIR=""
   mkdir -p "$STATE_DIR"
-  if command -v flock >/dev/null 2>&1; then
+  if [[ -z "${WATERMARKS_NO_FLOCK:-}" ]] && command -v flock >/dev/null 2>&1; then
     exec {LOCK_FD}>"$ENSURE_LOCK"
     if flock -w 60 "$LOCK_FD"; then
       return 0
@@ -466,11 +619,16 @@ take_lifecycle_lock() {
     if [[ -n "$owner" ]]; then
       st=0
       lease_owner_state "$owner" || st=$?
-      if [[ "$st" -eq 1 ]]; then
-        # Confirmed-dead holder: reclaim rather than wait out the timeout.
-        rm -rf "$lockdir"
+      if [[ "$st" -eq 1 ]] && reclaim_lockdir "$lockdir" "$owner"; then
+        # Confirmed-dead holder, claimed by rename: a concurrent waiter can
+        # never remove a successor's fresh lockdir this way.
         continue
       fi
+    elif python3 -c 'import os,sys,time; sys.exit(0 if time.time()-os.stat(sys.argv[1]).st_mtime>2 else 1)' "$lockdir" 2>/dev/null \
+      && reclaim_lockdir "$lockdir" ""; then
+      # Ownerless past the publish window: the holder died between mkdir and
+      # writing owner — waiting it out only ever ended in a timeout.
+      continue
     fi
     tries=$((tries + 1))
     if (( tries > 120 )); then

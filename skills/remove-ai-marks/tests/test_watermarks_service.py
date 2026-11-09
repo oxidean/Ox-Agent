@@ -66,10 +66,17 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
         self._thread.join(timeout=5)
         self._tmp.cleanup()
 
-    def _call(self, *args: str, token: str | None = None) -> subprocess.CompletedProcess[str]:
+    def _call(
+        self,
+        *args: str,
+        token: str | None = None,
+        env_extra: dict | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         env = dict(self.env)
         if token is not None:
             env["WATERMARKS_RUN_TOKEN"] = token
+        if env_extra:
+            env.update(env_extra)
         return subprocess.run(
             ["bash", str(SCRIPT), *args],
             env=env,
@@ -307,6 +314,173 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         # After run returns, its lease must be gone.
         self.assertNotIn("one-shot", self._lease_names())
+
+
+class WatermarksLeaseHardeningTest(unittest.TestCase):
+    """Second-pass findings on the lease/lock machinery (#53)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.state_dir = self.root / "tmp"
+        self.state_dir.mkdir()
+        self.state_file = self.state_dir / "watermarks-service.agent.json"
+        self.leases_dir = self.state_dir / "watermarks-service.leases"
+        self.httpd = HTTPServer(("127.0.0.1", 0), _Health)
+        self.port = self.httpd.server_address[1]
+        self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self._thread.start()
+        self.env = {
+            **os.environ,
+            "OXIDEAN_ROOT": str(self.root),
+            "WATERMARKS_SERVICE_URL": f"http://127.0.0.1:{self.port}",
+        }
+
+    def tearDown(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self._thread.join(timeout=5)
+        self._tmp.cleanup()
+
+    def _call(
+        self,
+        *args: str,
+        token: str | None = None,
+        env_extra: dict | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = dict(self.env)
+        if token is not None:
+            env["WATERMARKS_RUN_TOKEN"] = token
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(
+            ["bash", str(SCRIPT), *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def _holds(self, token: str) -> list[str]:
+        d = self.leases_dir / token
+        if not d.is_dir():
+            return []
+        return sorted(p.name for p in d.iterdir())
+
+    def test_ensure_migrates_live_legacy_file_lease(self) -> None:
+        """A pre-holds lease FILE at the token path must not block ensure (#53)."""
+        self.leases_dir.mkdir()
+        (self.leases_dir / "tokA").write_text(json.dumps({"owner_pid": os.getpid()}))
+
+        proc = self._call("ensure", token="tokA")
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(proc.stdout.strip(), ("STARTED", "REUSED"))
+        tok_dir = self.leases_dir / "tokA"
+        self.assertTrue(tok_dir.is_dir(), "legacy file must be migrated into a dir")
+        names = self._holds("tokA")
+        self.assertTrue(
+            any(n.startswith("hold-legacy-") for n in names),
+            f"migrated hold must preserve the legacy claim: {names}",
+        )
+        # The original owner (same parent pid) can still release its claim:
+        # the first teardown consumes the fresh hold, leaving the migrated
+        # legacy claim; the second consumes it and the dir is gone.
+        self._call("teardown", token="tokA")
+        names = self._holds("tokA")
+        self.assertEqual(len(names), 1, f"legacy claim must survive: {names}")
+        self.assertTrue(names[0].startswith("hold-legacy-"), names)
+        proc = self._call("teardown", token="tokA")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(
+            (self.leases_dir / "tokA").exists(), "all claims released"
+        )
+
+    def test_teardown_reaps_abandoned_tmp_hold(self) -> None:
+        """A stale .hold.tmp.* must not pin the token dir forever (#53)."""
+        tok_dir = self.leases_dir / "tokB"
+        tok_dir.mkdir(parents=True)
+        orphan = tok_dir / ".hold.tmp.4242"
+        orphan.write_text("{")
+        old = os.path.getmtime(orphan) - 120
+        os.utime(orphan, (old, old))
+
+        proc = self._call("teardown", token="tokB")
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(tok_dir.exists(), "dir left with only stale tmp files must go")
+
+    def test_named_hold_releases_exactly_it(self) -> None:
+        """WATERMARKS_HOLD releases the ensure's own hold, not a sibling's (#53)."""
+        self._call("ensure", token="tokC")
+        self._call("ensure", token="tokC")
+        holds = self._holds("tokC")
+        self.assertEqual(len(holds), 2, holds)
+
+        proc = self._call(
+            "teardown", token="tokC", env_extra={"WATERMARKS_HOLD": holds[0]}
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "LEFT_RUNNING")
+        self.assertEqual(self._holds("tokC"), [holds[1]])
+
+        # A repeated teardown with the same env releases nothing more.
+        proc = self._call(
+            "teardown", token="tokC", env_extra={"WATERMARKS_HOLD": holds[0]}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._holds("tokC"), [holds[1]])
+
+        proc = self._call("teardown", token="tokC")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._holds("tokC"), [])
+
+    def test_teardown_prefers_current_incarnation_hold(self) -> None:
+        """A stale-incarnation hold under our pid is left for the reaper (#53)."""
+        self._call("ensure", token="tokD")
+        # Plant an older-sorting hold claiming our owner pid with a lifetime
+        # that cannot be this incarnation.
+        (self.leases_dir / "tokD" / "hold-00000000000000-stale").write_text(
+            json.dumps({"owner_pid": os.getpid(), "owner_start": "stale-incarnation"})
+        )
+
+        proc = self._call("teardown", token="tokD")
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The stdout verdict is LEFT_RUNNING either way (the stub service was
+        # not started by us) — the regression signal is the lease state:
+        # consuming the stale hold would leave the real one held behind.
+        self.assertEqual(
+            self._holds("tokD"),
+            [],
+            "stale-incarnation hold must be reaped and the real one consumed",
+        )
+
+    def test_ensure_reclaims_ownerless_stale_lock(self) -> None:
+        """A lockdir whose holder died before writing owner must not stall (#53)."""
+        lockdir = self.state_dir / "watermarks-service.ensure.lock.d"
+        lockdir.mkdir()
+        old = lockdir.stat().st_mtime - 10
+        os.utime(lockdir, (old, old))
+
+        proc = self._call("ensure", env_extra={"WATERMARKS_NO_FLOCK": "1"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(proc.stdout.strip(), ("STARTED", "REUSED"))
+
+    def test_ensure_reclaims_dead_owner_lock(self) -> None:
+        """A lockdir held by a confirmed-dead pid is reclaimed, not waited out (#53)."""
+        dead = subprocess.Popen(["bash", "-c", "exit 0"])
+        dead.wait()
+        lockdir = self.state_dir / "watermarks-service.ensure.lock.d"
+        lockdir.mkdir()
+        (lockdir / "owner").write_text(f"{dead.pid}\n")
+
+        proc = self._call("ensure", env_extra={"WATERMARKS_NO_FLOCK": "1"})
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(proc.stdout.strip(), ("STARTED", "REUSED"))
 
 
 if __name__ == "__main__":

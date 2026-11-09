@@ -74,7 +74,11 @@ Rules:
    `run -- <cmd>` (the helper owns the lease itself) or set
    `WATERMARKS_RUN_TOKEN` to the same value for both calls under the same
    parent. A leaked hold is reaped once its recorded owner verifiably dies,
-   so favor leakage over borrowing another run's identity.
+   so favor leakage over borrowing another run's identity. When several
+   workflows share one parent AND token, capture `lease-hold=<name>` from
+   `ensure`'s stderr and export it as `WATERMARKS_HOLD` for the matching
+   `teardown` — a repeated teardown then releases nothing instead of
+   consuming a sibling's hold.
 3. **Never** kill a listener you did not start (`REUSED` / `LEFT_RUNNING`).
 4. Checkout lives at `tmp/watermarks-remover` (gitignored). The helper clones
    pin `v0.7.0` if missing. Do **not** fall back to inventing local cleaners

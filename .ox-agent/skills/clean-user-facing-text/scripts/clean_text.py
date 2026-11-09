@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from common import (
     cleaned_path,
     eprint,
     read_text_input,
+    read_text_input_fd,
+    rewrite_file_fd,
     write_text_output,
 )
 from text_unicode import clean_text
@@ -60,28 +63,34 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    # Resolve the in-place target up front: the read, the backup, and the
-    # overwrite must all hit the same file even when the input is (or
-    # becomes) a symlink — otherwise a link swap between read and write
-    # would clean one file and overwrite another (#46).
+    # Resolve AND open the in-place target up front: the read, the backup,
+    # and the overwrite must all stay bound to the same inode — otherwise a
+    # link or parent-directory swap between read and write would clean one
+    # file and overwrite another without backing it up (#46, #53).
     in_place_src: Path | None = None
+    in_place_fd: int | None = None
     if args.in_place:
         if args.path in (None, "-"):
             eprint("--in-place requires a file path")
             return 2
         # resolve() raises on unreadable or looping links — a traceback
         # here would bypass the clean exit-2 contract (RuntimeError on
-        # Python <3.10 for symlink loops, OSError elsewhere).
+        # Python <3.10 for symlink loops, OSError elsewhere). O_RDWR binds
+        # the fd to the resolved inode for both the read below and the
+        # rewrite at the end.
         try:
             in_place_src = Path(args.path).resolve()
+            in_place_fd = os.open(in_place_src, os.O_RDWR)
         except (OSError, RuntimeError) as e:
-            eprint(f"cannot resolve {args.path}: {e}")
+            eprint(f"cannot open {args.path}: {e}")
             return 2
 
-    text = read_text_input(
-        str(in_place_src) if in_place_src is not None else args.path,
-        allow_binary=args.force_text,
-    )
+    if in_place_fd is not None:
+        text = read_text_input_fd(
+            in_place_fd, str(in_place_src), allow_binary=args.force_text
+        )
+    else:
+        text = read_text_input(args.path, allow_binary=args.force_text)
     cleaned, stats = clean_text(
         text,
         nfkc=args.nfkc,
@@ -116,16 +125,35 @@ def main() -> int:
         out = str(cleaned_path(Path(args.path)))
 
     if not skip_write:
-        try:
-            write_text_output(cleaned, out)
-        except OSError as e:
-            # The atomic write failed, so the original is intact and the
-            # backup created this run is dead weight.
-            if created_bak is not None:
-                with contextlib.suppress(OSError):
-                    created_bak.unlink()
-            eprint(f"cannot write output: {e}")
-            return 2
+        if in_place_fd is not None:
+            try:
+                rewrite_file_fd(
+                    in_place_fd, cleaned.encode("utf-8", "surrogateescape")
+                )
+            except OSError as e:
+                # The in-place rewrite is NOT atomic: the target may be
+                # truncated or partial, so the .bak this run created is the
+                # only intact copy of the original — keep it and say so.
+                eprint(
+                    f"cannot rewrite {in_place_src}: {e}; "
+                    f"original preserved in {created_bak}"
+                )
+                return 2
+            finally:
+                os.close(in_place_fd)
+        else:
+            try:
+                write_text_output(cleaned, out)
+            except OSError as e:
+                # The atomic write failed, so the original is intact and the
+                # backup created this run is dead weight.
+                if created_bak is not None:
+                    with contextlib.suppress(OSError):
+                        created_bak.unlink()
+                eprint(f"cannot write output: {e}")
+                return 2
+    elif in_place_fd is not None:
+        os.close(in_place_fd)
 
     if args.stats:
         eprint(json.dumps(stats, indent=2, ensure_ascii=False))

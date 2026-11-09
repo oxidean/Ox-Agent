@@ -54,8 +54,14 @@ class InPlaceSymlinkTest(unittest.TestCase):
 
 
 class InPlaceWriteFailureTest(unittest.TestCase):
-    def test_failed_write_removes_the_backup_and_exits_cleanly(self) -> None:
-        """A failed write must not leave an orphan .bak or a traceback (#46)."""
+    def test_failed_write_keeps_the_backup_and_exits_cleanly(self) -> None:
+        """A failed in-place rewrite must exit 2 and KEEP the backup (#53).
+
+        The fd-bound rewrite is not atomic — the target may be truncated —
+        so the .bak this run created is the only intact copy of the original
+        and must survive the failure (contrast the atomic temp+replace path,
+        where a failed write leaves the original intact and the .bak dead).
+        """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.txt"
             src.write_text(DIRTY, encoding="utf-8")
@@ -65,18 +71,65 @@ class InPlaceWriteFailureTest(unittest.TestCase):
                 mock.patch.object(sys, "argv", argv),
                 mock.patch.object(
                     clean_text,
-                    "write_text_output",
+                    "rewrite_file_fd",
                     side_effect=OSError("simulated write failure"),
                 ),
             ):
                 rc = clean_text.main()
 
             self.assertEqual(rc, 2)
-            self.assertEqual(src.read_text(encoding="utf-8"), DIRTY, "original must be intact")
+            baks = list(Path(tmp).glob("*.bak*"))
+            self.assertEqual(len(baks), 1, "the backup must be retained on write failure")
+            self.assertEqual(baks[0].read_text(encoding="utf-8"), DIRTY)
+
+
+class InPlaceBindingTest(unittest.TestCase):
+    def test_write_stays_bound_to_the_inode_that_was_read(self) -> None:
+        """A parent-dir swap after backup must not redirect the overwrite.
+
+        Resolve+open pins the target's inode; if the resolved parent is then
+        swapped for a fresh directory, the rewrite must still land on the
+        file that was read and backed up — never on the unbacked-up file now
+        occupying the path (#53).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "d"
+            parent.mkdir()
+            src = parent / "input.txt"
+            src.write_text(DIRTY, encoding="utf-8")
+
+            real_backup_path = clean_text.backup_path
+            swapped_parent = Path(tmp) / "d-moved"
+
+            def swap_parent_after_backup(target: Path):
+                result = real_backup_path(target)
+                parent.rename(swapped_parent)
+                parent.mkdir()
+                (parent / "input.txt").write_text("different file\n", encoding="utf-8")
+                return result
+
+            argv = ["clean_text.py", str(src), "--in-place"]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(clean_text, "backup_path", swap_parent_after_backup),
+            ):
+                rc = clean_text.main()
+
+            self.assertEqual(rc, 0)
             self.assertEqual(
-                list(Path(tmp).glob("*.bak*")),
-                [],
-                "the backup created this run must be removed on write failure",
+                (parent / "input.txt").read_text(encoding="utf-8"),
+                "different file\n",
+                "the unbacked-up file now at the path must not be overwritten",
+            )
+            self.assertEqual(
+                (swapped_parent / "input.txt").read_text(encoding="utf-8"),
+                "clean line with invisible\n",
+                "the inode that was read must receive the cleaned text",
+            )
+            self.assertEqual(
+                (swapped_parent / "input.txt.bak").read_text(encoding="utf-8"),
+                DIRTY,
+                "the backup of the bound inode travels with it",
             )
 
 

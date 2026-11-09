@@ -71,7 +71,10 @@ Two caveats when forking. First, `stage_skills` does not affect pipelines:
 `ox-agent review`/`ship` dispatch the bundled `pipelines/*.yaml` steps by
 skill name. Fork a pipeline skill by copying the pipeline file under a new
 name (e.g. `pipelines/review-mine.yaml`), updating its `skill:` references,
-and running `ox-agent run <wi> --pipeline review-mine`. Second, replace a
+and setting a unique `name:` inside the copied file — a fork that keeps
+`name: review` shares progress state with the original and can report its
+steps as already done — then running
+`ox-agent run <wi> --pipeline review-mine`. Second, replace a
 mapping only between stages: an in-flight item that already collected the
 original skill keeps that completion under the old name, so the fork does
 not inherit it — the next dispatch can re-run the same unit of work under
