@@ -187,6 +187,12 @@ func TestWatermarksServicePin(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
 	}
+	// The pin check must hold on both lifecycle-lock paths: where flock(1)
+	// is absent (Windows hosts) the script falls back to a python3 helper,
+	// so the test forces that path to exercise it everywhere.
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
 	base := t.TempDir()
 	if _, err := Materialize(base); err != nil {
 		t.Fatalf("Materialize() error = %v", err)
@@ -231,6 +237,7 @@ func TestWatermarksServicePin(t *testing.T) {
 		"WATERMARKS_CLONE_URL="+upstream,
 		"WATERMARKS_SERVICE_URL=http://127.0.0.1:1",
 		"WATERMARKS_PIN_COMMIT=0000000000000000000000000000000000000000",
+		"WATERMARKS_NO_FLOCK=1",
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -250,6 +257,7 @@ func TestWatermarksServicePin(t *testing.T) {
 		"WATERMARKS_CLONE_URL="+upstream,
 		"WATERMARKS_SERVICE_URL=http://127.0.0.1:1",
 		"WATERMARKS_PIN_COMMIT="+commit,
+		"WATERMARKS_NO_FLOCK=1",
 	)
 	out, _ = cmd.CombinedOutput()
 	if strings.Contains(string(out), "expected") || strings.Contains(string(out), "unverified") {

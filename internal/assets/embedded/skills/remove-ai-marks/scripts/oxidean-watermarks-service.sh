@@ -717,8 +717,9 @@ PYLOCK
   # The readiness cap must outlive the helper's own lock budget plus a
   # startup allowance — a fixed 70s cap would kill a helper configured to
   # wait WATERMARKS_LOCK_SECONDS=120 before its deadline (#53).
-  local i=0 cap
-  cap=$(( ( ${WATERMARKS_LOCK_SECONDS%.*} + 15 ) * 20 ))
+  local i=0 cap lock_secs
+  lock_secs="${WATERMARKS_LOCK_SECONDS:-60}"
+  cap=$(( ( ${lock_secs%.*} + 15 ) * 20 ))
   while (( i < cap )); do
     if [[ -f "$ready" ]]; then
       rm -f "$ready"
