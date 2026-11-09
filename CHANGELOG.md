@@ -10,8 +10,6 @@ work and minor-release summaries.
 
 ### Fixed
 
-### Fixed
-
 - **CodeRabbit review hardening (OxL findings round 6)** — `Collect`
   checks BOTH outcome event types on replay, so a `skill.completed`
   journaled before an `output.json` rewrite to failed cannot double

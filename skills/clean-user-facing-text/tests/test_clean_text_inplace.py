@@ -21,7 +21,7 @@ import clean_text  # noqa: E402
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "clean_text.py"
 # U+200B ZERO WIDTH SPACE — always removed by the default layer-A scrub, so a
 # seeded input is guaranteed "dirty" and the backup path is exercised.
-DIRTY = "clean line​ with invisible\n"
+DIRTY = "clean line\u200b with invisible\n"
 
 
 @unittest.skipUnless(os.name == "posix", "symlink semantics are POSIX-specific")
@@ -163,6 +163,28 @@ class InPlaceHardlinkTest(unittest.TestCase):
             self.assertEqual(src.read_text(encoding="utf-8"), DIRTY)
             self.assertEqual(alias.read_text(encoding="utf-8"), DIRTY)
 
+    def test_in_place_accepts_already_clean_hard_linked_input(self) -> None:
+        """A hard-linked file needing no rewrite stays a no-op (#53).
+
+        Refusing at read time broke hooks over cp -al trees and
+        content-addressed checkouts where clean hard-linked files are
+        common; the refusal belongs at rewrite time only.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text("already clean\n", encoding="utf-8")
+            alias = Path(tmp) / "alias.txt"
+            os.link(src, alias)
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(alias), "--in-place"],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
+
 
 @unittest.skipUnless(os.name == "posix", "fcntl.flock is POSIX-only")
 class InPlaceLockContentionTest(unittest.TestCase):
@@ -255,7 +277,10 @@ class InPlaceResolveFailureTest(unittest.TestCase):
 
 
 
-@unittest.skipUnless(os.name == "posix", "mode-bit writability is POSIX-specific")
+@unittest.skipUnless(
+    os.name == "posix" and os.geteuid() != 0,
+    "mode-bit writability is POSIX-specific and root bypasses it",
+)
 class InPlaceReadOnlyTest(unittest.TestCase):
     def test_read_only_clean_file_passes_without_write_access(self) -> None:
         """An already-clean 0444 file must reach the no-op path (#53).

@@ -60,25 +60,29 @@ propagate on `init --repair --sync`. `extension` is anything added post-init
 customize a core skill, fork it under a new directory name — in-place edits
 to sync-owned files are reconciled away. Set the fork's manifest `kind:` to
 `extension` (the lock never owns it, so `core` would misrepresent whether
-upstream fixes reach it), add the new directory name to `skills.enabled` in
-`.ox-agent/config.yaml`, and replace the original name in the relevant
-`skills.stage_skills` entries — otherwise stage runs keep selecting the
-original. Update hard-coded asset paths in the fork's instructions too: a
+upstream fixes reach it), rename the manifest `name:` to
+`ox-agent/<new-name>`, and update the `skill` constants in the fork's
+`schemas/input.schema.json` and `schemas/output.schema.json` to match —
+packets and outputs validate against them, so a fork still naming the
+original skill rejects its own results. Add the new directory name to
+`skills.enabled` in `.ox-agent/config.yaml`, and replace the original
+name in the relevant `skills.stage_skills` entries — otherwise stage
+runs keep selecting the original. Update hard-coded asset paths in the fork's instructions too: a
 copied SKILL.md that still points at the core skill's scripts executes the
 core helper.
 
 Two caveats when forking. First, `stage_skills` does not affect pipelines:
 `ox-agent review`/`ship` dispatch the bundled `pipelines/*.yaml` steps by
-skill name. Fork a pipeline skill by copying the pipeline file under a new
-name (e.g. `.ox-agent/pipelines/review-mine.yaml`), updating its `skill:` references,
-and setting a `name:` matching the filename, such as `name: review-mine`,
-inside the copied file — the `--pipeline` flag resolves the file by name
-and progress tracks the internal `name:`. A mismatched pair can fail to
-load at collect or load a different pipeline if that file exists. A fork
-that keeps `name: review` shares progress
-state with the original and can report its
-steps as already done — then running
-`ox-agent run <wi> --pipeline review-mine`. Second, replace a
+skill name. To fork a pipeline step's skill, copy the pipeline file under
+a new filename (e.g. `.ox-agent/pipelines/review-mine.yaml`), set its
+internal `name:` to the filename stem (`name: review-mine`), update its
+`skill:` references, and invoke it via
+`ox-agent run <wi> --pipeline review-mine`. The `--pipeline` flag resolves
+the file by name and progress tracks that internal `name:`, so the two
+must match — a mismatched pair can fail to load at collect or load a
+different pipeline if that file exists, and a fork that keeps
+`name: review` shares progress state with the original and can report
+its steps as already done. Second, replace a
 mapping only between stages: an in-flight item that already collected the
 original skill keeps that completion under the old name, so the fork does
 not inherit it — the next dispatch can re-run the same unit of work under

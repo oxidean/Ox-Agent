@@ -894,6 +894,9 @@ func TestCollectAcceptsValidArtifactPaths(t *testing.T) {
 	out["artifacts"] = []any{
 		"work/active/WI-0001-x/artifacts/spec.md",
 		map[string]any{"path": "work/active/WI-0001-x/artifacts/plan.md"},
+		// "."-segments are clean no-ops the Windows guard must not reject
+		// (#53 review finding on validateArtifactPaths).
+		"work/active/./artifacts/review.md",
 	}
 	writeOutput(t, root, run.RunID, out)
 	run, _, err = Collect(root, run.RunID)

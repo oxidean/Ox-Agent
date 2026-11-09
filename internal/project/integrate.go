@@ -45,8 +45,12 @@ Do not edit ` + "`.ox-agent/skills`" + `, ` + "`schemas`" + `, ` + "`workflows`"
 tracked by ` + "`assets.lock`" + `. ` + "`kind: core`" + ` in a skill manifest means bundled
 with the distribution and sync-owned (repaired on ` + "`init --repair --sync`" + `);
 ` + "`kind: extension`" + ` means added post-init and never reconciled. To customize a
-core skill, fork it under a new directory name and set its manifest ` + "`kind:`" + `
-to ` + "`extension`" + `; enable the new name under ` + "`skills.enabled`" + ` and replace
+core skill, fork it under a new directory name: set its manifest ` + "`name:`" + ` to
+` + "`ox-agent/<new-name>`" + ` and ` + "`kind:`" + ` to ` + "`extension`" + `, and update the
+` + "`skill`" + ` constants in ` + "`schemas/input.schema.json`" + ` and
+` + "`schemas/output.schema.json`" + ` to the new name — packets and outputs validate
+against those constants, so a fork still naming the original skill rejects
+its own results. Then enable the new name under ` + "`skills.enabled`" + ` and replace
 the original name in the ` + "`skills.stage_skills`" + ` entries where it should run —
 appending leaves the original selected first. ` + "`stage_skills`" + ` only feeds
 stage-driven runs: ` + "`ox-agent review`" + `, ` + "`ship`" + `, and ` + "`run <wi> --pipeline <name>`" + `

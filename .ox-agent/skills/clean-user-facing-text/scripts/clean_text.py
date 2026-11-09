@@ -152,6 +152,21 @@ def main() -> int:
                 with contextlib.suppress(OSError):
                     os.close(in_place_fd)
                 return 2
+            nlinks = os.fstat(in_place_fd).st_nlink
+            if nlinks > 1:
+                # The rewrite lands on the shared inode: hard-linked
+                # siblings would be silently cleaned too. The refusal runs
+                # here — after the clean-text no-op check — so an
+                # already-clean hard-linked file still exits 0, which is
+                # what hooks over cp -al trees and content-addressed
+                # checkouts rely on (#53).
+                eprint(
+                    f"refusing hard-linked input ({nlinks} links): "
+                    f"{in_place_src} — copy it to a standalone file first"
+                )
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
             # The backup must carry the bytes this run read — re-reading
             # through the path can hit a parent-directory swap and store
             # the replacement's contents while the rewrite lands on the

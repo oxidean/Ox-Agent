@@ -550,6 +550,12 @@ func validateArtifactPaths(raw any) error {
 			return fmt.Errorf("artifacts[%d] %q contains characters invalid on Windows checkouts", i, p)
 		}
 		for _, seg := range strings.Split(p, "/") {
+			// A "." segment is a clean no-op that filepath.IsLocal allows;
+			// only real segments carrying a trailing dot or space break a
+			// Windows checkout (#53).
+			if seg == "." {
+				continue
+			}
 			if strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
 				return fmt.Errorf("artifacts[%d] %q has a segment ending in a dot or space, invalid on Windows", i, p)
 			}

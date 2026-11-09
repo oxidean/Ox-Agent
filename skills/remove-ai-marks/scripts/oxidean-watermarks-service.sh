@@ -304,6 +304,10 @@ lease_owner() {
 }
 
 WROTE_HOLD=""
+# `run` records its own ensure's hold here — drop_own_lease prefers it
+# over an inherited WATERMARKS_HOLD, which names a caller's claim, never
+# the run's own (#53).
+DROP_OWN_HOLD_NAME=""
 
 write_lease() {
   local dir tmp hold owner start
@@ -355,23 +359,28 @@ drop_wrote_lease() {
 # unlinking, and a hold whose recorded lifetime is a DIFFERENT incarnation
 # of our pid is a stale claim left for the reaper, not ours to consume.
 drop_own_lease() {
-  local dir owner hold o os_ now legacy_now named picked
+  local dir owner hold o os_ now legacy_now named picked want_hold
   migrate_legacy_lease || true
   dir="$(lease_dir)"
   owner="$(lease_owner)"
-  # WATERMARKS_HOLD names the exact hold this run's ensure published (it is
-  # printed on ensure's stderr as lease-hold=<name>). With it set, a repeated
-  # teardown finds its own hold already gone and releases nothing — it can
-  # no longer eat a sibling workflow's hold under a shared token (#53).
-  if [[ -n "${WATERMARKS_HOLD:-}" ]]; then
-    case "$WATERMARKS_HOLD" in
+  # DROP_OWN_HOLD_NAME (set by `run`) names the exact hold this process's
+  # own ensure published — it beats an inherited WATERMARKS_HOLD, which
+  # points into the caller's token dir or a sibling's claim and is never
+  # the run's to consume (#53). WATERMARKS_HOLD itself names the hold a
+  # workflow's ensure published (printed on ensure's stderr as
+  # lease-hold=<name>): with it set, a repeated teardown finds its own
+  # hold already gone and releases nothing — it can no longer eat a
+  # sibling workflow's hold under a shared token (#53).
+  want_hold="${DROP_OWN_HOLD_NAME:-${WATERMARKS_HOLD:-}}"
+  if [[ -n "$want_hold" ]]; then
+    case "$want_hold" in
       hold-*[!/]*) ;;
       *)
-        echo "error: WATERMARKS_HOLD must be a hold-* name (got: $WATERMARKS_HOLD)" >&2
+        echo "error: hold override must be a hold-* name (got: $want_hold)" >&2
         return 1
         ;;
     esac
-    named="$dir/$WATERMARKS_HOLD"
+    named="$dir/$want_hold"
     if [[ -f "$named" ]] && [[ "$(lease_field "$named" owner_pid)" == "$owner" ]]; then
       # A failed removal must not report success — the caller's hold would
       # keep pinning the service while teardown claims LEFT_RUNNING (#53).
@@ -903,8 +912,20 @@ teardown_locked() {
 }
 
 run_with_service() {
-  local mode
-  mode="$(ensure)"
+  local mode cap
+  # Run ensure in THIS shell — not a command substitution — so WROTE_HOLD
+  # survives: teardown must release the exact hold this invocation
+  # published. An inherited WATERMARKS_HOLD names the caller's claim in
+  # another token dir, never the run's own (#53); the recorded name is
+  # private to the helper, so the payload still sees the caller's setting.
+  cap="$(mktemp "${TMPDIR:-/tmp}/watermarks-ensure.XXXXXX")" || return 1
+  if ! ensure >"$cap"; then
+    rm -f "$cap"
+    return 1
+  fi
+  mode="$(<"$cap")"
+  rm -f "$cap"
+  [[ -n "$WROTE_HOLD" ]] && DROP_OWN_HOLD_NAME="${WROTE_HOLD##*/}"
   # ensure succeeded: the service may be ours to stop. Without a trap, an
   # interrupt skips teardown and leaves it running against a stale state file.
   trap 'teardown >/dev/null || true; exit 130' INT

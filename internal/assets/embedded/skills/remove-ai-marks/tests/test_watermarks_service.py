@@ -524,6 +524,32 @@ class WatermarksLeaseHardeningTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self._holds("tokC"), [])
 
+    def test_run_releases_own_hold_under_caller_hold_env(self) -> None:
+        """`run` must drop ITS ensure's hold, not the caller-exported one (#53).
+
+        A workflow that exports WATERMARKS_HOLD=<its own hold> and then
+        invokes `run` made the old code drop the caller's claim while the
+        run's own hold leaked until its pid was reaped. The run's teardown
+        must target the hold its own ensure published; the payload still
+        sees the caller's WATERMARKS_HOLD unchanged.
+        """
+        self._call("ensure", token="tokCaller")
+        caller_hold = self._holds("tokCaller")[0]
+
+        proc = self._call(
+            "run", "--", "bash", "-c", 'printf %s "$WATERMARKS_HOLD"',
+            token="tokRun",
+            env_extra={"WATERMARKS_HOLD": caller_hold},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The payload inherits the caller's hold setting untouched.
+        self.assertEqual(proc.stdout.strip(), caller_hold)
+        # The run's own hold is released — its token dir is gone — while
+        # the caller's claim survives intact.
+        self.assertFalse((self.leases_dir / "tokRun").exists())
+        self.assertEqual(self._holds("tokCaller"), [caller_hold])
+
     def test_teardown_prefers_current_incarnation_hold(self) -> None:
         """A stale-incarnation hold under our pid is left for the reaper (#53)."""
         self._call("ensure", token="tokD")

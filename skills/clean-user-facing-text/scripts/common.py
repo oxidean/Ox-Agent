@@ -385,15 +385,6 @@ def read_text_input_fd(
     if not stat.S_ISREG(st.st_mode):
         eprint(f"refusing non-regular input (not a regular file): {name}")
         raise SystemExit(2)
-    if st.st_nlink > 1:
-        # The in-place rewrite lands on the shared inode: hard-linked
-        # siblings would be silently cleaned too. Refuse rather than
-        # modify files the caller never named (#53).
-        eprint(
-            f"refusing hard-linked input ({st.st_nlink} links): {name} — "
-            "copy it to a standalone file first"
-        )
-        raise SystemExit(2)
     if st.st_size > MAX_INPUT_BYTES:
         eprint(f"refusing input larger than {MAX_INPUT_BYTES} bytes: {name}")
         raise SystemExit(2)
