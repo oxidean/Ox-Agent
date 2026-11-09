@@ -107,8 +107,8 @@ class InPlaceBindingTest(unittest.TestCase):
             real_backup_path = clean_text.backup_path
             swapped_parent = Path(tmp) / "d-moved"
 
-            def swap_parent_after_backup(target: Path):
-                result = real_backup_path(target)
+            def swap_parent_after_backup(target: Path, data: bytes | None = None):
+                result = real_backup_path(target, data=data)
                 parent.rename(swapped_parent)
                 parent.mkdir()
                 (parent / "input.txt").write_text("different file\n", encoding="utf-8")
@@ -137,6 +137,61 @@ class InPlaceBindingTest(unittest.TestCase):
                 DIRTY,
                 "the backup of the bound inode travels with it",
             )
+
+
+@unittest.skipUnless(os.name == "posix", "hard links are POSIX-specific")
+class InPlaceHardlinkTest(unittest.TestCase):
+    def test_in_place_refuses_hard_linked_input(self) -> None:
+        """--in-place must not rewrite other names sharing the inode (#53)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text(DIRTY, encoding="utf-8")
+            alias = Path(tmp) / "alias.txt"
+            os.link(src, alias)
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(alias), "--in-place"],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn("hard-linked", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+            self.assertEqual(src.read_text(encoding="utf-8"), DIRTY)
+            self.assertEqual(alias.read_text(encoding="utf-8"), DIRTY)
+
+
+@unittest.skipUnless(os.name == "posix", "fcntl.flock is POSIX-only")
+class InPlaceLockContentionTest(unittest.TestCase):
+    def test_in_place_refuses_when_another_run_holds_the_lock(self) -> None:
+        """A contended in-place lock must refuse, never interleave (#53)."""
+        import fcntl
+
+        import common
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text(DIRTY, encoding="utf-8")
+            holder = os.open(src, os.O_RDWR)
+            try:
+                fcntl.flock(holder, fcntl.LOCK_EX)
+                argv = ["clean_text.py", str(src), "--in-place"]
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch.object(common, "_INPLACE_LOCK_SECONDS", 0.2),
+                ):
+                    with self.assertRaises(SystemExit) as cm:
+                        clean_text.main()
+                self.assertEqual(cm.exception.code, 2)
+                self.assertEqual(
+                    src.read_text(encoding="utf-8"),
+                    DIRTY,
+                    "a refused run must not touch the contended file",
+                )
+            finally:
+                fcntl.flock(holder, fcntl.LOCK_UN)
+                os.close(holder)
 
 
 class InPlaceResolveFailureTest(unittest.TestCase):

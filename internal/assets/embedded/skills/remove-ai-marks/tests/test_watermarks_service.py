@@ -62,6 +62,9 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
         # A token inherited from the host env would steer token-less calls
         # to the wrong lease dir — tests must own the token explicitly.
         self.env.pop("WATERMARKS_RUN_TOKEN", None)
+        # An inherited named hold would be consumed by unnamed teardowns
+        # and pin the suite's lease assertions (#53).
+        self.env.pop("WATERMARKS_HOLD", None)
 
     def tearDown(self) -> None:
         self.httpd.shutdown()
@@ -212,9 +215,10 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
         sock.bind(("127.0.0.1", 0))
         dead_port = sock.getsockname()[1]
         sock.close()
-        # write_state's printf must fail: read-only state file.
-        self.state_file.write_text("")
-        os.chmod(self.state_file, 0o444)
+        # write_state's printf must fail, including when running as root:
+        # chmod 0444 stops nobody with CAP_DAC_OVERRIDE, but a directory
+        # at the state path makes the redirection fail for any uid (#53).
+        self.state_file.mkdir()
 
         done = self._call(
             "ensure",
@@ -416,6 +420,9 @@ class WatermarksLeaseHardeningTest(unittest.TestCase):
         # A token inherited from the host env would steer token-less calls
         # to the wrong lease dir — tests must own the token explicitly.
         self.env.pop("WATERMARKS_RUN_TOKEN", None)
+        # An inherited named hold would be consumed by unnamed teardowns
+        # and pin the suite's lease assertions (#53).
+        self.env.pop("WATERMARKS_HOLD", None)
 
     def tearDown(self) -> None:
         self.httpd.shutdown()
@@ -538,30 +545,61 @@ class WatermarksLeaseHardeningTest(unittest.TestCase):
             "stale-incarnation hold must be reaped and the real one consumed",
         )
 
-    def test_ensure_reclaims_ownerless_stale_lock(self) -> None:
-        """A lockdir whose holder died before writing owner must not stall (#53)."""
-        lockdir = self.state_dir / "watermarks-service.ensure.lock.d"
-        lockdir.mkdir()
-        old = lockdir.stat().st_mtime - 10
-        os.utime(lockdir, (old, old))
+    def test_ensure_times_out_on_held_lock(self) -> None:
+        """A live holder's kernel lock stalls ensure up to the budget (#53)."""
+        import fcntl
 
-        proc = self._call("ensure", env_extra={"WATERMARKS_NO_FLOCK": "1"})
+        lockfile = self.state_dir / "watermarks-service.ensure.lock"
+        fd = os.open(lockfile, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            proc = self._call(
+                "ensure",
+                env_extra={
+                    "WATERMARKS_NO_FLOCK": "1",
+                    "WATERMARKS_LOCK_SECONDS": "1",
+                },
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("timed out", proc.stderr)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(proc.stdout.strip(), ("STARTED", "REUSED"))
+    def test_ensure_proceeds_once_holder_dies(self) -> None:
+        """A dead holder's kernel lock releases itself — no reclaim (#53)."""
+        lockfile = self.state_dir / "watermarks-service.ensure.lock"
+        holder = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import fcntl, os, sys, time\n"
+                "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)\n"
+                "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                "time.sleep(30)\n",
+                str(lockfile),
+            ]
+        )
+        try:
+            # Give the holder a moment to take the lock, then kill it —
+            # the kernel releases the descriptor on process death.
+            time.sleep(0.5)
+            holder.kill()
+            holder.wait()
 
-    def test_ensure_reclaims_dead_owner_lock(self) -> None:
-        """A lockdir held by a confirmed-dead pid is reclaimed, not waited out (#53)."""
-        dead = subprocess.Popen(["bash", "-c", "exit 0"])
-        dead.wait()
-        lockdir = self.state_dir / "watermarks-service.ensure.lock.d"
-        lockdir.mkdir()
-        (lockdir / "owner").write_text(f"{dead.pid}\n")
-
-        proc = self._call("ensure", env_extra={"WATERMARKS_NO_FLOCK": "1"})
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(proc.stdout.strip(), ("STARTED", "REUSED"))
+            proc = self._call(
+                "ensure",
+                env_extra={
+                    "WATERMARKS_NO_FLOCK": "1",
+                    "WATERMARKS_LOCK_SECONDS": "10",
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn(proc.stdout.strip(), ("STARTED", "REUSED"))
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait()
 
 
 if __name__ == "__main__":

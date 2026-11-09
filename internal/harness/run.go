@@ -268,19 +268,28 @@ func reconcilePendingEvents(root, itemID string) []string {
 // duplicate the entry when an earlier append succeeded but the
 // marker-clearing save failed (#53).
 func journalHasEvent(root, itemID, eventType, runID string) (bool, error) {
+	ev, err := journalFindEvent(root, itemID, eventType, runID)
+	return ev != nil, err
+}
+
+// journalFindEvent returns the item's journaled event of eventType tagged
+// with runID, or nil when absent. The returned record is what a retrying
+// collect must re-apply — the file on disk may have changed since it was
+// journaled (#53).
+func journalFindEvent(root, itemID, eventType, runID string) (*state.Event, error) {
 	if runID == "" {
-		return false, nil
+		return nil, nil
 	}
 	events, err := state.EventsFor(root, itemID, 0)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	for _, ev := range events {
-		if ev.Type == eventType && ev.Data["run_id"] == runID {
-			return true, nil
+	for i := range events {
+		if events[i].Type == eventType && events[i].Data["run_id"] == runID {
+			return &events[i], nil
 		}
 	}
-	return false, nil
+	return nil, nil
 }
 
 func Collect(root, runID string) (*Run, map[string]any, error) {
@@ -295,6 +304,15 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "collect-"+run.WorkItemID+".lock")
 	var output map[string]any
 	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+		// Reload under the lock: the snapshot taken before queuing can be
+		// stale by the time the lock is granted — a sibling collector may
+		// have applied this run's outcome already. Acting on the stale
+		// record would apply the completed outcome a second time (#53).
+		fresh, lerr := LoadRun(root, runID)
+		if lerr != nil {
+			return lerr
+		}
+		run = fresh
 		var cerr error
 		run, output, cerr = collectLocked(root, run)
 		return cerr
@@ -313,16 +331,20 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	run.ReconcileWarnings = reconcilePendingEvents(root, run.WorkItemID)
 	runID := run.RunID
 	if run.Status != "pending" {
-		return nil, nil, fmt.Errorf("run %s is %s, not pending", runID, run.Status)
+		// Return the run so the CLI can still surface the reconcile
+		// warnings — a replay failure on an already-failed run is exactly
+		// the case where the "not pending" error alone hides the recovery
+		// failure (#53).
+		return run, nil, fmt.Errorf("run %s is %s, not pending", runID, run.Status)
 	}
 	item, err := state.Resolve(root, run.WorkItemID)
 	if err != nil {
-		return nil, nil, err
+		return run, nil, err
 	}
 	outputPath := filepath.Join(run.Dir, "output.json")
 	outputData, err := os.ReadFile(outputPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("run %s has no output.json yet: %w", runID, err)
+		return run, nil, fmt.Errorf("run %s has no output.json yet: %w", runID, err)
 	}
 	skill := strings.TrimPrefix(run.Skill, "ox-agent/")
 	schemaPath := filepath.Join(root, ".ox-agent", "skills", skill, "schemas", "output.schema.json")
@@ -412,7 +434,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		run.Status = "collected"
 	}
 	if err := run.save(root); err != nil {
-		return nil, nil, err
+		return run, nil, err
 	}
 	eventType := "skill.completed"
 	if run.Status == "failed" {
@@ -423,8 +445,8 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// but the outcome failed to apply) must not journal the event
 	// twice. An unreadable journal is treated as unknown: the append
 	// path below stays the authority and keeps failures retryable.
-	journaled, _ := journalHasEvent(root, run.WorkItemID, eventType, runID)
-	if !journaled {
+	journaled, _ := journalFindEvent(root, run.WorkItemID, eventType, runID)
+	if journaled == nil {
 		if err := state.Append(root, state.Event{
 			Type:       eventType,
 			WorkItemID: item.ID,
@@ -445,6 +467,23 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			}
 			_ = run.save(root)
 			return run, output, err
+		}
+	} else {
+		// The journal already holds this run's outcome: the retry must
+		// apply what was recorded, not whatever output.json holds now.
+		// A drifted file means the outcome changed post-journal — refuse
+		// rather than apply an outcome the journal never saw, and restore
+		// pending so a corrected output.json can re-collect (#53).
+		if journaled.Data["verdict"] != verdict ||
+			journaled.Data["next_action"] != action ||
+			journaled.Data["status"] != status {
+			run.Status = "pending"
+			saveErr := run.save(root)
+			return run, output, fmt.Errorf(
+				"run %s output changed since %s was journaled (journaled verdict=%v next_action=%v status=%v; file has verdict=%v next_action=%v status=%v) — restore the journaled output or re-dispatch (restore pending: %v)",
+				runID, eventType,
+				journaled.Data["verdict"], journaled.Data["next_action"], journaled.Data["status"],
+				verdict, action, status, saveErr)
 		}
 	}
 	if run.Status == "collected" || blocking || needsInput {

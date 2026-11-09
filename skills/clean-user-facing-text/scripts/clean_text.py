@@ -16,6 +16,7 @@ from common import (
     backup_path,
     cleaned_path,
     eprint,
+    lock_inplace_fd,
     read_text_input,
     read_text_input_fd,
     rewrite_file_fd,
@@ -80,10 +81,24 @@ def main() -> int:
         # rewrite at the end.
         try:
             in_place_src = Path(args.path).resolve()
-            in_place_fd = os.open(in_place_src, os.O_RDWR)
+            # O_BINARY keeps the byte-exact contract on Windows, where a
+            # text-mode descriptor would translate newlines on rewrite.
+            in_place_fd = os.open(
+                in_place_src, os.O_RDWR | getattr(os, "O_BINARY", 0)
+            )
         except (OSError, RuntimeError) as e:
             eprint(f"cannot open {args.path}: {e}")
             return 2
+        try:
+            # Serialize against a concurrent cleaner on the same inode —
+            # without it two truncate+rewrite passes can interleave and
+            # leave bytes matching neither output (#53). Held for the
+            # descriptor's lifetime so read, backup, and rewrite stay
+            # inside the critical section.
+            lock_inplace_fd(in_place_fd, str(in_place_src))
+        except SystemExit:
+            os.close(in_place_fd)
+            raise
 
     if in_place_fd is not None:
         text = read_text_input_fd(
@@ -111,7 +126,19 @@ def main() -> int:
             # backup_path attempt cap refuses.
             skip_write = True
         else:
-            created_bak, _ = backup_path(src)
+            # The backup must carry the bytes this run read — re-reading
+            # through the path can hit a parent-directory swap and store
+            # the replacement's contents while the rewrite lands on the
+            # original inode (#53). Read via the bound descriptor.
+            try:
+                os.lseek(in_place_fd, 0, os.SEEK_SET)
+                with os.fdopen(os.dup(in_place_fd), "rb") as rf:
+                    src_bytes = rf.read()
+            except OSError as e:
+                eprint(f"cannot read {in_place_src} for backup: {e}")
+                os.close(in_place_fd)
+                return 2
+            created_bak, _ = backup_path(src, data=src_bytes)
             try:
                 eprint(f"backup written to {created_bak}")
             except BaseException:
@@ -126,21 +153,38 @@ def main() -> int:
 
     if not skip_write:
         if in_place_fd is not None:
+            rewrite_err: OSError | None = None
             try:
                 rewrite_file_fd(
                     in_place_fd, cleaned.encode("utf-8", "surrogateescape")
                 )
             except OSError as e:
+                rewrite_err = e
+            close_err: OSError | None = None
+            try:
+                os.close(in_place_fd)
+            except OSError as e:
+                # close surfaces deferred write-back errors (e.g. NFS):
+                # the bytes on disk are uncertain, so this is not a quiet
+                # success either.
+                close_err = e
+            if rewrite_err is not None:
                 # The in-place rewrite is NOT atomic: the target may be
                 # truncated or partial, so the .bak this run created is the
                 # only intact copy of the original — keep it and say so.
                 eprint(
-                    f"cannot rewrite {in_place_src}: {e}; "
+                    f"cannot rewrite {in_place_src}: {rewrite_err}; "
                     f"original preserved in {created_bak}"
                 )
                 return 2
-            finally:
-                os.close(in_place_fd)
+            if close_err is not None:
+                # A rewrite was attempted: treat the file as suspect and
+                # keep the backup rather than reporting a clean write.
+                eprint(
+                    f"error closing {in_place_src}: {close_err}; "
+                    f"original preserved in {created_bak}"
+                )
+                return 2
         else:
             try:
                 write_text_output(cleaned, out)
@@ -153,7 +197,11 @@ def main() -> int:
                 eprint(f"cannot write output: {e}")
                 return 2
     elif in_place_fd is not None:
-        os.close(in_place_fd)
+        try:
+            os.close(in_place_fd)
+        except OSError as e:
+            eprint(f"error closing {in_place_src}: {e}")
+            return 2
 
     if args.stats:
         eprint(json.dumps(stats, indent=2, ensure_ascii=False))

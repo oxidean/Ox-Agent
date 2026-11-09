@@ -38,8 +38,11 @@
 #                          consumes a sibling's hold.
 #   LEASE_OWNER_PID        override for the recorded lease owner pid (the
 #                          `run` subcommand binds holds to the helper pid).
-#   WATERMARKS_NO_FLOCK    when set, skip flock and use the mkdir fallback
-#                          lock — testing/debug escape hatch.
+#   WATERMARKS_NO_FLOCK    when set, skip flock(1) and hold the lock via a
+#                          python3 helper instead — testing/debug escape
+#                          hatch.
+#   WATERMARKS_LOCK_SECONDS  cap on waiting for the lifecycle lock
+#                          (default 60); a timed-out wait fails the call.
 #   WATERMARKS_SERVER_API_KEY  when set, sent as a bearer token on health
 #                          checks so an authenticated service answers them.
 
@@ -577,35 +580,21 @@ reuse_existing() {
 # + health-check + start must be atomic against teardown's check-and-stop:
 # without one lock, a reuse decision can land between teardown's
 # empty-lease check and the kill, pinning a lease on a service about to
-# die. flock does the job on Linux; where it is absent (macOS), a mkdir
-# lock works — mkdir is atomic and stale dirs are reclaimed once their
-# recorded owner is confirmed dead. A timed-out wait FAILS the operation:
-# proceeding unserialized reopens the check-and-stop gap the lock exists
-# to close (#53).
-# Reclaim a stale lockdir without racing a successor: rename is atomic, so
-# the move either wins the dir we observed or loses to someone else. Verify
-# the moved dir still carries the owner we acted on — a different owner
-# means a successor's fresh lock was taken instead, and it goes back.
-reclaim_lockdir() {
-  local lockdir="$1" expect="$2" reclaim moved
-  reclaim="${ENSURE_LOCK}.reclaim.$$"
-  mv "$lockdir" "$reclaim" 2>/dev/null || return 1
-  moved="$(cat "$reclaim/owner" 2>/dev/null || true)"
-  if [[ "$moved" != "$expect" ]]; then
-    mv "$reclaim" "$lockdir" 2>/dev/null || rm -rf "$reclaim"
-    return 1
-  fi
-  rm -rf "$reclaim"
-  return 0
-}
-
+# die. flock(1) does the job on Linux; where it is absent a python3 helper
+# holds the SAME kernel lock — python is a hard dependency of this script,
+# so the fallback adds no new requirement. Kernel locking needs no reclaim
+# protocol: a dead holder's descriptor releases itself, so there is no
+# lockdir, no owner file, and no stale path a waiter could move (#53).
+# A timed-out wait FAILS the operation: proceeding unserialized reopens
+# the check-and-stop gap the lock exists to close. The wait is bounded by
+# WATERMARKS_LOCK_SECONDS (default 60).
 take_lifecycle_lock() {
   LOCK_FD=""
-  LOCK_DIR=""
+  LOCK_HELPER_PID=""
   mkdir -p "$STATE_DIR"
   if [[ -z "${WATERMARKS_NO_FLOCK:-}" ]] && command -v flock >/dev/null 2>&1; then
     exec {LOCK_FD}>"$ENSURE_LOCK"
-    if flock -w 60 "$LOCK_FD"; then
+    if flock -w "${WATERMARKS_LOCK_SECONDS:-60}" "$LOCK_FD"; then
       return 0
     fi
     eval "exec ${LOCK_FD}>&-"
@@ -613,42 +602,70 @@ take_lifecycle_lock() {
     echo "error: timed out acquiring $ENSURE_LOCK" >&2
     return 1
   fi
-  local lockdir="${ENSURE_LOCK}.d" tries=0 owner st
-  while ! mkdir "$lockdir" 2>/dev/null; do
-    owner="$(cat "$lockdir/owner" 2>/dev/null || true)"
-    if [[ -n "$owner" ]]; then
-      st=0
-      lease_owner_state "$owner" || st=$?
-      if [[ "$st" -eq 1 ]] && reclaim_lockdir "$lockdir" "$owner"; then
-        # Confirmed-dead holder, claimed by rename: a concurrent waiter can
-        # never remove a successor's fresh lockdir this way.
-        continue
-      fi
-    elif python3 -c 'import os,sys,time; sys.exit(0 if time.time()-os.stat(sys.argv[1]).st_mtime>2 else 1)' "$lockdir" 2>/dev/null \
-      && reclaim_lockdir "$lockdir" ""; then
-      # Ownerless past the publish window: the holder died between mkdir and
-      # writing owner — waiting it out only ever ended in a timeout.
-      continue
+  # The helper flocks the lock file, signals readiness on a flag file,
+  # then waits for SIGTERM — or exits itself when this shell dies, so a
+  # killed ensure/teardown can never pin the lock behind a corpse.
+  local ready="${ENSURE_LOCK}.ready.$$"
+  rm -f "$ready"
+  python3 - "$ENSURE_LOCK" "$ready" "$$" "${WATERMARKS_LOCK_SECONDS:-60}" <<'PYLOCK' &
+import fcntl, os, signal, sys, time
+
+path, ready, ppid_s = sys.argv[1], sys.argv[2], sys.argv[3]
+budget = float(sys.argv[4])
+fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+deadline = time.monotonic() + budget
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except OSError:
+        if time.monotonic() >= deadline:
+            sys.exit(3)
+        time.sleep(0.1)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+with open(ready, "w") as r:
+    r.write("locked\n")
+    os.fsync(r.fileno())
+# Watchdog: the invoking shell's death must drop the lock — an orphaned
+# holder is an unreclaimable lock.
+ppid = int(ppid_s)
+while True:
+    time.sleep(1)
+    try:
+        os.kill(ppid, 0)
+    except OSError:
+        sys.exit(0)
+PYLOCK
+  LOCK_HELPER_PID=$!
+  local i=0
+  while (( i < 1400 )); do
+    if [[ -f "$ready" ]]; then
+      rm -f "$ready"
+      return 0
     fi
-    tries=$((tries + 1))
-    if (( tries > 120 )); then
-      echo "error: timed out acquiring lifecycle lock $lockdir" >&2
+    if ! kill -0 "$LOCK_HELPER_PID" 2>/dev/null; then
+      wait "$LOCK_HELPER_PID" 2>/dev/null
+      LOCK_HELPER_PID=""
+      rm -f "$ready"
+      echo "error: timed out acquiring $ENSURE_LOCK" >&2
       return 1
     fi
-    sleep 0.5
+    sleep 0.05
+    (( i++ )) || true
   done
-  if ! printf '%s\n' "$$" >"$lockdir/owner"; then
-    rm -rf "$lockdir"
-    echo "error: cannot record lifecycle lock owner" >&2
-    return 1
-  fi
-  LOCK_DIR="$lockdir"
+  kill "$LOCK_HELPER_PID" 2>/dev/null || true
+  wait "$LOCK_HELPER_PID" 2>/dev/null || true
+  LOCK_HELPER_PID=""
+  rm -f "$ready"
+  echo "error: lock helper did not report on $ENSURE_LOCK" >&2
+  return 1
 }
 
 release_lifecycle_lock() {
-  if [[ -n "${LOCK_DIR:-}" ]]; then
-    rm -rf "$LOCK_DIR"
-    LOCK_DIR=""
+  if [[ -n "${LOCK_HELPER_PID:-}" ]]; then
+    kill "$LOCK_HELPER_PID" 2>/dev/null || true
+    wait "$LOCK_HELPER_PID" 2>/dev/null || true
+    LOCK_HELPER_PID=""
   fi
   if [[ -n "${LOCK_FD:-}" ]]; then
     eval "exec ${LOCK_FD}>&-"
@@ -657,7 +674,7 @@ release_lifecycle_lock() {
 }
 
 ensure() {
-  local LOCK_FD="" LOCK_DIR=""
+  local LOCK_FD="" LOCK_HELPER_PID=""
   take_lifecycle_lock || return 1
   local ec=0
   ensure_locked || ec=$?
@@ -731,7 +748,7 @@ ensure_locked() {
 }
 
 teardown() {
-  local LOCK_FD="" LOCK_DIR=""
+  local LOCK_FD="" LOCK_HELPER_PID=""
   take_lifecycle_lock || return 1
   local ec=0
   teardown_locked || ec=$?
@@ -748,7 +765,10 @@ teardown_locked() {
   # never a bare name-delete), then reap leases whose owners died without
   # teardown. Any surviving lease means another run still needs the service —
   # leaving it running is the whole point (#47).
-  drop_own_lease
+  # An invalid WATERMARKS_HOLD is a caller error, not a released hold —
+  # surfacing 0/LEFT_RUNNING here would leave the real hold pinning the
+  # service while the caller believes it was dropped (#53).
+  drop_own_lease || return 1
   reap_leases
   if leases_held; then
     echo "LEFT_RUNNING"

@@ -10,6 +10,27 @@ work and minor-release summaries.
 
 ### Fixed
 
+### Fixed
+
+- **CodeRabbit review hardening (OxL findings round 5)** — `Collect`
+  reloads the run under the per-item lock before acting, so a stale
+  pre-queue snapshot cannot apply an already-collected outcome a second
+  time; a journaled outcome is now authoritative — a retry whose
+  `output.json` drifted post-journal is refused and the run restored to
+  `pending` rather than applying an outcome the journal never saw — and
+  error paths return the run so reconcile warnings still surface.
+  `clean_text.py --in-place` opens the target `O_RDWR | O_BINARY`
+  (byte-exact on Windows), serializes the whole read/backup/rewrite
+  critical section on an inode-bound `flock`, reads backup bytes through
+  the bound descriptor so a parent-directory swap cannot back up the
+  wrong file, treats `close()` write-back errors as suspect, and refuses
+  hard-linked inputs whose siblings would be silently rewritten. The
+  watermarks lifecycle lock now uses `flock(1)` with a `python3` helper
+  where it is absent — replacing the mkdir fallback whose rename-claim
+  reclaim had a residual race — bounded by `WATERMARKS_LOCK_SECONDS`.
+  Docs correct the pipeline-fork recipe: the internal `name:` must match
+  the filename stem. (#53)
+
 - **CodeRabbit review hardening (OxL findings round 2)** — `Collect` now
   records a pending lifecycle event on the run when `skill.failed`
   journaling fails and replays it on a later collect, keeping the journal

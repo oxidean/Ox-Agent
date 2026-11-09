@@ -10,8 +10,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows: no POSIX advisory locking; runs proceed unlocked.
+    fcntl = None  # type: ignore[assignment]
 
 # Hard caps on attacker-influenced input sizes. Whole-file in-memory
 # processing means a 1 GiB default is a host-memory DoS; keep defaults low.
@@ -363,9 +369,24 @@ def read_text_input_fd(
     the bytes read here are bound to that inode even if the path later
     resolves elsewhere.
     """
-    st = os.fstat(fd)
+    try:
+        st = os.fstat(fd)
+    except OSError as e:
+        # fstat on a valid descriptor can still fail (ESTALE on network
+        # filesystems, EIO) — the exit-2 contract holds here too.
+        eprint(f"cannot read {name}: {e}")
+        raise SystemExit(2) from None
     if not stat.S_ISREG(st.st_mode):
         eprint(f"refusing non-regular input (not a regular file): {name}")
+        raise SystemExit(2)
+    if st.st_nlink > 1:
+        # The in-place rewrite lands on the shared inode: hard-linked
+        # siblings would be silently cleaned too. Refuse rather than
+        # modify files the caller never named (#53).
+        eprint(
+            f"refusing hard-linked input ({st.st_nlink} links): {name} — "
+            "copy it to a standalone file first"
+        )
         raise SystemExit(2)
     if st.st_size > MAX_INPUT_BYTES:
         eprint(f"refusing input larger than {MAX_INPUT_BYTES} bytes: {name}")
@@ -381,6 +402,36 @@ def read_text_input_fd(
         raise SystemExit(2)
     guard_binary(data, name, allow_binary=allow_binary, advice=advice)
     return data.decode("utf-8", errors="surrogateescape")
+
+
+_INPLACE_LOCK_SECONDS = 10.0
+
+
+def lock_inplace_fd(fd: int, name: str) -> None:
+    """Serialize ``--in-place`` runs against the same inode.
+
+    Two concurrent cleaners truncate and rewrite interleaved — both report
+    success while the file ends with a mix of the two outputs. ``flock``
+    binds exclusion to the inode itself, so hard-link aliases and parent
+    swaps still serialize on the file actually being rewritten. Where
+    ``fcntl`` is missing (Windows) the run proceeds unlocked: correctness
+    of a single writer is unchanged, only the mutual exclusion is absent.
+    """
+    if fcntl is None:
+        return
+    deadline = time.monotonic() + _INPLACE_LOCK_SECONDS
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                eprint(
+                    f"cannot lock {name} for in-place cleaning: "
+                    "another run holds the lock"
+                )
+                raise SystemExit(2) from None
+            time.sleep(0.05)
 
 
 def rewrite_file_fd(fd: int, data: bytes) -> None:
@@ -519,8 +570,13 @@ def result_has_changes(result: dict[str, Any]) -> bool:
     return any(is_mutating_action(a) for a in actions)
 
 
-def backup_path(src: Path) -> tuple[Path, bool]:
+def backup_path(src: Path, data: bytes | None = None) -> tuple[Path, bool]:
     """Create a ``.bak`` copy of *src* no-clobber; return (backup, created).
+
+    When *data* is given those bytes are written instead of re-reading the
+    path — callers that already hold the source's bytes on an open
+    descriptor pass them so a parent-directory swap cannot substitute a
+    different file's contents into the backup (#53).
 
     Used by ``--in-place`` flows so the original is never partially lost: the
     original file stays untouched until the cleaned output is atomically
@@ -564,7 +620,7 @@ def backup_path(src: Path) -> tuple[Path, bool]:
             raise SystemExit(2) from None
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(src.read_bytes())
+            f.write(src.read_bytes() if data is None else data)
             f.flush()
             os.fsync(f.fileno())
     except OSError as e:

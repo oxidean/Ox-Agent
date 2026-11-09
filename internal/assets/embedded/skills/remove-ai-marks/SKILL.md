@@ -76,9 +76,12 @@ Rules:
    parent. A leaked hold is reaped once its recorded owner verifiably dies,
    so favor leakage over borrowing another run's identity. When several
    workflows share one parent AND token, capture `lease-hold=<name>` from
-   `ensure`'s stderr and export it as `WATERMARKS_HOLD` for the matching
-   `teardown` — a repeated teardown then releases nothing instead of
-   consuming a sibling's hold.
+   `ensure`'s stderr and pass it to the matching teardown per command —
+   `WATERMARKS_HOLD="$hold" "$HELPER" teardown` — never via a shared
+   exported variable: a second workflow's export would overwrite the
+   first, and the first teardown would release the second's hold. A
+   repeated teardown then releases nothing instead of consuming a
+   sibling's hold.
 3. **Never** kill a listener you did not start (`REUSED` / `LEFT_RUNNING`).
 4. Checkout lives at `tmp/watermarks-remover` (gitignored). The helper clones
    pin `v0.7.0` if missing. Do **not** fall back to inventing local cleaners
@@ -88,7 +91,7 @@ Rules:
    `ensure` (same lifecycle).
 
 If `WATERMARKS_SERVER_API_KEY` is set on the service, every request needs
-`-H "Authorization: Bearer $WATERMARKS_SERVER_API_KEY"` — the helper's
+`-H "Authorization: Bearer $WATER..._KEY"` — the helper's
 health checks send it too.
 
 ### Capabilities
