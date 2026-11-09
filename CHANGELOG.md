@@ -60,7 +60,7 @@ work and minor-release summaries.
   recoverable; `clean_text.py --in-place` reports `Path.resolve()`
   failures (e.g. symlink loops) as status 2 instead of a traceback; the
   watermarks service gains authenticated health checks
-  (`Authorization: Bearer $WATERMARKS_SERVER_API_KEY`), per-lease holds
+  (`Authorization: Bearer $WATER...Y`), per-lease holds
   under `tmp/watermarks-service.leases/<token>/` so workflows sharing a
   parent no longer cancel each other, `run` leases owned by the helper
   PID, atomic lease writes that fail `ensure` on error, conservative
@@ -154,12 +154,14 @@ work and minor-release summaries.
   just created and exits 2 cleanly instead of a traceback. (#46)
 
 - **Watermarks service teardown scoped to owning run** —
-  `oxidean-watermarks-service.sh` now files a per-run lease
-  (`tmp/watermarks-service.leases/`, keyed by `WATERMARKS_RUN_TOKEN`,
-  default `$PPID`) so a second run's `teardown` no longer kills the
-  service out from under the run that started it. Dead-owner leases are
-  reaped conservatively, and cold starts serialize on `flock` where
-  available. (#47)
+  `oxidean-watermarks-service.sh` now files leases as per-token
+  directories of holds (`tmp/watermarks-service.leases/<token>/`, keyed
+  by `WATERMARKS_RUN_TOKEN`, default `$PPID`) so a second run's `teardown`
+  no longer kills the service out from under the run that started it.
+  Dead-owner leases are reaped conservatively, and both `ensure` and
+  `teardown` always serialize on a kernel lock — `flock(1)` where
+  available, otherwise a python3 helper holding the same lock; a lock
+  timeout fails the call. (#47)
 
 - **Skill `kind:` semantics documented** — `core` = bundled with the
   distribution and sync-owned by `assets.lock`; `extension` = added

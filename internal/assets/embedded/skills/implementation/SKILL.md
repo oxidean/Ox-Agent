@@ -21,7 +21,7 @@ Implement one bounded, approved work-item stage while respecting scope, standard
 
 ## Produces
 
-- code changes listed in `artifacts` as `changed_paths` entries with one-line summaries; failure edges in `findings`.
+- code changes listed in `artifacts` as `{path, summary}` objects — the one-line change note goes in `summary`, never glued onto the path; failure edges in `findings`.
 
 ## Operating rules
 

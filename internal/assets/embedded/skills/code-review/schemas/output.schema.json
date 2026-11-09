@@ -63,7 +63,7 @@
           }
         ]
       },
-      "description": "Paths (or {path, ...} objects) of files the review produced or touched."
+      "description": "Paths (or {path, ...} objects) of files the review produced or touched. String entries are bare relative paths; attach summaries or annotations as extra fields on {path, ...} objects, never glued onto the path string."
     },
     "findings": {
       "type": "array",

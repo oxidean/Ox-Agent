@@ -41,7 +41,29 @@
       "type": "string"
     },
     "artifacts": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      },
+      "description": "Files produced or touched by this run. String entries are bare relative paths; attach summaries or annotations as extra fields on {path, ...} objects, never glued onto the path string."
     },
     "findings": {
       "type": "array"

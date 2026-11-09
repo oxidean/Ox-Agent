@@ -311,6 +311,22 @@ func outcomeJournaled(root, itemID, runID string) (bool, error) {
 	return false, nil
 }
 
+// journalFailureOnce appends skill.failed unless the journal already holds
+// an outcome event for the run. An unreadable journal is treated as unknown,
+// so the append path stays the authority (#53).
+func journalFailureOnce(root string, item *state.WorkItem, run *Run) error {
+	journaled, jerr := outcomeJournaled(root, item.ID, run.RunID)
+	if jerr == nil && journaled {
+		return nil
+	}
+	return state.Append(root, state.Event{
+		Type:       "skill.failed",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"run_id": run.RunID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+	})
+}
+
 func Collect(root, runID string) (*Run, map[string]any, error) {
 	run, err := LoadRun(root, runID)
 	if err != nil {
@@ -380,15 +396,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			// record: a completed run restored to pending that re-fails
 			// must not gain a second event (#53). An unreadable journal
 			// is unknown — the append path stays the authority.
-			journaled, jerr := outcomeJournaled(root, item.ID, runID)
-			if jerr != nil || !journaled {
-				appendErr = state.Append(root, state.Event{
-					Type:       "skill.failed",
-					WorkItemID: item.ID,
-					Actor:      "ox-agent",
-					Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-				})
-			}
+			appendErr = journalFailureOnce(root, item, run)
 		}
 		if appendErr != nil {
 			run.rememberPendingEvent("skill.failed")
@@ -412,15 +420,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		if saveErr == nil {
 			// Same durability + dedupe contract as the schema-failure
 			// path above (#53).
-			journaled, jerr := outcomeJournaled(root, item.ID, runID)
-			if jerr != nil || !journaled {
-				appendErr = state.Append(root, state.Event{
-					Type:       "skill.failed",
-					WorkItemID: item.ID,
-					Actor:      "ox-agent",
-					Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-				})
-			}
+			appendErr = journalFailureOnce(root, item, run)
 		}
 		if appendErr != nil {
 			run.rememberPendingEvent("skill.failed")
@@ -510,7 +510,9 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 				run.PendingEvent = eventType
 				run.PendingEventData = eventData
 			}
-			_ = run.save(root)
+			if saveErr := run.save(root); saveErr != nil {
+				return run, output, fmt.Errorf("%w (also failed to persist run state: %v)", err, saveErr)
+			}
 			return run, output, err
 		}
 	} else {

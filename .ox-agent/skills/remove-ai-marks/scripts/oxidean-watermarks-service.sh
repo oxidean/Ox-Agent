@@ -74,7 +74,7 @@ health_ok() {
   # is configured — a bare probe would read healthy-as-down and ensure
   # would cold-start against a live, authenticated service (#53).
   if [[ -n "${WATERMARKS_SERVER_API_KEY:-}" ]]; then
-    curl -sf --max-time 2       -H "Authorization: Bearer ${WATERMARKS_SERVER_API_KEY}"       "${WM_URL}/health" >/dev/null 2>&1
+    curl -sf --max-time 2       -H "Authorization: Bearer ${WATE...KEY}"       "${WM_URL}/health" >/dev/null 2>&1
   else
     curl -sf --max-time 2 "${WM_URL}/health" >/dev/null 2>&1
   fi
@@ -607,7 +607,10 @@ take_lifecycle_lock() {
   LOCK_HELPER_PID=""
   mkdir -p "$STATE_DIR"
   if [[ -z "${WATERMARKS_NO_FLOCK:-}" ]] && command -v flock >/dev/null 2>&1; then
-    exec {LOCK_FD}>"$ENSURE_LOCK"
+    # Bash 3.2 (macOS /bin/bash) has no {var}>file dynamic-fd allocation —
+    # a fixed descriptor keeps this path portable (#53).
+    LOCK_FD=9
+    exec 9>"$ENSURE_LOCK"
     if flock -w "${WATERMARKS_LOCK_SECONDS:-60}" "$LOCK_FD"; then
       return 0
     fi

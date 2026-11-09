@@ -21,7 +21,7 @@ Guide red-green-refactor implementation and produce evidence that behavior is co
 
 ## Produces
 
-- failing-test-first then implementation artifacts as `changed_paths`; test outcomes in `findings` (red-to-green evidence).
+- failing-test-first then implementation artifacts as `{path, summary}` objects; test outcomes in `findings` (red-to-green evidence).
 
 ## Operating rules
 
