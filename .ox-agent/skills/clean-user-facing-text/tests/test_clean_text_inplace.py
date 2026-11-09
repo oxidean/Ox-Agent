@@ -217,8 +217,13 @@ class InPlaceMsvcrtLockContentionTest(unittest.TestCase):
                     with self.assertRaises(SystemExit) as cm:
                         clean_text.main()
                 self.assertEqual(cm.exception.code, 2)
+                # A fresh handle cannot touch the locked region (Windows
+                # byte-range locks block other handles' I/O, not just
+                # competing locks) — read through the holder, which is
+                # exempt from its own lock.
+                os.lseek(holder, 0, os.SEEK_SET)
                 self.assertEqual(
-                    src.read_text(encoding="utf-8"),
+                    os.read(holder, 4096).decode("utf-8"),
                     DIRTY,
                     "a refused run must not touch the contended file",
                 )

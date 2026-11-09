@@ -50,7 +50,7 @@
     "skills/clean-user-facing-text/scripts/score_stylometry.py": "sha256:c6cc6ec87a7118763898c940da075976501de45717fd3b86f1e12b45614cef98",
     "skills/clean-user-facing-text/scripts/text_unicode.py": "sha256:03ec440ea306c608d2f226f71c6978f7c89b484159dbdc497616f1be6957cf7b",
     "skills/clean-user-facing-text/skill.yaml": "sha256:9dbffc03f3311b26b4e24f38f81731cf5d101084f3c4ddaee80a7244964ac297",
-    "skills/clean-user-facing-text/tests/test_clean_text_inplace.py": "sha256:cf15cefa886891b32d8466cbbf333c461b96e7faee7af809f4964bae4dc6bdfa",
+    "skills/clean-user-facing-text/tests/test_clean_text_inplace.py": "sha256:8a6ad1af178833104e43a579a73182ce241980d399a9663bfe94c1e38d133603",
     "skills/clean-user-facing-text/tests/test_common_backup.py": "sha256:93f013ce52d8fa750312aa30eec187e7f74288ab8108cd8c5437e4072a2a4920",
     "skills/code-review/SKILL.md": "sha256:fa93f02cfbbc65f564ce8cdcebee4e2a74a2893f52b70c2dcef5991534795cb4",
     "skills/code-review/evals/evals.yaml": "sha256:654789cdc22850b211a51ed539b2dbe5d29d2feae2e2ffd982adcfbbb3313570",
