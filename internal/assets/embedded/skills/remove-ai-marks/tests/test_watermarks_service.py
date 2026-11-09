@@ -316,6 +316,8 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
         self.assertNotIn("one-shot", self._lease_names())
 
 
+@unittest.skipUnless(os.name == "posix", "lease ownership uses POSIX pid checks")
+@unittest.skipUnless(shutil.which("flock"), "flock required for the serialized path")
 class WatermarksLeaseHardeningTest(unittest.TestCase):
     """Second-pass findings on the lease/lock machinery (#53)."""
 
