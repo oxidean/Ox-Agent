@@ -293,6 +293,24 @@ func journalFindEvent(root, itemID, eventType, runID string) (*state.Event, erro
 	return nil, nil
 }
 
+// outcomeJournaled reports whether the item's journal already holds an
+// outcome event — skill.completed or skill.failed — tagged with runID.
+// A validation-failure collect must not append skill.failed beside a
+// skill.completed journaled before an output.json rewrite: one run,
+// one outcome event (#53).
+func outcomeJournaled(root, itemID, runID string) (bool, error) {
+	for _, eventType := range []string{"skill.completed", "skill.failed"} {
+		ev, err := journalFindEvent(root, itemID, eventType, runID)
+		if err != nil {
+			return false, err
+		}
+		if ev != nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func Collect(root, runID string) (*Run, map[string]any, error) {
 	run, err := LoadRun(root, runID)
 	if err != nil {
@@ -358,12 +376,19 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			// Journal only once the run record is durable: a failed save
 			// leaves the run pending on disk, so a later collect replays
 			// the whole outcome — appending now would double the event.
-			appendErr = state.Append(root, state.Event{
-				Type:       "skill.failed",
-				WorkItemID: item.ID,
-				Actor:      "ox-agent",
-				Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-			})
+			// An outcome already journaled for this run is kept as the
+			// record: a completed run restored to pending that re-fails
+			// must not gain a second event (#53). An unreadable journal
+			// is unknown — the append path stays the authority.
+			journaled, jerr := outcomeJournaled(root, item.ID, runID)
+			if jerr != nil || !journaled {
+				appendErr = state.Append(root, state.Event{
+					Type:       "skill.failed",
+					WorkItemID: item.ID,
+					Actor:      "ox-agent",
+					Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+				})
+			}
 		}
 		if appendErr != nil {
 			run.rememberPendingEvent("skill.failed")
@@ -383,12 +408,20 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		run.Status = "failed"
 		run.Error = "invalid artifact path: " + err.Error()
 		saveErr := run.save(root)
-		appendErr := state.Append(root, state.Event{
-			Type:       "skill.failed",
-			WorkItemID: item.ID,
-			Actor:      "ox-agent",
-			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-		})
+		var appendErr error
+		if saveErr == nil {
+			// Same durability + dedupe contract as the schema-failure
+			// path above (#53).
+			journaled, jerr := outcomeJournaled(root, item.ID, runID)
+			if jerr != nil || !journaled {
+				appendErr = state.Append(root, state.Event{
+					Type:       "skill.failed",
+					WorkItemID: item.ID,
+					Actor:      "ox-agent",
+					Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+				})
+			}
+		}
 		if appendErr != nil {
 			run.rememberPendingEvent("skill.failed")
 			if saveErr == nil {

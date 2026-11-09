@@ -11,9 +11,9 @@ work and minor-release summaries.
 ### Fixed
 
 - **CodeRabbit review hardening (OxL findings round 6)** — `Collect`
-  checks BOTH outcome event types on replay, so a `skill.completed`
-  journaled before an `output.json` rewrite to failed cannot double
-  the run as `skill.failed`; run-scoped input requests dedupe on
+  checks BOTH outcome event types on replay AND before any
+  validation-failure append, so a `skill.completed` journaled before an
+  `output.json` rewrite cannot double the run as `skill.failed`; run-scoped input requests dedupe on
   question+options so a drifted question refuses instead of stacking a
   second request. `clean_text.py --in-place` falls back to `O_RDONLY`
   when `O_RDWR` is denied — an already-clean read-only file passes as a

@@ -6,6 +6,7 @@ Stdlib unittest only — run directly:
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -329,6 +330,36 @@ class InPlaceReadOnlyTest(unittest.TestCase):
             self.assertNotIn("Traceback", proc.stderr)
             self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
             self.assertEqual(src.read_text(encoding="utf-8"), DIRTY)
+
+    @unittest.skipUnless(hasattr(errno, "EROFS"), "EROFS is POSIX-only")
+    def test_erofs_clean_file_reaches_noop(self) -> None:
+        """A clean file on a read-only filesystem still reaches the no-op path.
+
+        EROFS is a plain OSError — not PermissionError — so the O_RDONLY
+        fallback must match on errno, not just the exception type (#53).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text("clean line with invisible\n", encoding="utf-8")
+            real_open = os.open
+
+            def erofs_open(path, flags, mode=0o777):
+                if flags & os.O_RDWR:
+                    raise OSError(errno.EROFS, "Read-only file system", str(path))
+                return real_open(path, flags, mode)
+
+            argv = ["clean_text.py", str(src), "--in-place"]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(clean_text.os, "open", side_effect=erofs_open),
+            ):
+                rc = clean_text.main()
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(
+                src.read_text(encoding="utf-8"), "clean line with invisible\n"
+            )
+            self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
 
 
 class InPlaceBackupRereadLimitTest(unittest.TestCase):

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import json
 import os
 import stat
@@ -89,21 +90,28 @@ def main() -> int:
             in_place_fd = os.open(
                 in_place_src, os.O_RDWR | getattr(os, "O_BINARY", 0)
             )
-        except PermissionError:
-            # A read-only target can still reach the no-op path: bind an
-            # O_RDONLY descriptor for the read and only demand write access
-            # when cleaning actually changes bytes (#53).
-            try:
-                in_place_fd = os.open(
-                    in_place_src, os.O_RDONLY | getattr(os, "O_BINARY", 0)
-                )
-            except OSError as e:
+        except (OSError, RuntimeError) as e:
+            # A read-only target can still reach the no-op path: EACCES and
+            # EPERM surface as PermissionError, EROFS (read-only filesystem)
+            # as a plain OSError — all three leave the file readable, so
+            # bind an O_RDONLY descriptor for the read and only demand
+            # write access when cleaning actually changes bytes (#53).
+            if isinstance(e, PermissionError) or getattr(e, "errno", None) in (
+                errno.EACCES,
+                errno.EPERM,
+                getattr(errno, "EROFS", errno.EACCES),
+            ):
+                try:
+                    in_place_fd = os.open(
+                        in_place_src, os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                    )
+                except OSError as e2:
+                    eprint(f"cannot open {args.path}: {e2}")
+                    return 2
+                in_place_writable = False
+            else:
                 eprint(f"cannot open {args.path}: {e}")
                 return 2
-            in_place_writable = False
-        except (OSError, RuntimeError) as e:
-            eprint(f"cannot open {args.path}: {e}")
-            return 2
         if in_place_writable:
             try:
                 # Serialize against a concurrent cleaner on the same inode —
@@ -152,7 +160,17 @@ def main() -> int:
                 with contextlib.suppress(OSError):
                     os.close(in_place_fd)
                 return 2
-            nlinks = os.fstat(in_place_fd).st_nlink
+            # One fstat serves the hard-link refusal and the backup's
+            # mode: the descriptor pins the inode a path re-stat could
+            # not, so capture it before the checks that consume it (#53).
+            try:
+                in_place_stat = os.fstat(in_place_fd)
+            except OSError as e:
+                eprint(f"cannot stat {in_place_src}: {e}")
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            nlinks = in_place_stat.st_nlink
             if nlinks > 1:
                 # The rewrite lands on the shared inode: hard-linked
                 # siblings would be silently cleaned too. The refusal runs
@@ -196,7 +214,7 @@ def main() -> int:
             created_bak, _ = backup_path(
                 src,
                 data=src_bytes,
-                src_mode=stat.S_IMODE(os.fstat(in_place_fd).st_mode),
+                src_mode=stat.S_IMODE(in_place_stat.st_mode),
             )
             try:
                 eprint(f"backup written to {created_bak}")

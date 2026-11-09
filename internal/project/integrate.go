@@ -48,10 +48,14 @@ with the distribution and sync-owned (repaired on ` + "`init --repair --sync`" +
 core skill, fork it under a new directory name: set its manifest ` + "`name:`" + ` to
 ` + "`ox-agent/<new-name>`" + ` and ` + "`kind:`" + ` to ` + "`extension`" + `, and update the
 ` + "`skill`" + ` constants in ` + "`schemas/input.schema.json`" + ` and
-` + "`schemas/output.schema.json`" + ` to the new name — packets and outputs validate
-against those constants, so a fork still naming the original skill rejects
-its own results. Then enable the new name under ` + "`skills.enabled`" + ` and replace
-the original name in the ` + "`skills.stage_skills`" + ` entries where it should run —
+` + "`schemas/output.schema.json`" + ` to the new name, plus the ` + "`skill:`" + ` field in
+` + "`evals/evals.yaml`" + ` — ` + "`eval --emit`" + ` packets and recorded results take
+that name, so a fork still naming the original evaluates under the original
+skill. Packets and outputs validate against the schema constants, so a fork
+still naming the original skill rejects its own results. Then enable the fork
+under ` + "`skills.enabled`" + ` by its bare directory name — ` + "`<new-name>`" + `, not the
+qualified ` + "`ox-agent/<new-name>`" + ` manifest name — and replace the original
+directory name in the ` + "`skills.stage_skills`" + ` entries where it should run —
 appending leaves the original selected first. ` + "`stage_skills`" + ` only feeds
 stage-driven runs: ` + "`ox-agent review`" + `, ` + "`ship`" + `, and ` + "`run <wi> --pipeline <name>`" + `
 read the ` + "`skill:`" + ` fields inside ` + "`pipelines/<name>.yaml`" + ` instead. To swap a
