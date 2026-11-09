@@ -23,6 +23,8 @@ type Packet struct {
 	PacketID      string        `json:"packet_id"`
 	CreatedAt     string        `json:"created_at"`
 	WorkItemID    string        `json:"work_item_id"`
+	WorkItemDir   string        `json:"work_item_dir,omitempty"`
+	ArtifactsDir  string        `json:"artifacts_dir,omitempty"`
 	Skill         string        `json:"skill"`
 	SkillDir      string        `json:"skill_dir"`
 	Stage         string        `json:"stage"`
@@ -117,6 +119,16 @@ func Compile(root string, item *state.WorkItem, skill, stage string, budget int,
 			Schema: "skills/" + skill + "/schemas/output.schema.json",
 			Path:   outputPath,
 		},
+	}
+	// Hand the skill the resolved work-item paths so it never has to derive
+	// or glob them — an unexpanded "WI-0005*" glob becomes a literal-star
+	// directory that breaks Windows checkouts (#52). Paths are
+	// .ox-agent-relative like every other packet path.
+	if item.Dir != "" {
+		if rel, err := filepath.Rel(base, item.Dir); err == nil && filepath.IsLocal(rel) {
+			packet.WorkItemDir = filepath.ToSlash(rel)
+			packet.ArtifactsDir = filepath.ToSlash(filepath.Join(rel, "artifacts"))
+		}
 	}
 	for _, kind := range []struct {
 		kind string

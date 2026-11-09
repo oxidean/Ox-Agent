@@ -39,6 +39,39 @@ work and minor-release summaries.
   produce a group/other-readable backup. Adds a stdlib-unittest
   regression suite for the vendored script helpers, exercised in CI. (#34)
 
+- **`clean_text.py --in-place` on symlinked input** — resolving the input
+  path before backup+write means the `.bak` lands beside the real target
+  and the write no longer trips the symlink refusal that used to crash
+  with an orphaned `.bak`. A failed write now also removes the `.bak` it
+  just created and exits 2 cleanly instead of a traceback. (#46)
+
+- **Watermarks service teardown scoped to owning run** —
+  `oxidean-watermarks-service.sh` now files a per-run lease
+  (`tmp/watermarks-service.leases/`, keyed by `WATERMARKS_RUN_TOKEN`,
+  default `$PPID`) so a second run's `teardown` no longer kills the
+  service out from under the run that started it. Dead-owner leases are
+  reaped conservatively, and cold starts serialize on `flock` where
+  available. (#47)
+
+- **Skill `kind:` semantics documented** — `core` = bundled with the
+  distribution and sync-owned by `assets.lock`; `extension` = added
+  post-init and never reconciled. Clarified in the manifest schema,
+  `docs/architecture.md`, and `AGENTS.md`. (#48)
+
+- **Verdict/next_action coupling in cleaning skills** —
+  `clean-user-facing-text` and `remove-ai-marks` output schemas now carry
+  the same `allOf` if/then coupling as `code-review`: `needs_rework` can
+  no longer advance a stage. (#49)
+
+- **Packets carry resolved work-item paths** — `work_item_dir` and
+  `artifacts_dir` are now compiled into every packet (dispatch creates
+  the artifacts dir), so skills never glob-derive `WI-0005*` and produce
+  a literal-star directory that breaks Windows checkouts. `collect`
+  rejects declared artifact paths containing glob/Windows-invalid
+  characters, traversal, or trailing-dot/space segments — failing like a
+  schema error so the run is re-dispatchable. All 15 bundled SKILL.mds
+  document the contract. (#52)
+
 ## [0.1.7] - 2026-11-07
 
 ### Fixed

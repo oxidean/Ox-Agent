@@ -809,3 +809,96 @@ func TestCollectRetryAfterOutcomeFailure(t *testing.T) {
 		t.Fatal("retried collect did not file the request")
 	}
 }
+
+// TestDispatchEmitsResolvedWorkItemPaths verifies the packet carries the
+// resolved work-item and artifact directories so skills never derive them
+// (#52) — and that dispatch creates the artifacts directory.
+func TestDispatchEmitsResolvedWorkItemPaths(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(run.Dir, "packet.json"))
+	if err != nil {
+		t.Fatalf("reading packet: %v", err)
+	}
+	var packet struct {
+		WorkItemDir  string `json:"work_item_dir"`
+		ArtifactsDir string `json:"artifacts_dir"`
+	}
+	if err := json.Unmarshal(data, &packet); err != nil {
+		t.Fatalf("parsing packet: %v", err)
+	}
+	wantDir := "work/active/" + filepath.Base(item.Dir)
+	if packet.WorkItemDir != wantDir {
+		t.Fatalf("work_item_dir = %q, want %q", packet.WorkItemDir, wantDir)
+	}
+	if packet.ArtifactsDir != wantDir+"/artifacts" {
+		t.Fatalf("artifacts_dir = %q, want %q", packet.ArtifactsDir, wantDir+"/artifacts")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".ox-agent", filepath.FromSlash(packet.ArtifactsDir))); err != nil {
+		t.Fatalf("artifacts dir not created at dispatch: %v", err)
+	}
+}
+
+// TestCollectRejectsUnsafeArtifactPaths verifies declared artifact paths
+// that would corrupt committed trees fail the run like a schema error —
+// re-dispatchable (#52).
+func TestCollectRejectsUnsafeArtifactPaths(t *testing.T) {
+	cases := map[string]any{
+		"glob star":      "WI-0005*/plan.md",
+		"glob object":    map[string]any{"path": "WI-000?/spec.md"},
+		"windows colon":  "work/active/x/plan:1.md",
+		"traversal":      "../escape.md",
+		"trailing dot":   "work/active/x/plan./spec.md",
+		"trailing space": "work/active/x/plan /spec.md",
+		"control char":   "work/active/x/plan\x01.md",
+		"windows pipe":   "work/active/x/a|b.md",
+		"windows lt/gt":  "work/active/x/a<b>.md",
+		"windows quote":  "work/active/x/a\"b.md",
+		"absolute":       "/tmp/plan.md",
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			root, item := initProject(t)
+			run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+			if err != nil {
+				t.Fatalf("Dispatch() error = %v", err)
+			}
+			out := validOutput("specify")
+			out["artifacts"] = []any{bad}
+			writeOutput(t, root, run.RunID, out)
+			run, _, err = Collect(root, run.RunID)
+			if err == nil {
+				t.Fatalf("Collect() accepted artifact %v; want error", bad)
+			}
+			if run.Status != "failed" {
+				t.Fatalf("run status = %s, want failed", run.Status)
+			}
+		})
+	}
+}
+
+// TestCollectAcceptsValidArtifactPaths verifies legitimate artifact paths
+// still collect — the guard targets unsafe paths only.
+func TestCollectAcceptsValidArtifactPaths(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["artifacts"] = []any{
+		"work/active/WI-0001-x/artifacts/spec.md",
+		map[string]any{"path": "work/active/WI-0001-x/artifacts/plan.md"},
+	}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "collected" {
+		t.Fatalf("run status = %s, want collected", run.Status)
+	}
+}

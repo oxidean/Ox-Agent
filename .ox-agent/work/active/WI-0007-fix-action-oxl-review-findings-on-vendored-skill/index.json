@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "WI-0007",
+  "title": "fix: action oxl review findings on vendored skills",
+  "state": "intake",
+  "profile": "normal",
+  "current_stage": "intake",
+  "created_at": "2026-11-09T13:49:43Z"
+}

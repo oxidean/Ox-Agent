@@ -77,5 +77,91 @@
       },
       "additionalProperties": true
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "enum": [
+              "pass",
+              "pass_with_notes"
+            ]
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_action": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "advance_stage",
+                  "complete"
+                ]
+              }
+            },
+            "description": "a passing verdict may only advance the stage or complete the run"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "needs_rework"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_action": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "retry",
+                  "escalate"
+                ]
+              }
+            },
+            "description": "needs_rework must retry the run or escalate — never advance"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "blocked"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_action": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "escalate",
+                  "await_input"
+                ]
+              }
+            },
+            "description": "a blocked verdict escalates or files an input request"
+          }
+        }
+      }
+    }
+  ]
 }

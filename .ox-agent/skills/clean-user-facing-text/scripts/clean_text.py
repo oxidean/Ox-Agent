@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -71,25 +72,40 @@ def main() -> int:
 
     out = args.output
     skip_write = False
+    created_bak: Path | None = None
     if args.in_place:
         if args.path in (None, "-"):
             eprint("--in-place requires a file path")
             return 2
-        src = Path(args.path)
+        # Resolve through symlinks: --in-place means "clean the file the path
+        # points at". The backup lands next to the real file (which is what
+        # gets overwritten) and the write never trips the symlink refusal in
+        # safe_write_bytes — a symlinked input used to crash with an orphaned
+        # .bak (#46).
+        src = Path(args.path).resolve()
         if cleaned == text:
             # Nothing to change: skip the backup and the rewrite entirely so
             # repeated hook runs do not accumulate .bakN files until the
             # backup_path attempt cap refuses.
             skip_write = True
         else:
-            bak, _ = backup_path(src)
-            eprint(f"backup written to {bak}")
+            created_bak, _ = backup_path(src)
+            eprint(f"backup written to {created_bak}")
         out = str(src)
     elif out is None and args.path not in (None, "-"):
         out = str(cleaned_path(Path(args.path)))
 
     if not skip_write:
-        write_text_output(cleaned, out)
+        try:
+            write_text_output(cleaned, out)
+        except OSError as e:
+            # The atomic write failed, so the original is intact and the
+            # backup created this run is dead weight.
+            if created_bak is not None:
+                with contextlib.suppress(OSError):
+                    created_bak.unlink()
+            eprint(f"cannot write output: {e}")
+            return 2
 
     if args.stats:
         eprint(json.dumps(stats, indent=2, ensure_ascii=False))

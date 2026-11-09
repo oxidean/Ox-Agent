@@ -52,6 +52,14 @@ tree into `.ox-agent/` and writes `assets.lock` — a hash manifest the binary
 uses to distinguish ox-owned files (safe to repair) from project-local or
 remote-installed skills (never reconciled).
 
+A skill manifest's `kind` records its distribution channel, not its pipeline
+role. `core` ships inside the distribution — canonical under `skills/` here,
+embedded, materialized, and hash-tracked by `assets.lock`, so upstream fixes
+propagate on `init --repair --sync`. `extension` is anything added post-init
+(`skills install`, or a local directory): the lock never owns it. To
+customize a core skill, fork it under a new directory name — in-place edits
+to sync-owned files are reconciled away.
+
 ## The work loop
 
 ```text

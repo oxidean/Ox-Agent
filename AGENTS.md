@@ -33,5 +33,8 @@ runtime. Project state, skills, and contracts live under `.ox-agent/`.
 
 Do not edit `.ox-agent/skills`, `schemas`, `workflows`, `pipelines`,
 `lifecycle`, or `integrations` in place — they are materialized assets
-tracked by `assets.lock`. Add extension skills as new directories instead.
+tracked by `assets.lock`. `kind: core` in a skill manifest means bundled
+with the distribution and sync-owned (repaired on `init --repair --sync`);
+`kind: extension` means added post-init and never reconciled. To customize a
+core skill, fork it under a new directory name.
 <!-- ox-agent:end -->

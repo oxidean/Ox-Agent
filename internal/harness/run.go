@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -139,6 +140,11 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, err
 	}
+	if packet.ArtifactsDir != "" {
+		if err := os.MkdirAll(filepath.Join(root, ".ox-agent", filepath.FromSlash(packet.ArtifactsDir)), 0o755); err != nil {
+			return nil, err
+		}
+	}
 	data, err := packet.Bytes()
 	if err != nil {
 		return nil, err
@@ -221,6 +227,22 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	if err := json.Unmarshal(outputData, &output); err != nil {
 		return nil, nil, fmt.Errorf("parsing output.json: %w", err)
 	}
+	if err := validateArtifactPaths(output["artifacts"]); err != nil {
+		// Declared artifact paths land in committed work-item directories:
+		// a path like "WI-0005*/plan.md" creates a literal-star directory
+		// that fails Windows checkout outright (#52). Fail like a schema
+		// error so the run is re-dispatchable after the skill corrects it.
+		run.Status = "failed"
+		run.Error = "invalid artifact path: " + err.Error()
+		_ = run.save(root)
+		_ = state.Append(root, state.Event{
+			Type:       "skill.failed",
+			WorkItemID: item.ID,
+			Actor:      "ox-agent",
+			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+		})
+		return run, output, fmt.Errorf("invalid artifact path for %s: %w", runID, err)
+	}
 	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
 	status, _ := output["status"].(string)
 	verdict, _ := output["verdict"].(string)
@@ -283,6 +305,49 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		}
 	}
 	return run, output, nil
+}
+
+// unsafeArtifactChars matches characters that are legal on POSIX filesystems
+// but invalid in committed paths checked out on Windows — plus ASCII control
+// characters, which are invalid everywhere.
+var unsafeArtifactChars = regexp.MustCompile(`[*?"<>|:` + "\x00-\x1f" + `]`)
+
+// validateArtifactPaths checks declared artifact paths from a collected
+// output: each must be a clean relative path (filepath.IsLocal), free of
+// characters Windows checkouts reject, and free of trailing-dot or
+// trailing-space segments (also invalid on Windows). Entries shaped like
+// {path: ...} validate their path field; other shapes are the schema's job.
+func validateArtifactPaths(raw any) error {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	for i, entry := range list {
+		var p string
+		switch v := entry.(type) {
+		case string:
+			p = v
+		case map[string]any:
+			p, _ = v["path"].(string)
+		default:
+			continue
+		}
+		if p == "" {
+			continue
+		}
+		if !filepath.IsLocal(filepath.FromSlash(p)) {
+			return fmt.Errorf("artifacts[%d] %q is not a clean relative path", i, p)
+		}
+		if unsafeArtifactChars.MatchString(p) {
+			return fmt.Errorf("artifacts[%d] %q contains characters invalid on Windows checkouts", i, p)
+		}
+		for _, seg := range strings.Split(p, "/") {
+			if strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+				return fmt.Errorf("artifacts[%d] %q has a segment ending in a dot or space, invalid on Windows", i, p)
+			}
+		}
+	}
+	return nil
 }
 
 // collectedSkills returns the skills with a collected run for the work item

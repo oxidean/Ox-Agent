@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Oxidean helper: ensure watermarks-remover HTTP service for a run, then stop
-# it only if this script started it. Never kill a pre-existing listener.
+# it only when this script started it AND no run still holds a lease. Never
+# kill a pre-existing listener.
 #
 # Usage:
 #   oxidean-watermarks-service.sh ensure          # start if needed; print STARTED|REUSED
-#   oxidean-watermarks-service.sh teardown        # stop only if we started
+#   oxidean-watermarks-service.sh teardown        # drop this run's lease; stop
+#                                                 # only when no leases remain
 #   oxidean-watermarks-service.sh run -- cmd...   # ensure → cmd → teardown
 #
 # Env:
@@ -15,6 +17,10 @@
 #   WATERMARKS_PIN_COMMIT    commit v0.7.0 must resolve to (tags are movable;
 #                          the clone is verified against this before use)
 #   WATERMARKS_CLONE_URL     clone source (default upstream GitHub repo)
+#   WATERMARKS_RUN_TOKEN     lease identity for a run's ensure→teardown pair;
+#                          default $PPID. Set it explicitly when ensure and
+#                          teardown run under different parent processes —
+#                          the same token must be used for both calls.
 
 set -euo pipefail
 
@@ -36,6 +42,8 @@ CLONE_URL="${WATERMARKS_CLONE_URL:-https://github.com/guillaumemeyer/watermarks-
 STATE_DIR="${OXIDEAN_ROOT}/tmp"
 STATE_FILE="${STATE_DIR}/watermarks-service.agent.json"
 LOG_FILE="${STATE_DIR}/watermarks-service.agent.log"
+LEASES_DIR="${STATE_DIR}/watermarks-service.leases"
+ENSURE_LOCK="${STATE_DIR}/watermarks-service.ensure.lock"
 
 health_ok() {
   curl -sf --max-time 2 "${WM_URL}/health" >/dev/null 2>&1
@@ -74,6 +82,71 @@ server_state() {
     esac
   fi
   kill -0 "$pid" 2>/dev/null && return 2
+  return 1
+}
+
+# --- run leases -------------------------------------------------------------
+# A run's lease records that it still needs the service. teardown drops its
+# own lease and only stops an agent-started service when no leases remain —
+# a second run's teardown must never kill the service out from under the run
+# that started it (#47). Leases are reaped conservatively: an owner pid that
+# is verifiably dead drops the lease, anything unverifiable keeps it.
+
+run_token() {
+  local t="${WATERMARKS_RUN_TOKEN:-$PPID}"
+  t="$(printf '%s' "$t" | tr -cd 'a-zA-Z0-9._-')"
+  case "$t" in
+    "" | . | ..) t="$PPID" ;;
+  esac
+  printf '%s' "$t"
+}
+
+write_lease() {
+  mkdir -p "$LEASES_DIR"
+  # The owning process is the caller's parent: the shell driving the run.
+  # Subshells inherit $PPID, so `$(ensure)` and `run` see the same token.
+  printf '{"owner_pid":%s}\n' "$PPID" >"$LEASES_DIR/$(run_token)"
+}
+
+# 0 = owner confirmed alive, 1 = confirmed dead, 2 = unverifiable.
+lease_owner_state() {
+  local owner="$1"
+  [[ "$owner" =~ ^[0-9]+$ ]] || return 2
+  if kill -0 "$owner" 2>/dev/null; then
+    return 0
+  fi
+  # EPERM reports as failure but proves the pid exists — only an absent
+  # /proc entry (on a live procfs) or a failed ps lookup means dead.
+  if [[ -d "/proc/$owner" ]]; then
+    return 0
+  fi
+  if [[ -e /proc/self ]]; then
+    return 1
+  fi
+  if ps -p "$owner" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 2
+}
+
+reap_leases() {
+  local lease owner st
+  for lease in "$LEASES_DIR"/*; do
+    [[ -e "$lease" ]] || continue
+    owner="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("owner_pid") or "")' "$lease" 2>/dev/null || true)"
+    st=0
+    lease_owner_state "$owner" || st=$?
+    if [[ "$st" -eq 1 ]]; then
+      rm -f "$lease"
+    fi
+  done
+}
+
+leases_held() {
+  local lease
+  for lease in "$LEASES_DIR"/*; do
+    [[ -e "$lease" ]] && return 0
+  done
   return 1
 }
 
@@ -130,28 +203,53 @@ write_state() {
     "$started" "$pid" "$WM_URL" "$CHECKOUT" >"$STATE_FILE"
 }
 
-ensure() {
-  if health_ok; then
-    # Keep ownership if a prior ensure in this run already started the server.
-    if [[ -f "$STATE_FILE" ]]; then
-      local started pid
-      started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_by_us", False))' "$STATE_FILE")"
-      pid="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])).get("pid"); print(p if p not in (None, "null") else "")' "$STATE_FILE")"
-      if [[ "$started" == "True" || "$started" == "true" ]] && [[ -n "$pid" ]]; then
-        local st=0
-        server_state "$pid" || st=$?
-        # Confirmed-gone is the only state that drops the claim: teardown
-        # re-verifies before signalling, so keeping it when unverifiable is
-        # safe, while losing it would orphan a server we still own.
-        if [[ "$st" -ne 1 ]]; then
-          echo "REUSED"
-          return 0
-        fi
+reuse_existing() {
+  # Keep ownership if a prior ensure already started the server.
+  if [[ -f "$STATE_FILE" ]]; then
+    local started pid
+    started="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("started_by_us", False))' "$STATE_FILE")"
+    pid="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])).get("pid"); print(p if p not in (None, "null") else "")' "$STATE_FILE")"
+    if [[ "$started" == "True" || "$started" == "true" ]] && [[ -n "$pid" ]]; then
+      local st=0
+      server_state "$pid" || st=$?
+      # Confirmed-gone is the only state that drops the claim: teardown
+      # re-verifies before signalling, so keeping it when unverifiable is
+      # safe, while losing it would orphan a server we still own.
+      if [[ "$st" -ne 1 ]]; then
+        echo "REUSED"
+        return 0
       fi
     fi
-    write_state false null
-    echo "REUSED"
-    return 0
+  fi
+  write_state false null
+  echo "REUSED"
+  return 0
+}
+
+ensure() {
+  # The lease goes down before anything else: teardown only ever removes it.
+  write_lease
+
+  if health_ok; then
+    reuse_existing
+    return
+  fi
+
+  # Serialize cold starts: two concurrent ensures can both miss the health
+  # check and spawn dueling servers on one port. flock(1) serializes the
+  # start path where it exists (Linux); elsewhere the start races as before.
+  # A stuck holder must not wedge every later ensure, so the wait is bounded.
+  local lock_fd=""
+  if command -v flock >/dev/null 2>&1; then
+    mkdir -p "$STATE_DIR"
+    exec {lock_fd}>"$ENSURE_LOCK"
+    if ! flock -w 60 "$lock_fd"; then
+      echo "warning: timed out acquiring $ENSURE_LOCK; starting unserialized" >&2
+    elif health_ok; then
+      # Lost the race inside the lock: the winner's service is up.
+      reuse_existing
+      return
+    fi
   fi
 
   # Bash clears errexit inside the $(ensure) command substitution, so a bare
@@ -192,6 +290,15 @@ ensure() {
 }
 
 teardown() {
+  # This run is done with the service: drop its lease, then reap leases whose
+  # owners died without teardown. Any surviving lease means another run still
+  # needs the service — leaving it running is the whole point (#47).
+  rm -f "$LEASES_DIR/$(run_token)"
+  reap_leases
+  if leases_held; then
+    echo "LEFT_RUNNING"
+    return 0
+  fi
   if [[ ! -f "$STATE_FILE" ]]; then
     return 0
   fi

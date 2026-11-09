@@ -62,6 +62,13 @@ Rules:
 1. Call `ensure` (or `run`) **before** any `/health`, `/inspect`, `/clean`,
    `/detect`, or directory audit that depends on the service.
 2. Call `teardown` in a `finally`-style step after the run — even on failure.
+   Ownership is per-run: `ensure` files a lease under
+   `tmp/watermarks-service.leases/` keyed by `WATERMARKS_RUN_TOKEN`
+   (default: the calling shell's pid). `teardown` drops the lease and only
+   stops an agent-started service when **no** leases remain, so overlapping
+   runs never kill each other's service. When `ensure` and `teardown` run
+   under different parent processes, set `WATERMARKS_RUN_TOKEN` to the same
+   value for both calls.
 3. **Never** kill a listener you did not start (`REUSED` / `LEFT_RUNNING`).
 4. Checkout lives at `tmp/watermarks-remover` (gitignored). The helper clones
    pin `v0.7.0` if missing. Do **not** fall back to inventing local cleaners
@@ -71,7 +78,7 @@ Rules:
    `ensure` (same lifecycle).
 
 If `WATERMARKS_SERVER_API_KEY` is set on the service, every request needs
-`-H "Authorization: Bearer $WATERMARKS_SERVER_API_KEY"`.
+`-H "Authorization: Bearer $WATER..._KEY"`.
 
 ### Capabilities
 
@@ -376,7 +383,7 @@ agent-driven runs.
 
 ## Invocation contract
 
-- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`, relative to `.ox-agent/`) and the schema it must satisfy (`output.schema`).
+- You run against a work-item packet (JSON): `context` carries the bounded inputs, `constraints` the limits, and `output` declares where to write your result (`output.path`, relative to `.ox-agent/`) and the schema it must satisfy (`output.schema`). `work_item_dir` and `artifacts_dir` give the resolved `.ox-agent`-relative paths of the work item's directory and its artifact directory.
 - Write exactly one JSON object to `output.path`. `ox-agent` schema-validates it on collection, journals the outcome, and applies your declared `next_action`.
 - `next_action.type` must be one of `advance_stage` (unit of work done — move to the next stage), `retry` (needs another pass — the run does not count as done, so the skill stays dispatchable), `escalate` (blocked on work — needs a human), `await_input` (needs a human answer — the run files a durable request and stays dispatchable), or `complete` (stage/pipeline finished). Always include a `reason`.
 
