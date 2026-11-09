@@ -205,6 +205,7 @@ class InPlaceMsvcrtLockContentionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.txt"
             src.write_text(DIRTY, encoding="utf-8")
+            original = src.read_bytes()
             holder = os.open(src, os.O_RDWR | getattr(os, "O_BINARY", 0))
             try:
                 os.lseek(holder, 0, os.SEEK_SET)
@@ -223,8 +224,8 @@ class InPlaceMsvcrtLockContentionTest(unittest.TestCase):
                 # exempt from its own lock.
                 os.lseek(holder, 0, os.SEEK_SET)
                 self.assertEqual(
-                    os.read(holder, 4096).decode("utf-8"),
-                    DIRTY,
+                    os.read(holder, 4096),
+                    original,
                     "a refused run must not touch the contended file",
                 )
             finally:
