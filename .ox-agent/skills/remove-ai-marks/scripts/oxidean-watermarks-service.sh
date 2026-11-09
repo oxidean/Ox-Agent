@@ -100,8 +100,10 @@ run_token() {
   local t
   t="$(printf '%s' "$raw" | tr -cd 'a-zA-Z0-9._-')"
   case "$t" in
-    "" | . | ..)
-      # Path-unsafe or empty tokens must never reach the leases dir.
+    "" | . | .. | .*)
+      # Path-unsafe, empty, or leading-dot tokens must never reach the
+      # leases dir — a dotfile lease would be invisible to the reap glob
+      # and could neither be reaped nor counted by leases_held.
       t="run-$PPID"
       ;;
     *)
