@@ -93,10 +93,24 @@ server_state() {
 # is verifiably dead drops the lease, anything unverifiable keeps it.
 
 run_token() {
-  local t="${WATERMARKS_RUN_TOKEN:-$PPID}"
-  t="$(printf '%s' "$t" | tr -cd 'a-zA-Z0-9._-')"
+  local raw="${WATERMARKS_RUN_TOKEN:-$PPID}"
+  local t
+  t="$(printf '%s' "$raw" | tr -cd 'a-zA-Z0-9._-')"
   case "$t" in
-    "" | . | ..) t="$PPID" ;;
+    "" | . | ..)
+      # Path-unsafe or empty tokens must never reach the leases dir.
+      t="run-$PPID"
+      ;;
+    *)
+      if [[ "$t" != "$raw" ]]; then
+        # Sanitization alone collides distinct tokens ("job/a" and "joba"):
+        # suffix a digest of the raw token so the lease name stays
+        # collision-resistant.
+        local h
+        h="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:10])' "$raw")"
+        t="${t}-${h}"
+      fi
+      ;;
   esac
   printf '%s' "$t"
 }
@@ -123,8 +137,14 @@ lease_owner_state() {
   if [[ -e /proc/self ]]; then
     return 1
   fi
-  if ps -p "$owner" >/dev/null 2>&1; then
-    return 0
+  # No procfs (macOS, minimal images): ps is the oracle — a nonzero exit on
+  # `ps -p` is confirmed-absent, not merely unverifiable. Without ps there is
+  # no oracle at all, so stay conservative.
+  if command -v ps >/dev/null 2>&1; then
+    if ps -p "$owner" >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
   fi
   return 2
 }
@@ -369,6 +389,11 @@ case "$cmd" in
       echo "usage: $0 run -- <command...>" >&2
       exit 2
     fi
+    # ensure+teardown happen inside this one process, so the script's own
+    # pid is a lease token unique to this invocation — two `run` commands
+    # under one parent must never share the $PPID default and steal each
+    # other's lease (#47).
+    WATERMARKS_RUN_TOKEN="${WATERMARKS_RUN_TOKEN:-run-$$}"
     run_with_service "$@"
     ;;
   *)

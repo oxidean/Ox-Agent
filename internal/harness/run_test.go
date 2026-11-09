@@ -851,6 +851,8 @@ func TestCollectRejectsUnsafeArtifactPaths(t *testing.T) {
 		"glob object":    map[string]any{"path": "WI-000?/spec.md"},
 		"windows colon":  "work/active/x/plan:1.md",
 		"traversal":      "../escape.md",
+		"backslash path": `work\..\..\escape.md`,
+		"backslash sep":  `work\active\x\plan.md`,
 		"trailing dot":   "work/active/x/plan./spec.md",
 		"trailing space": "work/active/x/plan /spec.md",
 		"control char":   "work/active/x/plan\x01.md",

@@ -60,7 +60,21 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    text = read_text_input(args.path, allow_binary=args.force_text)
+    # Resolve the in-place target up front: the read, the backup, and the
+    # overwrite must all hit the same file even when the input is (or
+    # becomes) a symlink — otherwise a link swap between read and write
+    # would clean one file and overwrite another (#46).
+    in_place_src: Path | None = None
+    if args.in_place:
+        if args.path in (None, "-"):
+            eprint("--in-place requires a file path")
+            return 2
+        in_place_src = Path(args.path).resolve()
+
+    text = read_text_input(
+        str(in_place_src) if in_place_src is not None else args.path,
+        allow_binary=args.force_text,
+    )
     cleaned, stats = clean_text(
         text,
         nfkc=args.nfkc,
@@ -74,15 +88,7 @@ def main() -> int:
     skip_write = False
     created_bak: Path | None = None
     if args.in_place:
-        if args.path in (None, "-"):
-            eprint("--in-place requires a file path")
-            return 2
-        # Resolve through symlinks: --in-place means "clean the file the path
-        # points at". The backup lands next to the real file (which is what
-        # gets overwritten) and the write never trips the symlink refusal in
-        # safe_write_bytes — a symlinked input used to crash with an orphaned
-        # .bak (#46).
-        src = Path(args.path).resolve()
+        src = in_place_src
         if cleaned == text:
             # Nothing to change: skip the backup and the rewrite entirely so
             # repeated hook runs do not accumulate .bakN files until the
@@ -90,7 +96,14 @@ def main() -> int:
             skip_write = True
         else:
             created_bak, _ = backup_path(src)
-            eprint(f"backup written to {created_bak}")
+            try:
+                eprint(f"backup written to {created_bak}")
+            except BaseException:
+                # stderr broke before the overwrite even started: the
+                # backup this run created is unused — remove it (#46).
+                with contextlib.suppress(OSError):
+                    created_bak.unlink()
+                raise
         out = str(src)
     elif out is None and args.path not in (None, "-"):
         out = str(cleaned_path(Path(args.path)))

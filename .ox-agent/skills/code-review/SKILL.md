@@ -29,7 +29,7 @@ Independently review an implementation against its specification, security bound
 - Preserve evidence and disagreement rather than inventing certainty.
 - Do not exceed the permissions or paths in the input contract.
 - Return a compact structured result matching the output schema.
-- Write artifact files under `artifacts_dir` and reference the item's directory via `work_item_dir` — both come resolved in the packet, so never derive or glob the work-item path yourself. Promote durable decisions and blockers into the appropriate work-item artifact.
+- Work-item artifacts go under `artifacts_dir` and the item's directory is `work_item_dir` — both come resolved in the packet, so never derive or glob the work-item path yourself. Content with a declared home elsewhere (context entries, decisions) keeps its own contract location. Promote durable decisions and blockers into the appropriate work-item artifact.
 
 ## Evaluation
 

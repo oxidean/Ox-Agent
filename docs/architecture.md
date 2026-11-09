@@ -58,7 +58,12 @@ embedded, materialized, and hash-tracked by `assets.lock`, so upstream fixes
 propagate on `init --repair --sync`. `extension` is anything added post-init
 (`skills install`, or a local directory): the lock never owns it. To
 customize a core skill, fork it under a new directory name — in-place edits
-to sync-owned files are reconciled away.
+to sync-owned files are reconciled away. Set the fork's manifest `kind:` to
+`extension` (the lock never owns it, so `core` would misrepresent whether
+upstream fixes reach it), add the new directory name to `skills.enabled` in
+`.ox-agent/config.yaml`, and replace the original name in the relevant
+`skills.stage_skills` entries — otherwise stage runs keep selecting the
+original.
 
 ## The work loop
 

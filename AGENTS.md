@@ -36,5 +36,7 @@ Do not edit `.ox-agent/skills`, `schemas`, `workflows`, `pipelines`,
 tracked by `assets.lock`. `kind: core` in a skill manifest means bundled
 with the distribution and sync-owned (repaired on `init --repair --sync`);
 `kind: extension` means added post-init and never reconciled. To customize a
-core skill, fork it under a new directory name.
+core skill, fork it under a new directory name, set its manifest `kind:` to
+`extension`, enable the new name under `skills.enabled`, and map it in
+`skills.stage_skills` where it should run.
 <!-- ox-agent:end -->

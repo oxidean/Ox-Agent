@@ -48,7 +48,8 @@ HELPER=".ox-agent/skills/remove-ai-marks/scripts/oxidean-watermarks-service.sh"
 # from Oxidean repo root:
 "$HELPER" ensure      # prints STARTED or REUSED; clones tmp/watermarks-remover if needed
 # … inspect / clean / audit via curl or service scripts …
-"$HELPER" teardown    # STOPPED only if this run started it; else LEFT_RUNNING
+"$HELPER" teardown    # drops this run's lease: STOPPED when it held the last
+                      # lease on an agent-started service; else LEFT_RUNNING
 ```
 
 Wrap a one-shot command:
@@ -78,7 +79,7 @@ Rules:
    `ensure` (same lifecycle).
 
 If `WATERMARKS_SERVER_API_KEY` is set on the service, every request needs
-`-H "Authorization: Bearer $WATER..._KEY"`.
+`-H "Authorization: Bearer ***"`.
 
 ### Capabilities
 

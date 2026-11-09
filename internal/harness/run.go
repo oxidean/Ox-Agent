@@ -234,14 +234,17 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		// error so the run is re-dispatchable after the skill corrects it.
 		run.Status = "failed"
 		run.Error = "invalid artifact path: " + err.Error()
-		_ = run.save(root)
-		_ = state.Append(root, state.Event{
+		saveErr := run.save(root)
+		appendErr := state.Append(root, state.Event{
 			Type:       "skill.failed",
 			WorkItemID: item.ID,
 			Actor:      "ox-agent",
 			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
 		})
-		return run, output, fmt.Errorf("invalid artifact path for %s: %w", runID, err)
+		// Surface persistence failures alongside the path error: a run
+		// that stayed pending or failed without its event must be visible,
+		// not silently reconcilable.
+		return run, output, fmt.Errorf("invalid artifact path for %s: %w (record failures: save=%v event=%v)", runID, err, saveErr, appendErr)
 	}
 	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
 	status, _ := output["status"].(string)
@@ -308,9 +311,10 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 }
 
 // unsafeArtifactChars matches characters that are legal on POSIX filesystems
-// but invalid in committed paths checked out on Windows — plus ASCII control
-// characters, which are invalid everywhere.
-var unsafeArtifactChars = regexp.MustCompile(`[*?"<>|:` + "\x00-\x1f" + `]`)
+// but invalid in committed paths checked out on Windows — plus the backslash
+// (a Windows separator, so "a\..\..\x" traverses there while looking like a
+// flat filename to a POSIX collect) and ASCII control characters.
+var unsafeArtifactChars = regexp.MustCompile(`[*?"<>|:\\` + "\x00-\x1f" + `]`)
 
 // validateArtifactPaths checks declared artifact paths from a collected
 // output: each must be a clean relative path (filepath.IsLocal), free of
