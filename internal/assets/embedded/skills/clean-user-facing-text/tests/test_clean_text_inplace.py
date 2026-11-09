@@ -83,6 +83,12 @@ class InPlaceWriteFailureTest(unittest.TestCase):
             self.assertEqual(baks[0].read_text(encoding="utf-8"), DIRTY)
 
 
+@unittest.skipUnless(
+    os.name == "posix",
+    "the parent-dir swap simulation renames a dir holding an open fd — "
+    "Windows refuses that outright, which is also why the race cannot "
+    "occur there in this form",
+)
 class InPlaceBindingTest(unittest.TestCase):
     def test_write_stays_bound_to_the_inode_that_was_read(self) -> None:
         """A parent-dir swap after backup must not redirect the overwrite.
