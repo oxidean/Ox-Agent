@@ -608,20 +608,65 @@ take_lifecycle_lock() {
   local ready="${ENSURE_LOCK}.ready.$$"
   rm -f "$ready"
   python3 - "$ENSURE_LOCK" "$ready" "$$" "${WATERMARKS_LOCK_SECONDS:-60}" <<'PYLOCK' &
-import fcntl, os, signal, sys, time
+import os, signal, sys, time
+
+if os.name == "nt":
+    # No flock on Windows python: msvcrt takes the same kernel byte-range
+    # lock. The region must exist, so an empty lock file is padded first.
+    import msvcrt
+
+    def _try_lock(fd):
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+else:
+    import fcntl
+
+    def _try_lock(fd):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+
+
+def _parent_alive(pid):
+    if os.name == "nt":
+        # os.kill(pid, 0) is NOT an existence check on Windows — it maps to
+        # TerminateProcess. Query the handle's exit code instead.
+        import ctypes
+        from ctypes import wintypes
+
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not h:
+            return False
+        code = wintypes.DWORD()
+        ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
 
 path, ready, ppid_s = sys.argv[1], sys.argv[2], sys.argv[3]
 budget = float(sys.argv[4])
 fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+if os.name == "nt":
+    if os.fstat(fd).st_size == 0:
+        os.write(fd, b"\0")
+    os.lseek(fd, 0, os.SEEK_SET)
 deadline = time.monotonic() + budget
 while True:
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if _try_lock(fd):
         break
-    except OSError:
-        if time.monotonic() >= deadline:
-            sys.exit(3)
-        time.sleep(0.1)
+    if time.monotonic() >= deadline:
+        sys.exit(3)
+    time.sleep(0.1)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 with open(ready, "w") as r:
     r.write("locked\n")
@@ -631,9 +676,7 @@ with open(ready, "w") as r:
 ppid = int(ppid_s)
 while True:
     time.sleep(1)
-    try:
-        os.kill(ppid, 0)
-    except OSError:
+    if not _parent_alive(ppid):
         sys.exit(0)
 PYLOCK
   LOCK_HELPER_PID=$!

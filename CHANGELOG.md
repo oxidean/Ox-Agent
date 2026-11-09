@@ -21,13 +21,17 @@ work and minor-release summaries.
   error paths return the run so reconcile warnings still surface.
   `clean_text.py --in-place` opens the target `O_RDWR | O_BINARY`
   (byte-exact on Windows), serializes the whole read/backup/rewrite
-  critical section on an inode-bound `flock`, reads backup bytes through
+  critical section on an inode-bound `flock` — or `msvcrt.locking` on
+  Windows — reads backup bytes through
   the bound descriptor so a parent-directory swap cannot back up the
   wrong file, treats `close()` write-back errors as suspect, and refuses
   hard-linked inputs whose siblings would be silently rewritten. The
   watermarks lifecycle lock now uses `flock(1)` with a `python3` helper
-  where it is absent — replacing the mkdir fallback whose rename-claim
-  reclaim had a residual race — bounded by `WATERMARKS_LOCK_SECONDS`.
+  where it is absent (`fcntl` on POSIX, `msvcrt.locking` plus a
+  `ctypes`-based parent liveness check on Windows — `os.kill(pid, 0)`
+  maps to `TerminateProcess` there, not an existence check) — replacing
+  the mkdir fallback whose rename-claim reclaim had a residual race —
+  bounded by `WATERMARKS_LOCK_SECONDS`.
   Docs correct the pipeline-fork recipe: the internal `name:` must match
   the filename stem. (#53)
 

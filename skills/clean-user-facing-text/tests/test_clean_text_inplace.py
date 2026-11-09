@@ -194,6 +194,39 @@ class InPlaceLockContentionTest(unittest.TestCase):
                 os.close(holder)
 
 
+@unittest.skipUnless(os.name == "nt", "msvcrt.locking is Windows-only")
+class InPlaceMsvcrtLockContentionTest(unittest.TestCase):
+    def test_in_place_refuses_when_another_run_holds_the_lock(self) -> None:
+        """A contended msvcrt byte-range lock must refuse, never interleave (#53)."""
+        import msvcrt
+
+        import common
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text(DIRTY, encoding="utf-8")
+            holder = os.open(src, os.O_RDWR | getattr(os, "O_BINARY", 0))
+            try:
+                os.lseek(holder, 0, os.SEEK_SET)
+                msvcrt.locking(holder, msvcrt.LK_NBLCK, 1)
+                argv = ["clean_text.py", str(src), "--in-place"]
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch.object(common, "_INPLACE_LOCK_SECONDS", 0.2),
+                ):
+                    with self.assertRaises(SystemExit) as cm:
+                        clean_text.main()
+                self.assertEqual(cm.exception.code, 2)
+                self.assertEqual(
+                    src.read_text(encoding="utf-8"),
+                    DIRTY,
+                    "a refused run must not touch the contended file",
+                )
+            finally:
+                # Closing the handle releases the byte-range lock.
+                os.close(holder)
+
+
 class InPlaceResolveFailureTest(unittest.TestCase):
     def test_unresolvable_path_exits_cleanly_without_traceback(self) -> None:
         """A resolve() failure must be a clean exit 2, not a traceback (#53).

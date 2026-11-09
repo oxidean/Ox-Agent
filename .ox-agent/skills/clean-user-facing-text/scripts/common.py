@@ -16,8 +16,13 @@ from typing import Any
 
 try:
     import fcntl
-except ImportError:  # Windows: no POSIX advisory locking; runs proceed unlocked.
+except ImportError:  # Windows: no POSIX advisory locking.
     fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # POSIX: no Windows byte-range locking.
+    msvcrt = None  # type: ignore[assignment]
 
 # Hard caps on attacker-influenced input sizes. Whole-file in-memory
 # processing means a 1 GiB default is a host-memory DoS; keep defaults low.
@@ -411,27 +416,54 @@ def lock_inplace_fd(fd: int, name: str) -> None:
     """Serialize ``--in-place`` runs against the same inode.
 
     Two concurrent cleaners truncate and rewrite interleaved — both report
-    success while the file ends with a mix of the two outputs. ``flock``
-    binds exclusion to the inode itself, so hard-link aliases and parent
-    swaps still serialize on the file actually being rewritten. Where
-    ``fcntl`` is missing (Windows) the run proceeds unlocked: correctness
-    of a single writer is unchanged, only the mutual exclusion is absent.
+    success while the file ends with a mix of the two outputs. On POSIX,
+    ``flock`` binds exclusion to the inode itself, so hard-link aliases and
+    parent swaps still serialize on the file actually being rewritten. On
+    Windows ``msvcrt.locking`` takes the same byte-range lock on the
+    descriptor; an empty file has no byte to claim, so the lock is skipped
+    — every rewrite of empty input is byte-identical anyway. With neither
+    primitive available the run proceeds unlocked: correctness of a single
+    writer is unchanged, only the mutual exclusion is absent.
     """
-    if fcntl is None:
+    if fcntl is not None:
+
+        def _try_lock() -> bool:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError:
+                return False
+
+    elif msvcrt is not None:
+        try:
+            size = os.fstat(fd).st_size
+        except OSError as e:
+            eprint(f"cannot lock {name} for in-place cleaning: {e}")
+            raise SystemExit(2) from None
+        if size == 0:
+            return
+        os.lseek(fd, 0, os.SEEK_SET)
+
+        def _try_lock() -> bool:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                return False
+
+    else:
         return
     deadline = time.monotonic() + _INPLACE_LOCK_SECONDS
     while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if _try_lock():
             return
-        except OSError:
-            if time.monotonic() >= deadline:
-                eprint(
-                    f"cannot lock {name} for in-place cleaning: "
-                    "another run holds the lock"
-                )
-                raise SystemExit(2) from None
-            time.sleep(0.05)
+        if time.monotonic() >= deadline:
+            eprint(
+                f"cannot lock {name} for in-place cleaning: "
+                "another run holds the lock"
+            )
+            raise SystemExit(2) from None
+        time.sleep(0.05)
 
 
 def rewrite_file_fd(fd: int, data: bytes) -> None:
