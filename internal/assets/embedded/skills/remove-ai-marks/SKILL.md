@@ -65,11 +65,14 @@ Rules:
 2. Call `teardown` in a `finally`-style step after the run — even on failure.
    Ownership is per-run: `ensure` files a lease under
    `tmp/watermarks-service.leases/` keyed by `WATERMARKS_RUN_TOKEN`
-   (default: the calling shell's pid). `teardown` drops the lease and only
-   stops an agent-started service when **no** leases remain, so overlapping
-   runs never kill each other's service. When `ensure` and `teardown` run
-   under different parent processes, set `WATERMARKS_RUN_TOKEN` to the same
-   value for both calls.
+   (default: the calling shell's pid) and owned by that parent shell's pid.
+   `teardown` drops **its own** lease (ownership is verified before unlink)
+   and only stops an agent-started service when **no** leases remain, so
+   overlapping runs never kill each other's service. `ensure`/`teardown`
+   must run under the same parent shell; when they can't, set
+   `WATERMARKS_RUN_TOKEN` to the same value for both calls — a leaked lease
+   is reaped once its recorded owner verifiably dies, so favor leakage over
+   borrowing another run's identity.
 3. **Never** kill a listener you did not start (`REUSED` / `LEFT_RUNNING`).
 4. Checkout lives at `tmp/watermarks-remover` (gitignored). The helper clones
    pin `v0.7.0` if missing. Do **not** fall back to inventing local cleaners

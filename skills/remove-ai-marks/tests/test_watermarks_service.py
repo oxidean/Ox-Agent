@@ -145,7 +145,12 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
             json.dumps({"started_by_us": False, "pid": None, "url": "", "checkout": ""})
         )
         self.leases_dir.mkdir()
-        dead_pid = 4_000_000  # far above plausible pid_max
+        # Above the kernel's maximum possible pid: deterministically absent.
+        # 4_000_000 was not — 64-bit pid_max can reach 4_194_304.
+        try:
+            dead_pid = int(Path("/proc/sys/kernel/pid_max").read_text()) + 1
+        except (OSError, ValueError):
+            dead_pid = 1 << 22  # linux pid_max ceiling (also above macOS 99998)
         (self.leases_dir / "crashed").write_text(json.dumps({"owner_pid": dead_pid}))
         (self.leases_dir / "live").write_text(json.dumps({"owner_pid": os.getpid()}))
 
@@ -153,6 +158,107 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
 
         self.assertEqual(done.stdout.strip(), "LEFT_RUNNING", done.stderr)
         self.assertEqual(self._lease_names(), ["live"], "dead-owner lease must be reaped")
+
+    @unittest.skipUnless(os.path.exists("/proc/self"), "starttime identity needs procfs")
+    def test_teardown_reaps_lease_with_recycled_owner_identity(self) -> None:
+        """A live pid with a mismatched starttime is a recycled owner (#130)."""
+        self.state_file.write_text(
+            json.dumps({"started_by_us": False, "pid": None, "url": "", "checkout": ""})
+        )
+        self.leases_dir.mkdir()
+        # owner_pid is alive (this test process) but the recorded starttime
+        # can never match a real one — proof the recorded owner is gone.
+        (self.leases_dir / "recycled").write_text(
+            json.dumps({"owner_pid": os.getpid(), "owner_start": "1"})
+        )
+
+        done = self._call("teardown", token="finisher")
+
+        self.assertEqual(done.stdout.strip(), "LEFT_RUNNING", done.stderr)
+        self.assertEqual(self._lease_names(), [], "identity-mismatched lease must be reaped")
+
+    def test_failed_ensure_releases_only_its_lease(self) -> None:
+        """A failed start drops the lease it wrote — and only that one (#251)."""
+        self.leases_dir.mkdir()
+        (self.leases_dir / "other-run").write_text(
+            json.dumps({"owner_pid": os.getpid()})
+        )
+        env = dict(self.env)
+        # Port 1 can't serve /health and can't be bound: ensure reaches the
+        # cold-start path, the clone fails, and the run must clean up.
+        env["WATERMARKS_SERVICE_URL"] = "http://127.0.0.1:1"
+        env["WATERMARKS_CHECKOUT"] = str(self.root / "missing-checkout")
+        env["WATERMARKS_CLONE_URL"] = str(self.root / "no-such-repo.git")
+        env["WATERMARKS_RUN_TOKEN"] = "failed-run"
+
+        proc = subprocess.run(
+            ["bash", str(SCRIPT), "ensure"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertEqual(
+            self._lease_names(),
+            ["other-run"],
+            "failed ensure must drop its own lease and keep others'",
+        )
+
+    @unittest.skipUnless(os.path.exists("/proc/self"), "fd inspection needs procfs")
+    def test_server_child_does_not_hold_ensure_lock(self) -> None:
+        """The spawned server must not inherit the lifecycle lock fd (#266)."""
+        fake = self.root / "svc" / "service" / "scripts"
+        fake.mkdir(parents=True)
+        (fake / "server.py").write_text(
+            "import sys\n"
+            "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+            "port = int(sys.argv[sys.argv.index('--port') + 1])\n"
+            "class H(BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            "        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
+            "    def log_message(self, *a):\n"
+            "        pass\n"
+            "HTTPServer(('127.0.0.1', port), H).serve_forever()\n"
+        )
+        # A fresh port nothing listens on: health fails, ensure cold-starts.
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+        env = dict(self.env)
+        env["WATERMARKS_SERVICE_URL"] = f"http://127.0.0.1:{free_port}"
+        env["WATERMARKS_CHECKOUT"] = str(self.root / "svc")
+
+        started = subprocess.run(
+            ["bash", str(SCRIPT), "ensure"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(started.stdout.strip(), "STARTED", started.stderr)
+        state = json.loads(self.state_file.read_text())
+        server_pid = state["pid"]
+        self.addCleanup(
+            lambda: subprocess.run(
+                ["kill", str(server_pid)], capture_output=True, timeout=5
+            )
+        )
+
+        lock_path = str(self.state_dir / "watermarks-service.ensure.lock")
+        held = {
+            os.readlink(fd)
+            for fd in Path(f"/proc/{server_pid}/fd").iterdir()
+            if os.path.exists(fd)
+        }
+        self.assertNotIn(
+            lock_path, held, "server inherited the ensure lock descriptor"
+        )
+
+        done = self._call("teardown")
+        self.assertEqual(done.stdout.strip(), "STOPPED", done.stderr)
 
     def test_run_subcommand_uses_one_token(self) -> None:
         """`run` must ensure+teardown under a single lease identity."""
