@@ -59,6 +59,9 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
             "OXIDEAN_ROOT": str(self.root),
             "WATERMARKS_SERVICE_URL": f"http://127.0.0.1:{self.port}",
         }
+        # A token inherited from the host env would steer token-less calls
+        # to the wrong lease dir — tests must own the token explicitly.
+        self.env.pop("WATERMARKS_RUN_TOKEN", None)
 
     def tearDown(self) -> None:
         self.httpd.shutdown()
@@ -146,25 +149,98 @@ class WatermarksServiceLeaseTest(unittest.TestCase):
             time.sleep(0.1)
         self.assertIsNotNone(self._service_proc.poll(), "service never stopped")
 
+    @unittest.skipUnless(os.path.exists("/proc/self"), "zombie owner needs procfs")
     def test_teardown_reaps_lease_whose_owner_died(self) -> None:
         """A crashed run's lease is reaped, not held forever (#47)."""
         self.state_file.write_text(
             json.dumps({"started_by_us": False, "pid": None, "url": "", "checkout": ""})
         )
         self.leases_dir.mkdir()
-        # A real exited child is a deterministically dead owner — unlike
-        # pid_max+1, which can stay alive when the limit was lowered under
-        # running processes.
+        # An unreaped zombie is the deterministic dead owner: its pid stays
+        # allocated, so the OS cannot recycle it mid-test, and the stat
+        # state field proves the owner is gone. A reaped child frees its
+        # pid for reuse — racy when the check runs on the bare pid.
         dead = subprocess.Popen([sys.executable, "-c", "pass"])
-        dead.wait()
-        dead_pid = dead.pid
-        (self.leases_dir / "crashed").write_text(json.dumps({"owner_pid": dead_pid}))
+        self.addCleanup(dead.wait)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                with open(f"/proc/{dead.pid}/stat") as fh:
+                    if fh.read().rsplit(")", 1)[1].split()[0] == "Z":
+                        break
+            except OSError:
+                pass
+            time.sleep(0.05)
+        else:
+            self.fail("fixture child did not become a zombie")
+        (self.leases_dir / "crashed").write_text(json.dumps({"owner_pid": dead.pid}))
         (self.leases_dir / "live").write_text(json.dumps({"owner_pid": os.getpid()}))
 
         done = self._call("teardown", token="finisher")
 
         self.assertEqual(done.stdout.strip(), "LEFT_RUNNING", done.stderr)
         self.assertEqual(self._lease_names(), ["live"], "dead-owner lease must be reaped")
+
+
+    def test_run_payload_does_not_inherit_owner_override(self) -> None:
+        """LEASE_OWNER_PID must stay private to the helper (#53).
+
+        A payload child that calls ensure would otherwise write holds owned
+        by the helper's pid — reaped while still in use once the helper
+        exits.
+        """
+        done = self._call(
+            "run", "--", "sh", "-c",
+            'printf "owner=%s" "${LEASE_OWNER_PID-unset}"',
+            token="run-x",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("owner=unset", done.stdout)
+
+    def test_ensure_fails_cleanly_when_state_file_unwritable(self) -> None:
+        """A failed state write must not report STARTED on an unrecorded
+        server — the spawn is killed and the hold released (#53)."""
+        checkout = self.root / "checkout"
+        (checkout / "service" / "scripts").mkdir(parents=True)
+        (checkout / "service" / "scripts" / "server.py").write_text(
+            "import time\ntime.sleep(300)\n"
+        )
+        # Dead port: health fails so the spawn path runs; a vendored
+        # (non-git) checkout passes verify_checkout.
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        dead_port = sock.getsockname()[1]
+        sock.close()
+        # write_state's printf must fail: read-only state file.
+        self.state_file.write_text("")
+        os.chmod(self.state_file, 0o444)
+
+        done = self._call(
+            "ensure",
+            env_extra={
+                "WATERMARKS_SERVICE_URL": f"http://127.0.0.1:{dead_port}",
+                "WATERMARKS_CHECKOUT": str(checkout),
+            },
+        )
+
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("STARTED", done.stdout)
+        self.assertIn("cannot record service state", done.stderr)
+        self.assertEqual(self._lease_names(), [], "failed ensure must release its hold")
+        # And no spawned server may be left running on that port.
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            probe = subprocess.run(
+                ["pgrep", "-f", f"server.py --host 127.0.0.1 --port {dead_port}"],
+                capture_output=True,
+                text=True,
+            )
+            if probe.returncode != 0:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("spawned server left running after failed state write")
 
     @unittest.skipUnless(os.path.exists("/proc/self"), "starttime identity needs procfs")
     def test_teardown_reaps_lease_with_recycled_owner_identity(self) -> None:
@@ -337,6 +413,9 @@ class WatermarksLeaseHardeningTest(unittest.TestCase):
             "OXIDEAN_ROOT": str(self.root),
             "WATERMARKS_SERVICE_URL": f"http://127.0.0.1:{self.port}",
         }
+        # A token inherited from the host env would steer token-less calls
+        # to the wrong lease dir — tests must own the token explicitly.
+        self.env.pop("WATERMARKS_RUN_TOKEN", None)
 
     def tearDown(self) -> None:
         self.httpd.shutdown()

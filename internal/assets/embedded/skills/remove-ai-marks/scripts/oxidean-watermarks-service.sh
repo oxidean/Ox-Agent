@@ -695,7 +695,16 @@ ensure_locked() {
     exec python3 service/scripts/server.py --host 127.0.0.1 --port "$WM_PORT"
   ) >>"$LOG_FILE" 2>&1 &
   local pid=$!
-  write_state true "$pid"
+  if ! write_state true "$pid"; then
+    # No state means teardown treats the new server as unmanaged and
+    # leaves it running — stop it and release this attempt's hold
+    # instead of reporting STARTED on an unrecorded server.
+    echo "error: cannot record service state in $STATE_FILE" >&2
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    drop_wrote_lease
+    return 1
+  fi
 
   local i=0
   while (( i < 40 )); do
@@ -821,8 +830,12 @@ case "$cmd" in
     # a backgrounded `run` keeps its claim after the launcher exits and a
     # killed helper's claim is reaped (#53).
     WATERMARKS_RUN_TOKEN="${WATERMARKS_RUN_TOKEN:-run-$$}"
+    export WATERMARKS_RUN_TOKEN
+    # The owner override stays private to this helper: exported, it would
+    # leak into the payload's environment, and a backgrounded child
+    # workflow's ensure would write holds owned by a pid that exits with
+    # this process — reaped while still in use (#53).
     LEASE_OWNER_PID=$$
-    export WATERMARKS_RUN_TOKEN LEASE_OWNER_PID
     run_with_service "$@"
     ;;
   *)

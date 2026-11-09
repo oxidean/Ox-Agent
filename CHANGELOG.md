@@ -16,7 +16,7 @@ work and minor-release summaries.
   recoverable; `clean_text.py --in-place` reports `Path.resolve()`
   failures (e.g. symlink loops) as status 2 instead of a traceback; the
   watermarks service gains authenticated health checks
-  (`Authorization: Bearer $WATERMARKS_SERVER_API_KEY`), per-lease holds
+  (`Authorization: Bearer $WATER...Y`), per-lease holds
   under `tmp/watermarks-service.leases/<token>/` so workflows sharing a
   parent no longer cancel each other, `run` leases owned by the helper
   PID, atomic lease writes that fail `ensure` on error, conservative
@@ -51,6 +51,26 @@ work and minor-release summaries.
   so a concurrent waiter can never delete a successor's fresh lock.
   `docs/architecture.md` notes that forked pipelines need a unique
   `name:` to avoid sharing progress state. (#53)
+
+- **CodeRabbit review hardening (OxL findings round 4)** — `Collect`
+  now serializes per work item on a kernel file lock, and pending-event
+  reconciliation is idempotent (it checks the journal for a matching
+  event type + `run_id` before replaying) and best-effort per run, so
+  one run's stuck marker cannot block a sibling's collection — failures
+  surface as `ReconcileWarnings` on stderr instead of aborting. Failure
+  outcomes now save the failed run *before* journaling `skill.failed`,
+  and a successful run whose outcome application fails is restored to
+  `pending` so the next collect retries it safely. `ox-agent workitem
+  unblock` files a durable approval request on a human-gated blocked
+  edge like the other lifecycle commands instead of returning the bare
+  gate error. The watermarks helper kills a spawned server and drops
+  its hold when the ownership state write fails (never reporting
+  `STARTED` on an unrecorded server), and `run` no longer exports
+  `LEASE_OWNER_PID` into the payload environment — a payload child
+  cannot write holds owned by a pid that exits while they are in use.
+  Docs clarify that pipeline YAML step skills are independent of
+  `stage_skills`: customize a pipeline by forking its definition, not
+  by remapping stages. (#53)
 
 - **Materialized assets lose executable file modes** — `embed.FS` drops
   mode bits, so `init`/`init --repair`/`skills update`/`skills install`

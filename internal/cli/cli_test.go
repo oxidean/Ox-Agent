@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/oxidean/Ox-Agent/internal/input"
 )
 
 // runCLI executes the command tree in-process with args and captures output.
@@ -93,5 +95,52 @@ func TestInitIntegrateOnExisting(t *testing.T) {
 	}
 	if _, err := runCLI(t, "init", "--path", dir, "--integrate"); err != nil {
 		t.Fatalf("init --integrate on existing project error = %v", err)
+	}
+}
+
+// TestUnblockGateFilesApprovalRequest verifies a human-gated blocked edge
+// routes through handleGateError like the other lifecycle commands: the
+// durable approval request is filed, not just the bare gate error (#53).
+func TestUnblockGateFilesApprovalRequest(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if _, err := runCLI(t, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	out, err := runCLI(t, "start", "gated unblock")
+	if err != nil || !strings.Contains(out, "WI-0001") {
+		t.Fatalf("start: %q, %v", out, err)
+	}
+	lifePath := filepath.Join(dir, ".ox-agent", "lifecycle", "workflow.yaml")
+	life, err := os.ReadFile(lifePath)
+	if err != nil {
+		t.Fatalf("reading lifecycle: %v", err)
+	}
+	normalized := strings.ReplaceAll(string(life), "\r\n", "\n")
+	gated := strings.Replace(normalized,
+		"  - from: blocked\n    to: blocked_from\n",
+		"  - from: blocked\n    to: blocked_from\n    gate: human\n", 1)
+	if gated == normalized {
+		t.Fatal("lifecycle gate not applied — edge text did not match")
+	}
+	if err := os.WriteFile(lifePath, []byte(gated), 0o644); err != nil {
+		t.Fatalf("writing lifecycle: %v", err)
+	}
+	if _, err := runCLI(t, "transition", "WI-0001", "blocked"); err != nil {
+		t.Fatalf("transition to blocked: %v", err)
+	}
+	_, err = runCLI(t, "unblock", "WI-0001")
+	if err == nil {
+		t.Fatal("unblock succeeded despite human-gated edge; want approval error")
+	}
+	if !strings.Contains(err.Error(), "approval") && !strings.Contains(err.Error(), "filed") {
+		t.Fatalf("unblock error = %v, want filed approval request", err)
+	}
+	req, err := input.FindPendingAction(dir, "WI-0001", "transition", "intake")
+	if err != nil {
+		t.Fatalf("FindPendingAction() error = %v", err)
+	}
+	if req == nil {
+		t.Fatal("no approval request filed for the gated unblock")
 	}
 }

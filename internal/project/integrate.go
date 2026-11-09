@@ -48,7 +48,12 @@ with the distribution and sync-owned (repaired on ` + "`init --repair --sync`" +
 core skill, fork it under a new directory name and set its manifest ` + "`kind:`" + `
 to ` + "`extension`" + `; enable the new name under ` + "`skills.enabled`" + ` and replace
 the original name in the ` + "`skills.stage_skills`" + ` entries where it should run —
-appending leaves the original selected first. Update hard-coded asset paths
+appending leaves the original selected first. ` + "`stage_skills`" + ` only feeds
+stage-driven runs: ` + "`ox-agent review`" + `, ` + "`ship`" + `, and ` + "`run <wi> --pipeline <name>`" + `
+read the ` + "`skill:`" + ` fields inside ` + "`pipelines/<name>.yaml`" + ` instead. To swap a
+pipeline step's skill, copy the pipeline file under a new ` + "`name:`" + `, edit its
+skill references, and invoke it via ` + "`ox-agent run <wi> --pipeline <name>`" + `.
+Update hard-coded asset paths
 in the fork's instructions too: a copied SKILL.md that still points at the
 core skill's scripts executes the core helper. An extension dir that reuses
 a bundled skill's name can still be overwritten by ` + "`skills update --yes`" + ` —

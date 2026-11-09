@@ -14,6 +14,7 @@ import (
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -42,7 +43,12 @@ type Run struct {
 	// for the same work item retries the append (#53).
 	PendingEvent     string         `json:"pending_event,omitempty"`
 	PendingEventData map[string]any `json:"pending_event_data,omitempty"`
-	Dir              string         `json:"-"`
+	// ReconcileWarnings carries non-fatal pending-event replay failures
+	// seen during this collect. The marker stays on the other run's
+	// record and a later collect retries it — one run's broken
+	// bookkeeping must not block an unrelated run's collection (#53).
+	ReconcileWarnings []string `json:"-"`
+	Dir               string   `json:"-"`
 }
 
 // DispatchRequest describes one skill invocation to dispatch.
@@ -208,13 +214,17 @@ func (r *Run) rememberPendingEvent(eventType string) {
 // reconcilePendingEvents retries journal appends that failed after their
 // runs were already persisted. A failed run is never collected again, so
 // without this the event is lost for good once journal access returns.
-func reconcilePendingEvents(root, itemID string) error {
+// Per-run failures are skipped — the marker stays on that run's record
+// for the next collect — and returned as warnings so one run's broken
+// bookkeeping can never block an unrelated run's collection (#53).
+func reconcilePendingEvents(root, itemID string) []string {
+	var warnings []string
 	entries, err := os.ReadDir(runsDir(root))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return []string{fmt.Sprintf("listing run dirs for pending-event replay: %v", err)}
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -224,20 +234,53 @@ func reconcilePendingEvents(root, itemID string) error {
 		if err != nil || r.WorkItemID != itemID || r.PendingEvent == "" {
 			continue
 		}
-		if err := state.Append(root, state.Event{
-			Type:       r.PendingEvent,
-			WorkItemID: r.WorkItemID,
-			Actor:      "ox-agent",
-			Data:       r.PendingEventData,
-		}); err != nil {
-			return fmt.Errorf("replaying pending event for run %s: %w", r.RunID, err)
+		runID, _ := r.PendingEventData["run_id"].(string)
+		// A save failure after a successful append leaves the marker
+		// set: checking the journal first keeps the replay idempotent.
+		seen, seenErr := journalHasEvent(root, itemID, r.PendingEvent, runID)
+		switch {
+		case seenErr != nil:
+			warnings = append(warnings, fmt.Sprintf("run %s: checking journal for replayed event: %v", r.RunID, seenErr))
+			continue
+		case seen:
+			// Already journaled — fall through to clear the marker.
+		default:
+			if err := state.Append(root, state.Event{
+				Type:       r.PendingEvent,
+				WorkItemID: r.WorkItemID,
+				Actor:      "ox-agent",
+				Data:       r.PendingEventData,
+			}); err != nil {
+				warnings = append(warnings, fmt.Sprintf("run %s: replaying %s: %v", r.RunID, r.PendingEvent, err))
+				continue
+			}
 		}
 		r.PendingEvent, r.PendingEventData = "", nil
 		if err := r.save(root); err != nil {
-			return err
+			warnings = append(warnings, fmt.Sprintf("run %s: clearing replayed event marker: %v", r.RunID, err))
 		}
 	}
-	return nil
+	return warnings
+}
+
+// journalHasEvent reports whether an event of eventType tagged with the
+// run id is already in the item's journal. A replayed append must not
+// duplicate the entry when an earlier append succeeded but the
+// marker-clearing save failed (#53).
+func journalHasEvent(root, itemID, eventType, runID string) (bool, error) {
+	if runID == "" {
+		return false, nil
+	}
+	events, err := state.EventsFor(root, itemID, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, ev := range events {
+		if ev.Type == eventType && ev.Data["run_id"] == runID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func Collect(root, runID string) (*Run, map[string]any, error) {
@@ -245,13 +288,30 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// Serialize collection per work item: two concurrent collects for the
+	// same item could both replay a pending event or both apply an
+	// outcome. The kernel lock serializes the whole critical section
+	// (#53).
+	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "collect-"+run.WorkItemID+".lock")
+	var output map[string]any
+	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+		var cerr error
+		run, output, cerr = collectLocked(root, run)
+		return cerr
+	})
+	return run, output, err
+}
+
+// collectLocked is Collect's critical section, run under the per-item
+// collect lock.
+func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// Replay events that could not be journaled on an earlier collect for
 	// this work item: the journal is the audit and replay source, so a
 	// missing skill.failed must not be lost just because that run is no
-	// longer pending.
-	if err := reconcilePendingEvents(root, run.WorkItemID); err != nil {
-		return nil, nil, err
-	}
+	// longer pending. Replay failures are non-fatal — the marker stays
+	// on the other run's record for a later retry.
+	run.ReconcileWarnings = reconcilePendingEvents(root, run.WorkItemID)
+	runID := run.RunID
 	if run.Status != "pending" {
 		return nil, nil, fmt.Errorf("run %s is %s, not pending", runID, run.Status)
 	}
@@ -269,17 +329,24 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	if err := contract.ValidateFile(schemaPath, outputData); err != nil {
 		run.Status = "failed"
 		run.Error = "output failed schema validation: " + err.Error()
-		_ = run.save(root)
-		if appendErr := state.Append(root, state.Event{
-			Type:       "skill.failed",
-			WorkItemID: item.ID,
-			Actor:      "ox-agent",
-			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-		}); appendErr != nil {
-			run.rememberPendingEvent("skill.failed")
-			_ = run.save(root)
+		saveErr := run.save(root)
+		var appendErr error
+		if saveErr == nil {
+			// Journal only once the run record is durable: a failed save
+			// leaves the run pending on disk, so a later collect replays
+			// the whole outcome — appending now would double the event.
+			appendErr = state.Append(root, state.Event{
+				Type:       "skill.failed",
+				WorkItemID: item.ID,
+				Actor:      "ox-agent",
+				Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+			})
 		}
-		return run, nil, fmt.Errorf("output for %s failed validation: %w", runID, err)
+		if appendErr != nil {
+			run.rememberPendingEvent("skill.failed")
+			saveErr = run.save(root)
+		}
+		return run, nil, fmt.Errorf("output for %s failed validation: %w (record failures: save=%v event=%v)", runID, err, saveErr, appendErr)
 	}
 	var output map[string]any
 	if err := json.Unmarshal(outputData, &output); err != nil {
@@ -352,16 +419,33 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		eventType = "skill.failed"
 	}
 	eventData := map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action}
-	if err := state.Append(root, state.Event{
-		Type:       eventType,
-		WorkItemID: item.ID,
-		Actor:      "ox-agent",
-		Data:       eventData,
-	}); err != nil {
-		run.PendingEvent = eventType
-		run.PendingEventData = eventData
-		_ = run.save(root)
-		return run, output, err
+	// A retried collect (restored to pending after the append succeeded
+	// but the outcome failed to apply) must not journal the event
+	// twice. An unreadable journal is treated as unknown: the append
+	// path below stays the authority and keeps failures retryable.
+	journaled, _ := journalHasEvent(root, run.WorkItemID, eventType, runID)
+	if !journaled {
+		if err := state.Append(root, state.Event{
+			Type:       eventType,
+			WorkItemID: item.ID,
+			Actor:      "ox-agent",
+			Data:       eventData,
+		}); err != nil {
+			if run.Status == "collected" || blocking || needsInput {
+				// The outcome still has to run — restoring pending keeps the
+				// whole tail (journal append + applyOutcome) retryable. An
+				// event-only replay would journal the result but never
+				// advance, unblock, or file the input request (#53).
+				run.Status = "pending"
+			} else {
+				// Terminal runs are never collected again: the pending
+				// event is the retry vehicle for the journal record itself.
+				run.PendingEvent = eventType
+				run.PendingEventData = eventData
+			}
+			_ = run.save(root)
+			return run, output, err
+		}
 	}
 	if run.Status == "collected" || blocking || needsInput {
 		if err := applyOutcome(root, item, run, output); err != nil {
