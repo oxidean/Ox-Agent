@@ -70,6 +70,7 @@ def main() -> int:
     # file and overwrite another without backing it up (#46, #53).
     in_place_src: Path | None = None
     in_place_fd: int | None = None
+    in_place_writable = True
     if args.in_place:
         if args.path in (None, "-"):
             eprint("--in-place requires a file path")
@@ -86,19 +87,32 @@ def main() -> int:
             in_place_fd = os.open(
                 in_place_src, os.O_RDWR | getattr(os, "O_BINARY", 0)
             )
+        except PermissionError:
+            # A read-only target can still reach the no-op path: bind an
+            # O_RDONLY descriptor for the read and only demand write access
+            # when cleaning actually changes bytes (#53).
+            try:
+                in_place_fd = os.open(
+                    in_place_src, os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                )
+            except OSError as e:
+                eprint(f"cannot open {args.path}: {e}")
+                return 2
+            in_place_writable = False
         except (OSError, RuntimeError) as e:
             eprint(f"cannot open {args.path}: {e}")
             return 2
-        try:
-            # Serialize against a concurrent cleaner on the same inode —
-            # without it two truncate+rewrite passes can interleave and
-            # leave bytes matching neither output (#53). Held for the
-            # descriptor's lifetime so read, backup, and rewrite stay
-            # inside the critical section.
-            lock_inplace_fd(in_place_fd, str(in_place_src))
-        except SystemExit:
-            os.close(in_place_fd)
-            raise
+        if in_place_writable:
+            try:
+                # Serialize against a concurrent cleaner on the same inode —
+                # without it two truncate+rewrite passes can interleave and
+                # leave bytes matching neither output (#53). Held for the
+                # descriptor's lifetime so read, backup, and rewrite stay
+                # inside the critical section.
+                lock_inplace_fd(in_place_fd, str(in_place_src))
+            except SystemExit:
+                os.close(in_place_fd)
+                raise
 
     if in_place_fd is not None:
         text = read_text_input_fd(
@@ -126,6 +140,12 @@ def main() -> int:
             # backup_path attempt cap refuses.
             skip_write = True
         else:
+            if not in_place_writable:
+                # Cleaning is needed but the target refused O_RDWR — refuse
+                # before creating a backup that could never be needed (#53).
+                eprint(f"cannot rewrite {in_place_src}: file is read-only")
+                os.close(in_place_fd)
+                return 2
             # The backup must carry the bytes this run read — re-reading
             # through the path can hit a parent-directory swap and store
             # the replacement's contents while the rewrite lands on the

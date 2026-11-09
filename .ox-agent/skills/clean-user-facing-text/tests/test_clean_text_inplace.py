@@ -251,5 +251,58 @@ class InPlaceResolveFailureTest(unittest.TestCase):
                 self.assertEqual(rc, 2)
 
 
+
+
+@unittest.skipUnless(os.name == "posix", "mode-bit writability is POSIX-specific")
+class InPlaceReadOnlyTest(unittest.TestCase):
+    def test_read_only_clean_file_passes_without_write_access(self) -> None:
+        """An already-clean 0444 file must reach the no-op path (#53).
+
+        O_RDWR is refused by the mode bits; the O_RDONLY fallback lets the
+        read proceed so a no-change run exits 0 — as it did before the
+        fd-bound open, where the read never asked for write access either.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text("clean line with invisible\n", encoding="utf-8")
+            src.chmod(0o444)
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(SCRIPT), str(src), "--in-place"],
+                    capture_output=True,
+                    text=True,
+                )
+            finally:
+                src.chmod(0o644)
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+            self.assertEqual(
+                src.read_text(encoding="utf-8"), "clean line with invisible\n"
+            )
+            self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
+
+    def test_read_only_dirty_file_refuses_before_backup(self) -> None:
+        """A 0444 file needing cleaning fails cleanly — no backup, no write."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text(DIRTY, encoding="utf-8")
+            src.chmod(0o444)
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(SCRIPT), str(src), "--in-place"],
+                    capture_output=True,
+                    text=True,
+                )
+            finally:
+                src.chmod(0o644)
+
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn("read-only", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+            self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
+            self.assertEqual(src.read_text(encoding="utf-8"), DIRTY)
+
+
 if __name__ == "__main__":
     unittest.main()
