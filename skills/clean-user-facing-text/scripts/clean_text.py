@@ -7,12 +7,14 @@ import argparse
 import contextlib
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (
+    MAX_INPUT_BYTES,
     backup_path,
     cleaned_path,
     eprint,
@@ -111,7 +113,10 @@ def main() -> int:
                 # inside the critical section.
                 lock_inplace_fd(in_place_fd, str(in_place_src))
             except SystemExit:
-                os.close(in_place_fd)
+                # A failed close here must not replace the clean exit-2
+                # contract with a traceback (#53).
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
                 raise
 
     if in_place_fd is not None:
@@ -144,21 +149,40 @@ def main() -> int:
                 # Cleaning is needed but the target refused O_RDWR — refuse
                 # before creating a backup that could never be needed (#53).
                 eprint(f"cannot rewrite {in_place_src}: file is read-only")
-                os.close(in_place_fd)
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
                 return 2
             # The backup must carry the bytes this run read — re-reading
             # through the path can hit a parent-directory swap and store
             # the replacement's contents while the rewrite lands on the
-            # original inode (#53). Read via the bound descriptor.
+            # original inode (#53). Read via the bound descriptor, still
+            # capped: a writer growing the file mid-run cannot push the
+            # allocation past MAX_INPUT_BYTES.
             try:
                 os.lseek(in_place_fd, 0, os.SEEK_SET)
                 with os.fdopen(os.dup(in_place_fd), "rb") as rf:
-                    src_bytes = rf.read()
+                    src_bytes = rf.read(MAX_INPUT_BYTES + 1)
             except OSError as e:
                 eprint(f"cannot read {in_place_src} for backup: {e}")
-                os.close(in_place_fd)
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
                 return 2
-            created_bak, _ = backup_path(src, data=src_bytes)
+            if len(src_bytes) > MAX_INPUT_BYTES:
+                eprint(
+                    f"refusing input larger than {MAX_INPUT_BYTES} bytes: "
+                    f"{in_place_src}"
+                )
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            # The backup's mode comes from the same descriptor as its
+            # bytes — a parent-directory swap cannot leak private contents
+            # under a replacement file's world-readable mode (#53).
+            created_bak, _ = backup_path(
+                src,
+                data=src_bytes,
+                src_mode=stat.S_IMODE(os.fstat(in_place_fd).st_mode),
+            )
             try:
                 eprint(f"backup written to {created_bak}")
             except BaseException:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 from collections.abc import Callable
 import os
@@ -420,36 +421,48 @@ def lock_inplace_fd(fd: int, name: str) -> None:
     ``flock`` binds exclusion to the inode itself, so hard-link aliases and
     parent swaps still serialize on the file actually being rewritten. On
     Windows ``msvcrt.locking`` takes the same byte-range lock on the
-    descriptor; an empty file has no byte to claim, so the lock is skipped
-    — every rewrite of empty input is byte-identical anyway. With neither
+    descriptor — LockFile permits regions beyond EOF, so the lock is taken
+    even on an empty file: a concurrent writer's transient ftruncate-to-zero
+    must not skip exclusion and let a torn read report success. With neither
     primitive available the run proceeds unlocked: correctness of a single
     writer is unchanged, only the mutual exclusion is absent.
     """
+    # Only genuine contention is retried: EWOULDBLOCK/EAGAIN (flock) and
+    # EACCES/EDEADLK (msvcrt LK_NBLCK reports contention as access-denied).
+    # Anything else — ENOLCK, EBADF, EINVAL — is a real failure and must
+    # surface now, not after a ten-second spin (#53).
+    # EDEADLK is absent from some platforms' errno tables (msvcrt reports
+    # contention as EACCES there anyway).
+    contention = {
+        errno.EAGAIN,
+        errno.EWOULDBLOCK,
+        errno.EACCES,
+        getattr(errno, "EDEADLK", -1),
+    }
     if fcntl is not None:
 
         def _try_lock() -> bool:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return True
-            except OSError:
-                return False
+            except OSError as e:
+                if e.errno in contention:
+                    return False
+                eprint(f"cannot lock {name} for in-place cleaning: {e}")
+                raise SystemExit(2) from None
 
     elif msvcrt is not None:
-        try:
-            size = os.fstat(fd).st_size
-        except OSError as e:
-            eprint(f"cannot lock {name} for in-place cleaning: {e}")
-            raise SystemExit(2) from None
-        if size == 0:
-            return
         os.lseek(fd, 0, os.SEEK_SET)
 
         def _try_lock() -> bool:
             try:
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 return True
-            except OSError:
-                return False
+            except OSError as e:
+                if e.errno in contention:
+                    return False
+                eprint(f"cannot lock {name} for in-place cleaning: {e}")
+                raise SystemExit(2) from None
 
     else:
         return
@@ -602,13 +615,19 @@ def result_has_changes(result: dict[str, Any]) -> bool:
     return any(is_mutating_action(a) for a in actions)
 
 
-def backup_path(src: Path, data: bytes | None = None) -> tuple[Path, bool]:
+def backup_path(
+    src: Path, data: bytes | None = None, src_mode: int | None = None
+) -> tuple[Path, bool]:
     """Create a ``.bak`` copy of *src* no-clobber; return (backup, created).
 
     When *data* is given those bytes are written instead of re-reading the
     path — callers that already hold the source's bytes on an open
     descriptor pass them so a parent-directory swap cannot substitute a
-    different file's contents into the backup (#53).
+    different file's contents into the backup (#53). The same swap makes
+    ``src.stat()`` lie about the original's permissions, so those callers
+    pass *src_mode* (fstat of the bound descriptor) instead of re-statting
+    the path: private bytes must not land in a world-readable backup keyed
+    off a replacement file's mode.
 
     Used by ``--in-place`` flows so the original is never partially lost: the
     original file stays untouched until the cleaned output is atomically
@@ -626,13 +645,14 @@ def backup_path(src: Path, data: bytes | None = None) -> tuple[Path, bool]:
     this call created a backup.
     """
     bak = src.with_suffix(src.suffix + ".bak")
-    try:
-        src_mode = stat.S_IMODE(src.stat().st_mode)
-    except OSError:
-        # Never fall back to the umask default: an unstat-able source must
-        # not produce a group/other-readable backup even if the later read
-        # unexpectedly succeeds.
-        src_mode = 0o600
+    if src_mode is None:
+        try:
+            src_mode = stat.S_IMODE(src.stat().st_mode)
+        except OSError:
+            # Never fall back to the umask default: an unstat-able source
+            # must not produce a group/other-readable backup even if the
+            # later read unexpectedly succeeds.
+            src_mode = 0o600
     attempts = 0
     while True:
         if bak.is_symlink() or (bak.exists() and not bak.is_file()):

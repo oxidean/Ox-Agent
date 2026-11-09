@@ -1239,3 +1239,119 @@ func TestRetriedCollectDoesNotDoubleJournal(t *testing.T) {
 		t.Fatalf("journal has %d skill.completed events after retry, want 1 (no duplicate)", got)
 	}
 }
+
+// TestRetriedCollectRejectsOutcomeTypeChange covers the revised-output
+// replay: a run journaled skill.completed whose output.json is rewritten
+// to failed must refuse rather than journal skill.failed alongside it —
+// the outcome lookup checks BOTH event types (#53).
+func TestRetriedCollectRejectsOutcomeTypeChange(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which option?"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	// Simulate the pending-restore state: outcome journaled, run pending.
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	// Revise the outcome: blocked+await_input → failed+needs_rework. The
+	// schema-valid pairing still yields the skill.failed event type.
+	out["status"] = "failed"
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "retry", "reason": "gave up"}
+	writeOutput(t, root, run.RunID, out)
+
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted a revised outcome over the journaled skill.completed")
+	} else if !strings.Contains(err.Error(), "changed since") {
+		t.Fatalf("Collect() error = %v, want drift refusal", err)
+	}
+
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	completed, failed := 0, 0
+	for _, ev := range events {
+		if ev.Data["run_id"] != run.RunID {
+			continue
+		}
+		switch ev.Type {
+		case "skill.completed":
+			completed++
+		case "skill.failed":
+			failed++
+		}
+	}
+	if completed != 1 || failed != 0 {
+		t.Fatalf("journal has %d completed + %d failed for the run, want 1 + 0 (revised outcome refused)", completed, failed)
+	}
+	if reloaded2, _ := LoadRun(root, run.RunID); reloaded2.Status != "pending" {
+		t.Fatalf("run status = %s after drift refusal, want pending (re-dispatchable)", reloaded2.Status)
+	}
+}
+
+// TestRetriedCollectRejectsChangedInputRequest covers request-field drift:
+// a retried collect whose output now asks a different question must not
+// stack a second pending request for the same run (#53).
+func TestRetriedCollectRejectsChangedInputRequest(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which option?"}
+	writeOutput(t, root, run.RunID, out)
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if got.AwaitingInput == "" {
+		t.Fatal("AwaitingInput empty — the durable request was not filed")
+	}
+
+	// Pending-restore: journaled outcome + filed request, run pending.
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	// Same verdict/action/status — only the question changed.
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "a different question entirely"}
+	writeOutput(t, root, run.RunID, out)
+
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() filed a different question over the run's pending request")
+	} else if !strings.Contains(err.Error(), "refusing to file") {
+		t.Fatalf("Collect() error = %v, want request drift refusal", err)
+	}
+	pending, perrs := input.Pending(root)
+	if len(perrs) > 0 {
+		t.Fatalf("Pending() errors = %v", perrs)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending requests = %d, want 1 (no stacked request)", len(pending))
+	}
+}

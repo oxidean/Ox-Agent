@@ -51,11 +51,10 @@ the original name in the `skills.stage_skills` entries where it should run —
 appending leaves the original selected first. `stage_skills` only feeds
 stage-driven runs: `ox-agent review`, `ship`, and `run <wi> --pipeline <name>`
 read the `skill:` fields inside `pipelines/<name>.yaml` instead. To swap a
-pipeline step's skill, copy the pipeline file under a new filename and set
-its internal `name:` to the filename stem — `--pipeline <name>` resolves
+pipeline step's skill, copy the pipeline file into `.ox-agent/pipelines/` under
+a new filename and set its internal `name:` to the filename stem — `--pipeline <name>` resolves
 the file by name and progress tracks that internal name, so the two must
-match — then edit its `skill:` references and invoke it via
-`ox-agent run <wi> --pipeline <name>`.
+match — then edit its `skill:` references and invoke it via `ox-agent run <wi> --pipeline <name>`.
 Update hard-coded asset paths
 in the fork's instructions too: a copied SKILL.md that still points at the
 core skill's scripts executes the core helper. An extension dir that reuses

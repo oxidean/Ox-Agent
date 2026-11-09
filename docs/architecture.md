@@ -70,11 +70,12 @@ core helper.
 Two caveats when forking. First, `stage_skills` does not affect pipelines:
 `ox-agent review`/`ship` dispatch the bundled `pipelines/*.yaml` steps by
 skill name. Fork a pipeline skill by copying the pipeline file under a new
-name (e.g. `pipelines/review-mine.yaml`), updating its `skill:` references,
+name (e.g. `.ox-agent/pipelines/review-mine.yaml`), updating its `skill:` references,
 and setting a `name:` matching the filename, such as `name: review-mine`,
 inside the copied file — the `--pipeline` flag resolves the file by name
-and progress tracks the internal `name:`, so a mismatched pair fails to
-load at collect, while a fork that keeps `name: review` shares progress
+and progress tracks the internal `name:`. A mismatched pair can fail to
+load at collect or load a different pipeline if that file exists. A fork
+that keeps `name: review` shares progress
 state with the original and can report its
 steps as already done — then running
 `ox-agent run <wi> --pipeline review-mine`. Second, replace a

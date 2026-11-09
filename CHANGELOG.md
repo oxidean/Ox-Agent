@@ -12,6 +12,27 @@ work and minor-release summaries.
 
 ### Fixed
 
+- **CodeRabbit review hardening (OxL findings round 6)** — `Collect`
+  checks BOTH outcome event types on replay, so a `skill.completed`
+  journaled before an `output.json` rewrite to failed cannot double
+  the run as `skill.failed`; run-scoped input requests dedupe on
+  question+options so a drifted question refuses instead of stacking a
+  second request. `clean_text.py --in-place` falls back to `O_RDONLY`
+  when `O_RDWR` is denied — an already-clean read-only file passes as a
+  no-op again — caps the backup reread at `MAX_INPUT_BYTES`, derives
+  backup permissions from the bound descriptor, and no longer lets a
+  failed `close()` mask the clean exit-2 contract. `lock_inplace_fd`
+  retries only genuine contention errnos (ENOLCK surfaces immediately)
+  and takes the `msvcrt` lock even on empty files — LockFile permits
+  ranges beyond EOF, and skipping exclusion let a torn read pass. The
+  watermarks helper passes the owner's native Windows PID to the
+  watchdog when `/proc` exposes it, detects zombie owners via
+  `/proc`/`ps`, sizes the supervisor cap off `WATERMARKS_LOCK_SECONDS`,
+  and propagates hold-removal failures instead of reporting
+  `LEFT_RUNNING`. Docs restore the full
+  `WATERMARKS_SERVER_API_KEY` variable name and the `.ox-agent/pipelines/`
+  fork path. (#53)
+
 - **CodeRabbit review hardening (OxL findings round 5)** — `Collect`
   reloads the run under the per-item lock before acting, so a stale
   pre-queue snapshot cannot apply an already-collected outcome a second
@@ -41,14 +62,15 @@ work and minor-release summaries.
   recoverable; `clean_text.py --in-place` reports `Path.resolve()`
   failures (e.g. symlink loops) as status 2 instead of a traceback; the
   watermarks service gains authenticated health checks
-  (`Authorization: Bearer $WATER...Y`), per-lease holds
+  (`Authorization: Bearer $WATERMARKS_SERVER_API_KEY`), per-lease holds
   under `tmp/watermarks-service.leases/<token>/` so workflows sharing a
   parent no longer cancel each other, `run` leases owned by the helper
   PID, atomic lease writes that fail `ensure` on error, conservative
   owner checks that distinguish inaccessible procfs from confirmed-dead
   owners (zombie detection, PID-reuse protection via start time, `ps`
-  fallback), and a lifecycle lock that fails safe on timeout with a
-  mkdir-based fallback when `flock` is absent. `generate-core-skills.mjs`
+  fallback), and a lifecycle lock that fails safe on timeout — `flock(1)`
+  primary with a `python3` kernel-lock helper where it is absent (the
+  interim mkdir fallback was replaced; see round 5 above). `generate-core-skills.mjs`
   emits the full invocation contract, packet-path operating rules, and
   per-skill `## Evaluation` sections, and only bootstraps
   `skill.yaml`/schemas/evals for new skills — regenerating no longer
@@ -72,8 +94,9 @@ work and minor-release summaries.
   releases nothing rather than eating a sibling's hold), hold selection
   prefers the current owner incarnation over pid-only matches, stale
   `.hold.tmp.*` publication files are reaped after a grace period, and
-  the mkdir fallback lock reclaims dead/ownerless dirs via rename-claim
-  so a concurrent waiter can never delete a successor's fresh lock.
+  the lock fallback switched from a reclaimable mkdir lockdir to the
+  `python3` kernel-lock helper described in round 5 — kernel locks need
+  no reclaim protocol, so a waiter can never delete a successor's lock.
   `docs/architecture.md` notes that forked pipelines need a unique
   `name:` to avoid sharing progress state. (#53)
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -445,7 +446,18 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// but the outcome failed to apply) must not journal the event
 	// twice. An unreadable journal is treated as unknown: the append
 	// path below stays the authority and keeps failures retryable.
+	// Look up EITHER outcome event: a run journaled skill.completed whose
+	// output.json was later revised to failed (or vice versa) must not
+	// journal the second type alongside it — checking only the current
+	// type would miss the recorded outcome entirely (#53).
 	journaled, _ := journalFindEvent(root, run.WorkItemID, eventType, runID)
+	if journaled == nil {
+		otherType := "skill.failed"
+		if eventType == "skill.failed" {
+			otherType = "skill.completed"
+		}
+		journaled, _ = journalFindEvent(root, run.WorkItemID, otherType, runID)
+	}
 	if journaled == nil {
 		if err := state.Append(root, state.Event{
 			Type:       eventType,
@@ -474,14 +486,15 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		// A drifted file means the outcome changed post-journal — refuse
 		// rather than apply an outcome the journal never saw, and restore
 		// pending so a corrected output.json can re-collect (#53).
-		if journaled.Data["verdict"] != verdict ||
+		if journaled.Type != eventType ||
+			journaled.Data["verdict"] != verdict ||
 			journaled.Data["next_action"] != action ||
 			journaled.Data["status"] != status {
 			run.Status = "pending"
 			saveErr := run.save(root)
 			return run, output, fmt.Errorf(
 				"run %s output changed since %s was journaled (journaled verdict=%v next_action=%v status=%v; file has verdict=%v next_action=%v status=%v) — restore the journaled output or re-dispatch (restore pending: %v)",
-				runID, eventType,
+				runID, journaled.Type,
 				journaled.Data["verdict"], journaled.Data["next_action"], journaled.Data["status"],
 				verdict, action, status, saveErr)
 		}
@@ -739,6 +752,18 @@ func fileInputRequest(root, workItemID, runID, question string, options []string
 	// anyway, and a fresh request is safer than a failed collect.
 	pending, _ := input.Pending(root)
 	for _, r := range pending {
+		if runID != "" && r.RunID == runID {
+			// One request per run: the journaled filing is authoritative —
+			// a retried collect whose output now asks something different
+			// must refuse, not stack a second pending request (#53).
+			if r.Question != question || !slices.Equal(r.Options, options) {
+				return nil, fmt.Errorf(
+					"run %s already filed request %s (question %q, options %v); refusing to file different question %q options %v — answer the pending request or restore the journaled output",
+					runID, r.RequestID, r.Question, r.Options, question, options,
+				)
+			}
+			return r, nil
+		}
 		if r.WorkItemID == workItemID && r.Question == question {
 			return r, nil // already on file
 		}

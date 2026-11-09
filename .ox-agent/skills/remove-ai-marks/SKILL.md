@@ -91,7 +91,7 @@ Rules:
    `ensure` (same lifecycle).
 
 If `WATERMARKS_SERVER_API_KEY` is set on the service, every request needs
-`-H "Authorization: Bearer $WATER..._KEY"` — the helper's
+`-H "Authorization: Bearer $WATERMARKS_SERVER_API_KEY"` — the helper's
 health checks send it too.
 
 ### Capabilities

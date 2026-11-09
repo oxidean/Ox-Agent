@@ -107,8 +107,10 @@ class InPlaceBindingTest(unittest.TestCase):
             real_backup_path = clean_text.backup_path
             swapped_parent = Path(tmp) / "d-moved"
 
-            def swap_parent_after_backup(target: Path, data: bytes | None = None):
-                result = real_backup_path(target, data=data)
+            def swap_parent_after_backup(
+                target: Path, data: bytes | None = None, src_mode: int | None = None
+            ):
+                result = real_backup_path(target, data=data, src_mode=src_mode)
                 parent.rename(swapped_parent)
                 parent.mkdir()
                 (parent / "input.txt").write_text("different file\n", encoding="utf-8")
@@ -302,6 +304,64 @@ class InPlaceReadOnlyTest(unittest.TestCase):
             self.assertNotIn("Traceback", proc.stderr)
             self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
             self.assertEqual(src.read_text(encoding="utf-8"), DIRTY)
+
+
+class InPlaceBackupRereadLimitTest(unittest.TestCase):
+    def test_grown_input_refuses_before_backup(self) -> None:
+        """A file grown past MAX between reads must not be backed up (#53).
+
+        The first read is bounded by MAX_INPUT_BYTES; a writer growing the
+        file during cleaning must not push the backup reread's allocation
+        past that cap — the run refuses instead.
+        """
+        import common
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.txt"
+            src.write_text("x" * 40, encoding="utf-8")
+
+            def grow_and_clean(text, **kwargs):
+                # Grow the bound inode while cleaning runs — the backup
+                # reread then observes more than the first read allowed.
+                # Returns changed text so the rewrite path is exercised.
+                with open(src, "ab") as f:
+                    f.write(b"y" * 100)
+                return "cleaned", {}
+
+            argv = ["clean_text.py", str(src), "--in-place"]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(common, "MAX_INPUT_BYTES", 64),
+                mock.patch.object(clean_text, "MAX_INPUT_BYTES", 64),
+                mock.patch.object(clean_text, "clean_text", grow_and_clean),
+            ):
+                rc = clean_text.main()
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
+            self.assertEqual(len(src.read_bytes()), 140)
+
+
+class InPlaceEmptyFileTest(unittest.TestCase):
+    def test_empty_file_noops_cleanly(self) -> None:
+        """An empty --in-place target exits 0 with no backup (#53).
+
+        Exercises the kernel lock on an empty descriptor — msvcrt must
+        take the byte-range lock past EOF rather than skipping exclusion.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "empty.txt"
+            src.write_bytes(b"")
+
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), str(src), "--in-place"],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(src.read_bytes(), b"")
+            self.assertEqual(list(Path(tmp).glob("*.bak*")), [])
 
 
 if __name__ == "__main__":

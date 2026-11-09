@@ -373,7 +373,9 @@ drop_own_lease() {
     esac
     named="$dir/$WATERMARKS_HOLD"
     if [[ -f "$named" ]] && [[ "$(lease_field "$named" owner_pid)" == "$owner" ]]; then
-      rm -f "$named"
+      # A failed removal must not report success — the caller's hold would
+      # keep pinning the service while teardown claims LEFT_RUNNING (#53).
+      rm -f "$named" || { echo "error: cannot remove hold $named" >&2; return 1; }
     fi
     rmdir "$dir" 2>/dev/null || true
     return 0
@@ -408,7 +410,10 @@ drop_own_lease() {
     # fallback rather than taking it eagerly ahead of a provable match.
     [[ -z "$picked" ]] && picked="$hold"
   done
-  [[ -n "$picked" ]] && rm -f "$picked"
+  if [[ -n "$picked" ]] && ! rm -f "$picked"; then
+    echo "error: cannot remove hold $picked" >&2
+    return 1
+  fi
   rmdir "$dir" 2>/dev/null || true
 }
 
@@ -607,7 +612,13 @@ take_lifecycle_lock() {
   # killed ensure/teardown can never pin the lock behind a corpse.
   local ready="${ENSURE_LOCK}.ready.$$"
   rm -f "$ready"
-  python3 - "$ENSURE_LOCK" "$ready" "$$" "${WATERMARKS_LOCK_SECONDS:-60}" <<'PYLOCK' &
+  # The watchdog needs the owner pid in ITS pid space: a cygwin/msys $$ is
+  # not the Windows pid a native python's OpenProcess expects, so the
+  # winpid (when /proc exposes it) travels alongside (#53).
+  local owner_win=""
+  owner_win="$(cat /proc/$$/winpid 2>/dev/null)" || owner_win=""
+  python3 - "$ENSURE_LOCK" "$ready" "$$" "$owner_win" \
+      "${WATERMARKS_LOCK_SECONDS:-60}" <<'PYLOCK' &
 import os, signal, sys, time
 
 if os.name == "nt":
@@ -648,13 +659,36 @@ def _parent_alive(pid):
         return bool(ok) and code.value == 259  # STILL_ACTIVE
     try:
         os.kill(pid, 0)
-        return True
     except OSError:
         return False
+    # An exited-but-unreaped owner still answers kill -0: a zombie would
+    # pin the lock until its launcher gets around to reaping it (#53).
+    try:
+        with open(f"/proc/{pid}/stat") as st:
+            state = st.read().rpartition(")")[2].split()[0]
+        return state != "Z"
+    except (OSError, IndexError):
+        pass
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        return "Z" not in out
+    except Exception:
+        return True
 
 
 path, ready, ppid_s = sys.argv[1], sys.argv[2], sys.argv[3]
-budget = float(sys.argv[4])
+# argv[4] is the Windows pid form of argv[3] (empty when unavailable):
+# only a native python (os.name == "nt") talks to OpenProcess, so only it
+# needs the translation — an msys/cygwin python kill()s the cygwin pid.
+win_s = sys.argv[4] if len(sys.argv) > 4 else ""
+budget = float(sys.argv[5] if len(sys.argv) > 5 else "60")
 fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
 if os.name == "nt":
     if os.fstat(fd).st_size == 0:
@@ -673,15 +707,19 @@ with open(ready, "w") as r:
     os.fsync(r.fileno())
 # Watchdog: the invoking shell's death must drop the lock — an orphaned
 # holder is an unreclaimable lock.
-ppid = int(ppid_s)
+ppid = int(win_s) if os.name == "nt" and win_s else int(ppid_s)
 while True:
     time.sleep(1)
     if not _parent_alive(ppid):
         sys.exit(0)
 PYLOCK
   LOCK_HELPER_PID=$!
-  local i=0
-  while (( i < 1400 )); do
+  # The readiness cap must outlive the helper's own lock budget plus a
+  # startup allowance — a fixed 70s cap would kill a helper configured to
+  # wait WATERMARKS_LOCK_SECONDS=120 before its deadline (#53).
+  local i=0 cap
+  cap=$(( ( ${WATERMARKS_LOCK_SECONDS%.*} + 15 ) * 20 ))
+  while (( i < cap )); do
     if [[ -f "$ready" ]]; then
       rm -f "$ready"
       return 0
