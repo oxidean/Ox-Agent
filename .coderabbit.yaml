@@ -2,6 +2,13 @@
 language: en
 reviews:
   profile: chill
+  path_filters:
+    # Materialized mirrors of canonical skills/schemas — fixes land at the
+    # source and propagate via sync-assets.sh; reviewing the copies is
+    # redundant and pushes large PRs over the 100-file full-review cap.
+    - "!.ox-agent/**"
+    - "!internal/assets/embedded/**"
+
   auto_approvals:
     enabled: true
   pre_merge_checks:
