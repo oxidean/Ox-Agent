@@ -2,9 +2,9 @@
   "schema_version": 1,
   "id": "WI-0007",
   "title": "fix: action oxl review findings on vendored skills",
-  "state": "shipping",
+  "state": "archived",
   "profile": "normal",
   "current_stage": "shipping",
   "created_at": "2026-11-09T13:49:43Z",
-  "updated_at": "2026-11-09T18:09:58Z"
+  "updated_at": "2026-11-10T11:15:51Z"
 }
