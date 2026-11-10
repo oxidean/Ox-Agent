@@ -42,7 +42,38 @@ runtime. Project state, skills, and contracts live under ` + "`.ox-agent/`" + `.
 
 Do not edit ` + "`.ox-agent/skills`" + `, ` + "`schemas`" + `, ` + "`workflows`" + `, ` + "`pipelines`" + `,
 ` + "`lifecycle`" + `, or ` + "`integrations`" + ` in place — they are materialized assets
-tracked by ` + "`assets.lock`" + `. Add extension skills as new directories instead.
+tracked by ` + "`assets.lock`" + `. ` + "`kind: core`" + ` in a skill manifest means bundled
+with the distribution and sync-owned (repaired on ` + "`init --repair --sync`" + `);
+` + "`kind: extension`" + ` means added post-init and never reconciled. To customize a
+core skill, fork it under a new directory name: set its manifest ` + "`name:`" + ` to
+` + "`ox-agent/<new-name>`" + ` — the qualified form bundled manifests and packets
+carry — its SKILL.md frontmatter ` + "`name:`" + ` to the bare ` + "`<new-name>`" + `
+matching the directory, and ` + "`kind:`" + ` to ` + "`extension`" + `, and update the
+` + "`skill`" + ` constants in ` + "`schemas/input.schema.json`" + ` and
+` + "`schemas/output.schema.json`" + ` to ` + "`ox-agent/<new-name>`" + `, plus the
+` + "`skill:`" + ` field in
+` + "`evals/evals.yaml`" + ` — ` + "`eval --emit`" + ` packets and recorded results take
+that qualified name, so a fork still naming the original evaluates under the original
+skill. Packets and outputs validate against the schema constants, so a fork
+still naming the original skill rejects its own results. Then enable the fork
+under ` + "`skills.enabled`" + ` by its bare directory name and replace the original
+directory name in the ` + "`skills.stage_skills`" + ` entries where it should run —
+appending leaves the original selected first; finish the affected stage before
+editing its mapping, since ` + "`stage_skills`" + ` is read at dispatch and a
+mid-stage change re-dispatches the in-flight stage under the new skill. ` + "`stage_skills`" + ` only feeds
+stage-driven runs: ` + "`ox-agent review`" + `, ` + "`ship`" + `, and ` + "`run <wi> --pipeline <name>`" + `
+read the ` + "`skill:`" + ` fields inside ` + "`pipelines/<name>.yaml`" + ` instead. To swap a
+pipeline step's skill, copy the pipeline file into ` + "`.ox-agent/pipelines/`" + ` under
+a new filename and set its internal ` + "`name:`" + ` to the filename stem — ` + "`--pipeline <name>`" + ` resolves
+the file by name and progress tracks that internal name, so the two must
+match — then edit its ` + "`skill:`" + ` references and invoke it via ` + "`ox-agent run <wi> --pipeline <name>`" + `.
+Update hard-coded asset paths
+in the fork's instructions too: a copied SKILL.md that still points at the
+core skill's scripts executes the core helper. An extension dir that reuses
+a bundled skill's name can still be overwritten by ` + "`skills update --yes`" + ` —
+pick a distinct name. If ` + "`assets.lock`" + ` is missing or corrupt, repair keeps
+drifted files and reports them as conflicts instead of rewriting — review
+conflicts before assuming sync ownership was restored.
 ` + markerEnd + `
 `
 

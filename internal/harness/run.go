@@ -8,11 +8,14 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
+	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -35,7 +38,18 @@ type Run struct {
 	CollectedAt   string `json:"collected_at,omitempty"`
 	AwaitingInput string `json:"awaiting_input,omitempty"`
 	Error         string `json:"error,omitempty"`
-	Dir           string `json:"-"`
+	// PendingEvent holds a journal event whose append failed after the
+	// run was already persisted. A failed run is never collected again,
+	// so the type and payload ride on the record until a later collect
+	// for the same work item retries the append (#53).
+	PendingEvent     string         `json:"pending_event,omitempty"`
+	PendingEventData map[string]any `json:"pending_event_data,omitempty"`
+	// ReconcileWarnings carries non-fatal pending-event replay failures
+	// seen during this collect. The marker stays on the other run's
+	// record and a later collect retries it — one run's broken
+	// bookkeeping must not block an unrelated run's collection (#53).
+	ReconcileWarnings []string `json:"-"`
+	Dir               string   `json:"-"`
 }
 
 // DispatchRequest describes one skill invocation to dispatch.
@@ -139,6 +153,11 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, err
 	}
+	if packet.ArtifactsDir != "" {
+		if err := os.MkdirAll(filepath.Join(root, ".ox-agent", filepath.FromSlash(packet.ArtifactsDir)), 0o755); err != nil {
+			return nil, err
+		}
+	}
 	data, err := packet.Bytes()
 	if err != nil {
 		return nil, err
@@ -186,40 +205,255 @@ func Dispatch(ctx context.Context, root string, item *state.WorkItem, req Dispat
 
 // Collect validates a pending run's output.json against the skill's output
 // schema, journals the outcome, and applies the declared next_action.
+// rememberPendingEvent stores a standard skill.failed payload for
+// replay; callers re-save after invoking it.
+func (r *Run) rememberPendingEvent(eventType string) {
+	r.PendingEvent = eventType
+	r.PendingEventData = map[string]any{"run_id": r.RunID, "skill": r.Skill, "stage": r.Stage, "error": r.Error}
+}
+
+// reconcilePendingEvents retries journal appends that failed after their
+// runs were already persisted. A failed run is never collected again, so
+// without this the event is lost for good once journal access returns.
+// Per-run failures are skipped — the marker stays on that run's record
+// for the next collect — and returned as warnings so one run's broken
+// bookkeeping can never block an unrelated run's collection (#53).
+func reconcilePendingEvents(root, itemID string) []string {
+	var warnings []string
+	entries, err := os.ReadDir(runsDir(root))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return []string{fmt.Sprintf("listing run dirs for pending-event replay: %v", err)}
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		r, err := LoadRun(root, entry.Name())
+		if err != nil || r.WorkItemID != itemID || r.PendingEvent == "" {
+			continue
+		}
+		runID, _ := r.PendingEventData["run_id"].(string)
+		// A save failure after a successful append leaves the marker
+		// set: checking the journal first keeps the replay idempotent.
+		seen, seenErr := journalHasEvent(root, itemID, r.PendingEvent, runID)
+		switch {
+		case seenErr != nil:
+			warnings = append(warnings, fmt.Sprintf("run %s: checking journal for replayed event: %v", r.RunID, seenErr))
+			continue
+		case seen:
+			// Already journaled — fall through to clear the marker.
+		default:
+			if err := state.Append(root, state.Event{
+				Type:       r.PendingEvent,
+				WorkItemID: r.WorkItemID,
+				Actor:      "ox-agent",
+				Data:       r.PendingEventData,
+			}); err != nil {
+				warnings = append(warnings, fmt.Sprintf("run %s: replaying %s: %v", r.RunID, r.PendingEvent, err))
+				continue
+			}
+		}
+		r.PendingEvent, r.PendingEventData = "", nil
+		if err := r.save(root); err != nil {
+			warnings = append(warnings, fmt.Sprintf("run %s: clearing replayed event marker: %v", r.RunID, err))
+		}
+	}
+	return warnings
+}
+
+// journalHasEvent reports whether an event of eventType tagged with the
+// run id is already in the item's journal. A replayed append must not
+// duplicate the entry when an earlier append succeeded but the
+// marker-clearing save failed (#53).
+func journalHasEvent(root, itemID, eventType, runID string) (bool, error) {
+	ev, err := journalFindEvent(root, itemID, eventType, runID)
+	return ev != nil, err
+}
+
+// journalFindEvent returns the item's journaled event of eventType tagged
+// with runID, or nil when absent. The returned record is what a retrying
+// collect must re-apply — the file on disk may have changed since it was
+// journaled (#53).
+func journalFindEvent(root, itemID, eventType, runID string) (*state.Event, error) {
+	if runID == "" {
+		return nil, nil
+	}
+	events, err := state.EventsFor(root, itemID, 0)
+	if err != nil {
+		return nil, err
+	}
+	for i := range events {
+		if events[i].Type == eventType && events[i].Data["run_id"] == runID {
+			return &events[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// outcomeJournaled reports whether the item's journal already holds an
+// outcome event — skill.completed or skill.failed — tagged with runID.
+// A validation-failure collect must not append skill.failed beside a
+// skill.completed journaled before an output.json rewrite: one run,
+// one outcome event (#53).
+func outcomeJournaled(root, itemID, runID string) (bool, error) {
+	for _, eventType := range []string{"skill.completed", "skill.failed"} {
+		ev, err := journalFindEvent(root, itemID, eventType, runID)
+		if err != nil {
+			return false, err
+		}
+		if ev != nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// deferForJournaledOutcome reports whether a collect-time output rejection
+// must leave the run pending instead of failing it, returning a non-empty
+// explanation when it does. When the journal already holds this run's
+// outcome, the event stays authoritative: a failed run is terminal, so
+// marking it failed would strand the journaled outcome unapplied forever —
+// the operator corrects output.json and re-collects instead (#53). An
+// unreadable journal is treated as unknown, keeping the failure path the
+// authority.
+func deferForJournaledOutcome(root string, run *Run) string {
+	journaledOutcome, err := outcomeJournaled(root, run.WorkItemID, run.RunID)
+	if err != nil || !journaledOutcome {
+		return ""
+	}
+	return "outcome already journaled — run kept pending so a corrected output.json can re-collect"
+}
+
+// journalFailureOnce appends skill.failed unless the journal already holds
+// an outcome event for the run. An unreadable journal is treated as unknown,
+// so the append path stays the authority (#53).
+func journalFailureOnce(root string, item *state.WorkItem, run *Run) error {
+	journaled, jerr := outcomeJournaled(root, item.ID, run.RunID)
+	if jerr == nil && journaled {
+		return nil
+	}
+	return state.Append(root, state.Event{
+		Type:       "skill.failed",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       map[string]any{"run_id": run.RunID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
+	})
+}
+
 func Collect(root, runID string) (*Run, map[string]any, error) {
 	run, err := LoadRun(root, runID)
 	if err != nil {
 		return nil, nil, err
 	}
+	// Serialize collection per work item: two concurrent collects for the
+	// same item could both replay a pending event or both apply an
+	// outcome. The kernel lock serializes the whole critical section
+	// (#53).
+	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "collect-"+run.WorkItemID+".lock")
+	var output map[string]any
+	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+		// Reload under the lock: the snapshot taken before queuing can be
+		// stale by the time the lock is granted — a sibling collector may
+		// have applied this run's outcome already. Acting on the stale
+		// record would apply the completed outcome a second time (#53).
+		fresh, lerr := LoadRun(root, runID)
+		if lerr != nil {
+			return lerr
+		}
+		run = fresh
+		var cerr error
+		run, output, cerr = collectLocked(root, run)
+		return cerr
+	})
+	return run, output, err
+}
+
+// collectLocked is Collect's critical section, run under the per-item
+// collect lock.
+func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
+	// Replay events that could not be journaled on an earlier collect for
+	// this work item: the journal is the audit and replay source, so a
+	// missing skill.failed must not be lost just because that run is no
+	// longer pending. Replay failures are non-fatal — the marker stays
+	// on the other run's record for a later retry.
+	run.ReconcileWarnings = reconcilePendingEvents(root, run.WorkItemID)
+	runID := run.RunID
 	if run.Status != "pending" {
-		return nil, nil, fmt.Errorf("run %s is %s, not pending", runID, run.Status)
+		// Return the run so the CLI can still surface the reconcile
+		// warnings — a replay failure on an already-failed run is exactly
+		// the case where the "not pending" error alone hides the recovery
+		// failure (#53).
+		return run, nil, fmt.Errorf("run %s is %s, not pending", runID, run.Status)
 	}
 	item, err := state.Resolve(root, run.WorkItemID)
 	if err != nil {
-		return nil, nil, err
+		return run, nil, err
 	}
 	outputPath := filepath.Join(run.Dir, "output.json")
 	outputData, err := os.ReadFile(outputPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("run %s has no output.json yet: %w", runID, err)
+		return run, nil, fmt.Errorf("run %s has no output.json yet: %w", runID, err)
 	}
 	skill := strings.TrimPrefix(run.Skill, "ox-agent/")
 	schemaPath := filepath.Join(root, ".ox-agent", "skills", skill, "schemas", "output.schema.json")
 	if err := contract.ValidateFile(schemaPath, outputData); err != nil {
+		if deferred := deferForJournaledOutcome(root, run); deferred != "" {
+			return run, nil, fmt.Errorf("output for %s failed validation: %w (%s)", runID, err, deferred)
+		}
 		run.Status = "failed"
 		run.Error = "output failed schema validation: " + err.Error()
-		_ = run.save(root)
-		_ = state.Append(root, state.Event{
-			Type:       "skill.failed",
-			WorkItemID: item.ID,
-			Actor:      "ox-agent",
-			Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "error": run.Error},
-		})
-		return run, nil, fmt.Errorf("output for %s failed validation: %w", runID, err)
+		saveErr := run.save(root)
+		var appendErr error
+		if saveErr == nil {
+			// Journal only once the run record is durable: a failed save
+			// leaves the run pending on disk, so a later collect replays
+			// the whole outcome — appending now would double the event.
+			// An outcome already journaled for this run is kept as the
+			// record: a completed run restored to pending that re-fails
+			// must not gain a second event (#53). An unreadable journal
+			// is unknown — the append path stays the authority.
+			appendErr = journalFailureOnce(root, item, run)
+		}
+		if appendErr != nil {
+			run.rememberPendingEvent("skill.failed")
+			saveErr = run.save(root)
+		}
+		return run, nil, fmt.Errorf("output for %s failed validation: %w (record failures: save=%v event=%v)", runID, err, saveErr, appendErr)
 	}
 	var output map[string]any
 	if err := json.Unmarshal(outputData, &output); err != nil {
 		return nil, nil, fmt.Errorf("parsing output.json: %w", err)
+	}
+	if err := validateArtifactPaths(output["artifacts"]); err != nil {
+		// Declared artifact paths land in committed work-item directories:
+		// a path like "WI-0005*/plan.md" creates a literal-star directory
+		// that fails Windows checkout outright (#52). Fail like a schema
+		// error so the run is re-dispatchable after the skill corrects it.
+		if deferred := deferForJournaledOutcome(root, run); deferred != "" {
+			return run, output, fmt.Errorf("invalid artifact path for %s: %w (%s)", runID, err, deferred)
+		}
+		run.Status = "failed"
+		run.Error = "invalid artifact path: " + err.Error()
+		saveErr := run.save(root)
+		var appendErr error
+		if saveErr == nil {
+			// Same durability + dedupe contract as the schema-failure
+			// path above (#53).
+			appendErr = journalFailureOnce(root, item, run)
+		}
+		if appendErr != nil {
+			run.rememberPendingEvent("skill.failed")
+			if saveErr == nil {
+				saveErr = run.save(root)
+			}
+		}
+		// Surface persistence failures alongside the path error: a run
+		// that stayed pending or failed without its event must be visible,
+		// not silently reconcilable.
+		return run, output, fmt.Errorf("invalid artifact path for %s: %w (record failures: save=%v event=%v)", runID, err, saveErr, appendErr)
 	}
 	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
 	status, _ := output["status"].(string)
@@ -256,19 +490,71 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		run.Status = "collected"
 	}
 	if err := run.save(root); err != nil {
-		return nil, nil, err
+		return run, nil, err
 	}
 	eventType := "skill.completed"
 	if run.Status == "failed" {
 		eventType = "skill.failed"
 	}
-	if err := state.Append(root, state.Event{
-		Type:       eventType,
-		WorkItemID: item.ID,
-		Actor:      "ox-agent",
-		Data:       map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action},
-	}); err != nil {
-		return run, output, err
+	eventData := map[string]any{"run_id": runID, "skill": run.Skill, "stage": run.Stage, "status": status, "verdict": verdict, "next_action": action}
+	// A retried collect (restored to pending after the append succeeded
+	// but the outcome failed to apply) must not journal the event
+	// twice. An unreadable journal is treated as unknown: the append
+	// path below stays the authority and keeps failures retryable.
+	// Look up EITHER outcome event: a run journaled skill.completed whose
+	// output.json was later revised to failed (or vice versa) must not
+	// journal the second type alongside it — checking only the current
+	// type would miss the recorded outcome entirely (#53).
+	journaled, _ := journalFindEvent(root, run.WorkItemID, eventType, runID)
+	if journaled == nil {
+		otherType := "skill.failed"
+		if eventType == "skill.failed" {
+			otherType = "skill.completed"
+		}
+		journaled, _ = journalFindEvent(root, run.WorkItemID, otherType, runID)
+	}
+	if journaled == nil {
+		if err := state.Append(root, state.Event{
+			Type:       eventType,
+			WorkItemID: item.ID,
+			Actor:      "ox-agent",
+			Data:       eventData,
+		}); err != nil {
+			if run.Status == "collected" || blocking || needsInput {
+				// The outcome still has to run — restoring pending keeps the
+				// whole tail (journal append + applyOutcome) retryable. An
+				// event-only replay would journal the result but never
+				// advance, unblock, or file the input request (#53).
+				run.Status = "pending"
+			} else {
+				// Terminal runs are never collected again: the pending
+				// event is the retry vehicle for the journal record itself.
+				run.PendingEvent = eventType
+				run.PendingEventData = eventData
+			}
+			if saveErr := run.save(root); saveErr != nil {
+				return run, output, fmt.Errorf("%w (also failed to persist run state: %v)", err, saveErr)
+			}
+			return run, output, err
+		}
+	} else {
+		// The journal already holds this run's outcome: the retry must
+		// apply what was recorded, not whatever output.json holds now.
+		// A drifted file means the outcome changed post-journal — refuse
+		// rather than apply an outcome the journal never saw, and restore
+		// pending so a corrected output.json can re-collect (#53).
+		if journaled.Type != eventType ||
+			journaled.Data["verdict"] != verdict ||
+			journaled.Data["next_action"] != action ||
+			journaled.Data["status"] != status {
+			run.Status = "pending"
+			saveErr := run.save(root)
+			return run, output, fmt.Errorf(
+				"run %s output changed since %s was journaled (journaled verdict=%v next_action=%v status=%v; file has verdict=%v next_action=%v status=%v) — restore the journaled output or re-dispatch (restore pending: %v)",
+				runID, journaled.Type,
+				journaled.Data["verdict"], journaled.Data["next_action"], journaled.Data["status"],
+				verdict, action, status, saveErr)
+		}
 	}
 	if run.Status == "collected" || blocking || needsInput {
 		if err := applyOutcome(root, item, run, output); err != nil {
@@ -283,6 +569,56 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 		}
 	}
 	return run, output, nil
+}
+
+// unsafeArtifactChars matches characters that are legal on POSIX filesystems
+// but invalid in committed paths checked out on Windows — plus the backslash
+// (a Windows separator, so "a\..\..\x" traverses there while looking like a
+// flat filename to a POSIX collect) and ASCII control characters.
+var unsafeArtifactChars = regexp.MustCompile(`[*?"<>|:\\` + "\x00-\x1f" + `]`)
+
+// validateArtifactPaths checks declared artifact paths from a collected
+// output: each must be a clean relative path (filepath.IsLocal), free of
+// characters Windows checkouts reject, and free of trailing-dot or
+// trailing-space segments (also invalid on Windows). Entries shaped like
+// {path: ...} validate their path field; other shapes are the schema's job.
+func validateArtifactPaths(raw any) error {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	for i, entry := range list {
+		var p string
+		switch v := entry.(type) {
+		case string:
+			p = v
+		case map[string]any:
+			p, _ = v["path"].(string)
+		default:
+			continue
+		}
+		if p == "" {
+			continue
+		}
+		if !filepath.IsLocal(filepath.FromSlash(p)) {
+			return fmt.Errorf("artifacts[%d] %q is not a clean relative path", i, p)
+		}
+		if unsafeArtifactChars.MatchString(p) {
+			return fmt.Errorf("artifacts[%d] %q contains characters invalid on Windows checkouts", i, p)
+		}
+		for _, seg := range strings.Split(p, "/") {
+			// A "." segment is a clean no-op that filepath.IsLocal allows;
+			// only real segments carrying a trailing dot or space break a
+			// Windows checkout (#53).
+			if seg == "." {
+				continue
+			}
+			if strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+				return fmt.Errorf("artifacts[%d] %q has a segment ending in a dot or space, invalid on Windows", i, p)
+			}
+		}
+	}
+	return nil
 }
 
 // collectedSkills returns the skills with a collected run for the work item
@@ -479,6 +815,18 @@ func fileInputRequest(root, workItemID, runID, question string, options []string
 	// anyway, and a fresh request is safer than a failed collect.
 	pending, _ := input.Pending(root)
 	for _, r := range pending {
+		if runID != "" && r.RunID == runID {
+			// One request per run: the journaled filing is authoritative —
+			// a retried collect whose output now asks something different
+			// must refuse, not stack a second pending request (#53).
+			if r.Question != question || !slices.Equal(r.Options, options) {
+				return nil, fmt.Errorf(
+					"run %s already filed request %s (question %q, options %v); refusing to file different question %q options %v — answer the pending request or restore the journaled output",
+					runID, r.RequestID, r.Question, r.Options, question, options,
+				)
+			}
+			return r, nil
+		}
 		if r.WorkItemID == workItemID && r.Question == question {
 			return r, nil // already on file
 		}

@@ -18,15 +18,17 @@ func skillSchemaPath(t *testing.T, skill, name string) string {
 	return path
 }
 
-// reviewOutput builds a valid code-review output; mutators adjust it per case.
-func reviewOutput(mutators ...func(map[string]any)) []byte {
+// skillOutput builds a valid output for the named skill; mutators adjust it
+// per case. The three schemas with verdict pairing share the same required
+// field set, so one fixture covers all of them.
+func skillOutput(skill string, mutators ...func(map[string]any)) []byte {
 	out := map[string]any{
 		"schema_version": 1,
 		"invocation_id":  "inv_test",
-		"skill":          "ox-agent/code-review",
+		"skill":          "ox-agent/" + skill,
 		"status":         "complete",
 		"verdict":        "pass",
-		"summary":        "reviewed",
+		"summary":        "done",
 		"artifacts":      []any{},
 		"findings":       []any{},
 		"next_action":    map[string]any{"type": "advance_stage", "reason": "clean"},
@@ -36,6 +38,11 @@ func reviewOutput(mutators ...func(map[string]any)) []byte {
 	}
 	data, _ := json.Marshal(out)
 	return data
+}
+
+// reviewOutput builds a valid code-review output; mutators adjust it per case.
+func reviewOutput(mutators ...func(map[string]any)) []byte {
+	return skillOutput("code-review", mutators...)
 }
 
 // TestSkillSchemasCompile compiles every canonical skill input/output schema —
@@ -54,10 +61,10 @@ func TestSkillSchemasCompile(t *testing.T) {
 	}
 }
 
-// TestCodeReviewVerdictCouplesNextAction verifies a verdict cannot declare a
-// next_action that contradicts it.
-func TestCodeReviewVerdictCouplesNextAction(t *testing.T) {
-	schema := skillSchemaPath(t, "code-review", "output.schema.json")
+// TestSkillVerdictCouplesNextAction verifies a verdict cannot declare a
+// next_action that contradicts it — across every skill whose schema carries
+// the pairing rules, so deleting a rule from any one of them fails here (#53).
+func TestSkillVerdictCouplesNextAction(t *testing.T) {
 	set := func(verdict, action string) func(map[string]any) {
 		return func(out map[string]any) {
 			out["verdict"] = verdict
@@ -77,15 +84,19 @@ func TestCodeReviewVerdictCouplesNextAction(t *testing.T) {
 		{"needs_rework", "advance_stage", false},
 		{"needs_rework", "complete", false},
 		{"blocked", "escalate", true},
+		{"blocked", "await_input", true},
 		{"blocked", "advance_stage", false},
 	}
-	for _, tc := range cases {
-		err := ValidateFile(schema, reviewOutput(set(tc.verdict, tc.action)))
-		if tc.wantOK && err != nil {
-			t.Errorf("%s + %s rejected: %v", tc.verdict, tc.action, err)
-		}
-		if !tc.wantOK && err == nil {
-			t.Errorf("%s + %s accepted; want rejection", tc.verdict, tc.action)
+	for _, skill := range []string{"code-review", "clean-user-facing-text", "remove-ai-marks"} {
+		schema := skillSchemaPath(t, skill, "output.schema.json")
+		for _, tc := range cases {
+			err := ValidateFile(schema, skillOutput(skill, set(tc.verdict, tc.action)))
+			if tc.wantOK && err != nil {
+				t.Errorf("%s: %s + %s rejected: %v", skill, tc.verdict, tc.action, err)
+			}
+			if !tc.wantOK && err == nil {
+				t.Errorf("%s: %s + %s accepted; want rejection", skill, tc.verdict, tc.action)
+			}
 		}
 	}
 }

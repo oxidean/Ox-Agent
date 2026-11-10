@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 from collections.abc import Callable
 import os
@@ -10,8 +11,19 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows: no POSIX advisory locking.
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # POSIX: no Windows byte-range locking.
+    msvcrt = None  # type: ignore[assignment]
 
 # Hard caps on attacker-influenced input sizes. Whole-file in-memory
 # processing means a 1 GiB default is a host-memory DoS; keep defaults low.
@@ -350,6 +362,131 @@ def _read_stdin_capped(
     return b"".join(chunks).decode("utf-8", errors="surrogateescape")
 
 
+def read_text_input_fd(
+    fd: int,
+    name: str,
+    *,
+    allow_binary: bool = False,
+    advice: tuple[str, ...] | None = None,
+) -> str:
+    """read_text_input over an already-open fd.
+
+    The caller owns *fd*: it was opened on the resolved in-place target, so
+    the bytes read here are bound to that inode even if the path later
+    resolves elsewhere.
+    """
+    try:
+        st = os.fstat(fd)
+    except OSError as e:
+        # fstat on a valid descriptor can still fail (ESTALE on network
+        # filesystems, EIO) — the exit-2 contract holds here too.
+        eprint(f"cannot read {name}: {e}")
+        raise SystemExit(2) from None
+    if not stat.S_ISREG(st.st_mode):
+        eprint(f"refusing non-regular input (not a regular file): {name}")
+        raise SystemExit(2)
+    if st.st_size > MAX_INPUT_BYTES:
+        eprint(f"refusing input larger than {MAX_INPUT_BYTES} bytes: {name}")
+        raise SystemExit(2)
+    try:
+        with os.fdopen(os.dup(fd), "rb") as f:
+            data = f.read(MAX_INPUT_BYTES + 1)
+    except OSError as e:
+        eprint(f"cannot read {name}: {e}")
+        raise SystemExit(2) from None
+    if len(data) > MAX_INPUT_BYTES:
+        eprint(f"refusing input larger than {MAX_INPUT_BYTES} bytes: {name}")
+        raise SystemExit(2)
+    guard_binary(data, name, allow_binary=allow_binary, advice=advice)
+    return data.decode("utf-8", errors="surrogateescape")
+
+
+_INPLACE_LOCK_SECONDS = 10.0
+
+
+def lock_inplace_fd(fd: int, name: str) -> None:
+    """Serialize ``--in-place`` runs against the same inode.
+
+    Two concurrent cleaners truncate and rewrite interleaved — both report
+    success while the file ends with a mix of the two outputs. On POSIX,
+    ``flock`` binds exclusion to the inode itself, so hard-link aliases and
+    parent swaps still serialize on the file actually being rewritten. On
+    Windows ``msvcrt.locking`` takes the same byte-range lock on the
+    descriptor — LockFile permits regions beyond EOF, so the lock is taken
+    even on an empty file: a concurrent writer's transient ftruncate-to-zero
+    must not skip exclusion and let a torn read report success. With neither
+    primitive available the run proceeds unlocked: correctness of a single
+    writer is unchanged, only the mutual exclusion is absent.
+    """
+    # Only genuine contention is retried: EWOULDBLOCK/EAGAIN (flock) and
+    # EACCES/EDEADLK (msvcrt LK_NBLCK reports contention as access-denied).
+    # Anything else — ENOLCK, EBADF, EINVAL — is a real failure and must
+    # surface now, not after a ten-second spin (#53).
+    # EDEADLK is absent from some platforms' errno tables (msvcrt reports
+    # contention as EACCES there anyway).
+    contention = {
+        errno.EAGAIN,
+        errno.EWOULDBLOCK,
+        errno.EACCES,
+        getattr(errno, "EDEADLK", -1),
+    }
+    if fcntl is not None:
+
+        def _try_lock() -> bool:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError as e:
+                if e.errno in contention:
+                    return False
+                eprint(f"cannot lock {name} for in-place cleaning: {e}")
+                raise SystemExit(2) from None
+
+    elif msvcrt is not None:
+        os.lseek(fd, 0, os.SEEK_SET)
+
+        def _try_lock() -> bool:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError as e:
+                if e.errno in contention:
+                    return False
+                eprint(f"cannot lock {name} for in-place cleaning: {e}")
+                raise SystemExit(2) from None
+
+    else:
+        return
+    deadline = time.monotonic() + _INPLACE_LOCK_SECONDS
+    while True:
+        if _try_lock():
+            return
+        if time.monotonic() >= deadline:
+            eprint(
+                f"cannot lock {name} for in-place cleaning: "
+                "another run holds the lock"
+            )
+            raise SystemExit(2) from None
+        time.sleep(0.05)
+
+
+def rewrite_file_fd(fd: int, data: bytes) -> None:
+    """Overwrite the file behind *fd* in place (truncate + write + fsync).
+
+    Unlike temp+os.replace, this never re-resolves a path: the write is bound
+    to the same inode the caller read and backed up, so a parent-directory
+    swap mid-run cannot redirect the overwrite onto an unbacked-up file. The
+    tradeoff is atomicity — a failed write may leave the file partial, which
+    is why callers must retain the backup on failure.
+    """
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+    os.fsync(fd)
+
+
 def write_text_output(text: str, path: str | None) -> None:
     if path is None or path == "-":
         # Byte-exact contract: write the encoded text verbatim — no appended
@@ -469,8 +606,19 @@ def result_has_changes(result: dict[str, Any]) -> bool:
     return any(is_mutating_action(a) for a in actions)
 
 
-def backup_path(src: Path) -> tuple[Path, bool]:
+def backup_path(
+    src: Path, data: bytes | None = None, src_mode: int | None = None
+) -> tuple[Path, bool]:
     """Create a ``.bak`` copy of *src* no-clobber; return (backup, created).
+
+    When *data* is given those bytes are written instead of re-reading the
+    path — callers that already hold the source's bytes on an open
+    descriptor pass them so a parent-directory swap cannot substitute a
+    different file's contents into the backup (#53). The same swap makes
+    ``src.stat()`` lie about the original's permissions, so those callers
+    pass *src_mode* (fstat of the bound descriptor) instead of re-statting
+    the path: private bytes must not land in a world-readable backup keyed
+    off a replacement file's mode.
 
     Used by ``--in-place`` flows so the original is never partially lost: the
     original file stays untouched until the cleaned output is atomically
@@ -488,13 +636,14 @@ def backup_path(src: Path) -> tuple[Path, bool]:
     this call created a backup.
     """
     bak = src.with_suffix(src.suffix + ".bak")
-    try:
-        src_mode = stat.S_IMODE(src.stat().st_mode)
-    except OSError:
-        # Never fall back to the umask default: an unstat-able source must
-        # not produce a group/other-readable backup even if the later read
-        # unexpectedly succeeds.
-        src_mode = 0o600
+    if src_mode is None:
+        try:
+            src_mode = stat.S_IMODE(src.stat().st_mode)
+        except OSError:
+            # Never fall back to the umask default: an unstat-able source
+            # must not produce a group/other-readable backup even if the
+            # later read unexpectedly succeeds.
+            src_mode = 0o600
     attempts = 0
     while True:
         if bak.is_symlink() or (bak.exists() and not bak.is_file()):
@@ -514,7 +663,7 @@ def backup_path(src: Path) -> tuple[Path, bool]:
             raise SystemExit(2) from None
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(src.read_bytes())
+            f.write(src.read_bytes() if data is None else data)
             f.flush()
             os.fsync(f.fileno())
     except OSError as e:

@@ -4,17 +4,25 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
 import json
+import os
+import stat
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (
+    MAX_INPUT_BYTES,
     backup_path,
     cleaned_path,
     eprint,
+    lock_inplace_fd,
     read_text_input,
+    read_text_input_fd,
+    rewrite_file_fd,
     write_text_output,
 )
 from text_unicode import clean_text
@@ -59,7 +67,72 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    text = read_text_input(args.path, allow_binary=args.force_text)
+    # Resolve AND open the in-place target up front: the read, the backup,
+    # and the overwrite must all stay bound to the same inode — otherwise a
+    # link or parent-directory swap between read and write would clean one
+    # file and overwrite another without backing it up (#46, #53).
+    in_place_src: Path | None = None
+    in_place_fd: int | None = None
+    in_place_writable = True
+    if args.in_place:
+        if args.path in (None, "-"):
+            eprint("--in-place requires a file path")
+            return 2
+        # resolve() raises on unreadable or looping links — a traceback
+        # here would bypass the clean exit-2 contract (RuntimeError on
+        # Python <3.10 for symlink loops, OSError elsewhere). O_RDWR binds
+        # the fd to the resolved inode for both the read below and the
+        # rewrite at the end.
+        try:
+            in_place_src = Path(args.path).resolve()
+            # O_BINARY keeps the byte-exact contract on Windows, where a
+            # text-mode descriptor would translate newlines on rewrite.
+            in_place_fd = os.open(
+                in_place_src, os.O_RDWR | getattr(os, "O_BINARY", 0)
+            )
+        except (OSError, RuntimeError) as e:
+            # A read-only target can still reach the no-op path: EACCES and
+            # EPERM surface as PermissionError, EROFS (read-only filesystem)
+            # as a plain OSError — all three leave the file readable, so
+            # bind an O_RDONLY descriptor for the read and only demand
+            # write access when cleaning actually changes bytes (#53).
+            if isinstance(e, PermissionError) or getattr(e, "errno", None) in (
+                errno.EACCES,
+                errno.EPERM,
+                getattr(errno, "EROFS", errno.EACCES),
+            ):
+                try:
+                    in_place_fd = os.open(
+                        in_place_src, os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                    )
+                except OSError as e2:
+                    eprint(f"cannot open {args.path}: {e2}")
+                    return 2
+                in_place_writable = False
+            else:
+                eprint(f"cannot open {args.path}: {e}")
+                return 2
+        if in_place_writable:
+            try:
+                # Serialize against a concurrent cleaner on the same inode —
+                # without it two truncate+rewrite passes can interleave and
+                # leave bytes matching neither output (#53). Held for the
+                # descriptor's lifetime so read, backup, and rewrite stay
+                # inside the critical section.
+                lock_inplace_fd(in_place_fd, str(in_place_src))
+            except SystemExit:
+                # A failed close here must not replace the clean exit-2
+                # contract with a traceback (#53).
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                raise
+
+    if in_place_fd is not None:
+        text = read_text_input_fd(
+            in_place_fd, str(in_place_src), allow_binary=args.force_text
+        )
+    else:
+        text = read_text_input(args.path, allow_binary=args.force_text)
     cleaned, stats = clean_text(
         text,
         nfkc=args.nfkc,
@@ -71,25 +144,141 @@ def main() -> int:
 
     out = args.output
     skip_write = False
+    created_bak: Path | None = None
     if args.in_place:
-        if args.path in (None, "-"):
-            eprint("--in-place requires a file path")
-            return 2
-        src = Path(args.path)
+        src = in_place_src
         if cleaned == text:
             # Nothing to change: skip the backup and the rewrite entirely so
             # repeated hook runs do not accumulate .bakN files until the
             # backup_path attempt cap refuses.
             skip_write = True
         else:
-            bak, _ = backup_path(src)
-            eprint(f"backup written to {bak}")
+            if not in_place_writable:
+                # Cleaning is needed but the target refused O_RDWR — refuse
+                # before creating a backup that could never be needed (#53).
+                eprint(f"cannot rewrite {in_place_src}: file is read-only")
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            # One fstat serves the hard-link refusal and the backup's
+            # mode: the descriptor pins the inode a path re-stat could
+            # not, so capture it before the checks that consume it (#53).
+            try:
+                in_place_stat = os.fstat(in_place_fd)
+            except OSError as e:
+                eprint(f"cannot stat {in_place_src}: {e}")
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            nlinks = in_place_stat.st_nlink
+            if nlinks > 1:
+                # The rewrite lands on the shared inode: hard-linked
+                # siblings would be silently cleaned too. The refusal runs
+                # here — after the clean-text no-op check — so an
+                # already-clean hard-linked file still exits 0, which is
+                # what hooks over cp -al trees and content-addressed
+                # checkouts rely on (#53).
+                eprint(
+                    f"refusing hard-linked input ({nlinks} links): "
+                    f"{in_place_src} — copy it to a standalone file first"
+                )
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            # The backup must carry the bytes this run read — re-reading
+            # through the path can hit a parent-directory swap and store
+            # the replacement's contents while the rewrite lands on the
+            # original inode (#53). Read via the bound descriptor, still
+            # capped: a writer growing the file mid-run cannot push the
+            # allocation past MAX_INPUT_BYTES.
+            try:
+                os.lseek(in_place_fd, 0, os.SEEK_SET)
+                with os.fdopen(os.dup(in_place_fd), "rb") as rf:
+                    src_bytes = rf.read(MAX_INPUT_BYTES + 1)
+            except OSError as e:
+                eprint(f"cannot read {in_place_src} for backup: {e}")
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            if len(src_bytes) > MAX_INPUT_BYTES:
+                eprint(
+                    f"refusing input larger than {MAX_INPUT_BYTES} bytes: "
+                    f"{in_place_src}"
+                )
+                with contextlib.suppress(OSError):
+                    os.close(in_place_fd)
+                return 2
+            # The backup's mode comes from the same descriptor as its
+            # bytes — a parent-directory swap cannot leak private contents
+            # under a replacement file's world-readable mode (#53).
+            created_bak, _ = backup_path(
+                src,
+                data=src_bytes,
+                src_mode=stat.S_IMODE(in_place_stat.st_mode),
+            )
+            try:
+                eprint(f"backup written to {created_bak}")
+            except BaseException:
+                # stderr broke before the overwrite even started: the
+                # backup this run created is unused — remove it (#46).
+                with contextlib.suppress(OSError):
+                    created_bak.unlink()
+                raise
         out = str(src)
     elif out is None and args.path not in (None, "-"):
         out = str(cleaned_path(Path(args.path)))
 
     if not skip_write:
-        write_text_output(cleaned, out)
+        if in_place_fd is not None:
+            rewrite_err: OSError | None = None
+            try:
+                rewrite_file_fd(
+                    in_place_fd, cleaned.encode("utf-8", "surrogateescape")
+                )
+            except OSError as e:
+                rewrite_err = e
+            close_err: OSError | None = None
+            try:
+                os.close(in_place_fd)
+            except OSError as e:
+                # close surfaces deferred write-back errors (e.g. NFS):
+                # the bytes on disk are uncertain, so this is not a quiet
+                # success either.
+                close_err = e
+            if rewrite_err is not None:
+                # The in-place rewrite is NOT atomic: the target may be
+                # truncated or partial, so the .bak this run created is the
+                # only intact copy of the original — keep it and say so.
+                eprint(
+                    f"cannot rewrite {in_place_src}: {rewrite_err}; "
+                    f"original preserved in {created_bak}"
+                )
+                return 2
+            if close_err is not None:
+                # A rewrite was attempted: treat the file as suspect and
+                # keep the backup rather than reporting a clean write.
+                eprint(
+                    f"error closing {in_place_src}: {close_err}; "
+                    f"original preserved in {created_bak}"
+                )
+                return 2
+        else:
+            try:
+                write_text_output(cleaned, out)
+            except OSError as e:
+                # The atomic write failed, so the original is intact and the
+                # backup created this run is dead weight.
+                if created_bak is not None:
+                    with contextlib.suppress(OSError):
+                        created_bak.unlink()
+                eprint(f"cannot write output: {e}")
+                return 2
+    elif in_place_fd is not None:
+        try:
+            os.close(in_place_fd)
+        except OSError as e:
+            eprint(f"error closing {in_place_src}: {e}")
+            return 2
 
     if args.stats:
         eprint(json.dumps(stats, indent=2, ensure_ascii=False))

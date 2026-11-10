@@ -128,7 +128,7 @@ func newUnblockCmd() *cobra.Command {
 				return err
 			}
 			if err := item.Unblock(root, "cli", reason); err != nil {
-				return err
+				return handleGateError(root, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: → %s\n", item.ID, item.State)
 			return nil

@@ -809,3 +809,667 @@ func TestCollectRetryAfterOutcomeFailure(t *testing.T) {
 		t.Fatal("retried collect did not file the request")
 	}
 }
+
+// TestDispatchEmitsResolvedWorkItemPaths verifies the packet carries the
+// resolved work-item and artifact directories so skills never derive them
+// (#52) — and that dispatch creates the artifacts directory.
+func TestDispatchEmitsResolvedWorkItemPaths(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(run.Dir, "packet.json"))
+	if err != nil {
+		t.Fatalf("reading packet: %v", err)
+	}
+	var packet struct {
+		WorkItemDir  string `json:"work_item_dir"`
+		ArtifactsDir string `json:"artifacts_dir"`
+	}
+	if err := json.Unmarshal(data, &packet); err != nil {
+		t.Fatalf("parsing packet: %v", err)
+	}
+	wantDir := "work/active/" + filepath.Base(item.Dir)
+	if packet.WorkItemDir != wantDir {
+		t.Fatalf("work_item_dir = %q, want %q", packet.WorkItemDir, wantDir)
+	}
+	if packet.ArtifactsDir != wantDir+"/artifacts" {
+		t.Fatalf("artifacts_dir = %q, want %q", packet.ArtifactsDir, wantDir+"/artifacts")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".ox-agent", filepath.FromSlash(packet.ArtifactsDir))); err != nil {
+		t.Fatalf("artifacts dir not created at dispatch: %v", err)
+	}
+}
+
+// TestCollectRejectsUnsafeArtifactPaths verifies declared artifact paths
+// that would corrupt committed trees fail the run like a schema error —
+// re-dispatchable (#52).
+func TestCollectRejectsUnsafeArtifactPaths(t *testing.T) {
+	cases := map[string]any{
+		"glob star":      "WI-0005*/plan.md",
+		"glob object":    map[string]any{"path": "WI-000?/spec.md"},
+		"windows colon":  "work/active/x/plan:1.md",
+		"traversal":      "../escape.md",
+		"backslash path": `work\..\..\escape.md`,
+		"backslash sep":  `work\active\x\plan.md`,
+		"trailing dot":   "work/active/x/plan./spec.md",
+		"trailing space": "work/active/x/plan /spec.md",
+		"control char":   "work/active/x/plan\x01.md",
+		"windows pipe":   "work/active/x/a|b.md",
+		"windows lt/gt":  "work/active/x/a<b>.md",
+		"windows quote":  "work/active/x/a\"b.md",
+		"absolute":       "/tmp/plan.md",
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			root, item := initProject(t)
+			run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+			if err != nil {
+				t.Fatalf("Dispatch() error = %v", err)
+			}
+			out := validOutput("specify")
+			out["artifacts"] = []any{bad}
+			writeOutput(t, root, run.RunID, out)
+			run, _, err = Collect(root, run.RunID)
+			if err == nil {
+				t.Fatalf("Collect() accepted artifact %v; want error", bad)
+			}
+			if run.Status != "failed" {
+				t.Fatalf("run status = %s, want failed", run.Status)
+			}
+		})
+	}
+}
+
+// TestCollectAcceptsValidArtifactPaths verifies legitimate artifact paths
+// still collect — the guard targets unsafe paths only.
+func TestCollectAcceptsValidArtifactPaths(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["artifacts"] = []any{
+		"work/active/WI-0001-x/artifacts/spec.md",
+		map[string]any{"path": "work/active/WI-0001-x/artifacts/plan.md"},
+		// "."-segments are clean no-ops the Windows guard must not reject
+		// (#53 review finding on validateArtifactPaths).
+		"work/active/./artifacts/review.md",
+	}
+	writeOutput(t, root, run.RunID, out)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "collected" {
+		t.Fatalf("run status = %s, want collected", run.Status)
+	}
+}
+
+// TestCollectReplaysPendingEventAfterJournalFailure covers the failure
+// where the run record persisted but the skill.failed append failed: a
+// failed run is never collected again, so the event rides on the record
+// and the next collect for the same work item replays it (#53).
+func TestCollectReplaysPendingEventAfterJournalFailure(t *testing.T) {
+	root, item := initProject(t)
+	runA, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	// Block journal appends: a directory where events.ndjson belongs
+	// makes every open fail on all platforms.
+	journal := filepath.Join(root, ".ox-agent", "state", "events.ndjson")
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("removing journal: %v", err)
+	}
+	if err := os.Mkdir(journal, 0o755); err != nil {
+		t.Fatalf("blocking journal path: %v", err)
+	}
+	out := validOutput("specify")
+	out["artifacts"] = []any{"WI-0005*/plan.md"}
+	writeOutput(t, root, runA.RunID, out)
+	if _, _, err := Collect(root, runA.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite blocked journal; want error")
+	}
+	reloaded, err := LoadRun(root, runA.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "failed" {
+		t.Fatalf("run status = %s, want failed", reloaded.Status)
+	}
+	if reloaded.PendingEvent != "skill.failed" {
+		t.Fatalf("pending_event = %q, want skill.failed", reloaded.PendingEvent)
+	}
+	// Restore the journal, then collect another run for the same item —
+	// the reconcile step must replay run A's dropped event.
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("restoring journal path: %v", err)
+	}
+	runB, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "verify", Stage: "verification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, runB.RunID, validOutput("verify"))
+	if _, _, err := Collect(root, runB.RunID); err != nil {
+		t.Fatalf("Collect() after journal restore error = %v", err)
+	}
+	reloaded, err = LoadRun(root, runA.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.PendingEvent != "" {
+		t.Fatalf("pending_event = %q after replay, want cleared", reloaded.PendingEvent)
+	}
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	var replayed bool
+	for _, ev := range events {
+		if ev.Type == "skill.failed" && ev.Data["run_id"] == runA.RunID {
+			replayed = true
+		}
+	}
+	if !replayed {
+		t.Fatal("journal lacks skill.failed event for run A after replay")
+	}
+}
+
+// TestReconcileDedupesAlreadyJournaledEvent verifies a pending event whose
+// append succeeded but whose marker-clear save failed is not journaled a
+// second time by the next collect (#53).
+func TestReconcileDedupesAlreadyJournaledEvent(t *testing.T) {
+	root, item := initProject(t)
+	runA, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	// Simulate the append-succeeded/save-failed window: the marker is set
+	// AND the event is already in the journal.
+	runA.PendingEvent = "skill.failed"
+	runA.PendingEventData = map[string]any{"run_id": runA.RunID, "skill": runA.Skill, "stage": runA.Stage, "error": "dropped once"}
+	if err := runA.save(root); err != nil {
+		t.Fatalf("seeding pending event: %v", err)
+	}
+	if err := state.Append(root, state.Event{
+		Type:       "skill.failed",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data:       runA.PendingEventData,
+	}); err != nil {
+		t.Fatalf("seeding journal: %v", err)
+	}
+	runB, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "verify", Stage: "verification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, runB.RunID, validOutput("verify"))
+	if _, _, err := Collect(root, runB.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	reloaded, err := LoadRun(root, runA.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.PendingEvent != "" {
+		t.Fatalf("pending_event = %q, want cleared without re-append", reloaded.PendingEvent)
+	}
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	count := 0
+	for _, ev := range events {
+		if ev.Type == "skill.failed" && ev.Data["run_id"] == runA.RunID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("journal has %d skill.failed events for run A, want 1", count)
+	}
+}
+
+// TestReconcileWarningsDoNotBlockCollect verifies that a pending-event
+// replay that cannot clear its marker — the other run's record is
+// unwritable — surfaces as a warning without aborting this collect (#53).
+func TestReconcileWarningsDoNotBlockCollect(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based failure injection is unreliable on Windows")
+	}
+	root, item := initProject(t)
+	runA, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	// Give run A a durable pending event: fail its collect with a blocked
+	// journal (a directory where events.ndjson belongs).
+	journal := filepath.Join(root, ".ox-agent", "state", "events.ndjson")
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("removing journal: %v", err)
+	}
+	if err := os.Mkdir(journal, 0o755); err != nil {
+		t.Fatalf("blocking journal path: %v", err)
+	}
+	out := validOutput("specify")
+	out["artifacts"] = []any{"WI-0005*/plan.md"}
+	writeOutput(t, root, runA.RunID, out)
+	if _, _, err := Collect(root, runA.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite blocked journal; want error")
+	}
+	reloaded, err := LoadRun(root, runA.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.PendingEvent != "skill.failed" {
+		t.Fatalf("pending_event = %q, want skill.failed", reloaded.PendingEvent)
+	}
+	// Restore the journal, then make A's run record unwritable: the
+	// replay append succeeds but the marker-clear save fails — a
+	// warning, not a blocked collect. (Chmod the file, not the dir —
+	// writes to an existing file ignore directory mode.)
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("restoring journal path: %v", err)
+	}
+	runJSON := filepath.Join(runA.Dir, "run.json")
+	if err := os.Chmod(runJSON, 0o444); err != nil {
+		t.Fatalf("chmod ro: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(runJSON, 0o644) })
+	if f, err := os.OpenFile(runJSON, os.O_WRONLY|os.O_TRUNC, 0); err == nil {
+		f.Close()
+		t.Skip("file remains writable after chmod — running with elevated privileges")
+	}
+	runB, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "verify", Stage: "verification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, runB.RunID, validOutput("verify"))
+	got, _, err := Collect(root, runB.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v — run A's bookkeeping must not block run B", err)
+	}
+	if got.Status != "collected" {
+		t.Fatalf("run B status = %s, want collected", got.Status)
+	}
+	if len(got.ReconcileWarnings) == 0 {
+		t.Fatal("expected reconcile warnings for run A's unwritable marker")
+	}
+	// A's event must still have been journaled exactly once.
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	count := 0
+	for _, ev := range events {
+		if ev.Type == "skill.failed" && ev.Data["run_id"] == runA.RunID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("journal has %d skill.failed events for run A, want 1", count)
+	}
+}
+
+// TestCollectRestoresPendingWhenOutcomeEventFails verifies a failed
+// outcome-event append leaves an outcome-bearing run pending — the next
+// collect re-applies the outcome rather than only replaying the journal
+// event (#53).
+func TestCollectRestoresPendingWhenOutcomeEventFails(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	journal := filepath.Join(root, ".ox-agent", "state", "events.ndjson")
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("removing journal: %v", err)
+	}
+	if err := os.Mkdir(journal, 0o755); err != nil {
+		t.Fatalf("blocking journal path: %v", err)
+	}
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite blocked journal; want error")
+	}
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "pending" {
+		t.Fatalf("run status = %s, want pending (outcome retryable)", reloaded.Status)
+	}
+	if reloaded.PendingEvent != "" {
+		t.Fatalf("pending_event = %q, want empty — the pending status is the retry vehicle", reloaded.PendingEvent)
+	}
+	// Journal restored: the retry must append the event once and apply
+	// the outcome.
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("restoring journal path: %v", err)
+	}
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("retry Collect() error = %v", err)
+	}
+	if got.Status != "collected" {
+		t.Fatalf("run status = %s after retry, want collected", got.Status)
+	}
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	count := 0
+	for _, ev := range events {
+		if ev.Type == "skill.completed" && ev.Data["run_id"] == run.RunID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("journal has %d skill.completed events for the run, want 1", count)
+	}
+}
+
+// TestRetriedCollectDoesNotDoubleJournal verifies the append-succeeded /
+// outcome-failed window: the run is restored to pending, and the retry
+// skips the already-journaled event instead of appending a duplicate
+// while re-applying the outcome (#53).
+func TestRetriedCollectDoesNotDoubleJournal(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which option?"}
+	writeOutput(t, root, run.RunID, out)
+
+	// Journal appends work, but the input-request filing fails: the state
+	// dir holds a regular file where the input directory belongs.
+	inputDir := filepath.Join(root, ".ox-agent", "state", "input")
+	if err := os.RemoveAll(inputDir); err != nil {
+		t.Fatalf("removing input dir: %v", err)
+	}
+	if err := os.WriteFile(inputDir, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("blocking input dir: %v", err)
+	}
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() succeeded despite blocked input filing; want error")
+	}
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded.Status != "pending" {
+		t.Fatalf("run status = %s, want pending (outcome retryable)", reloaded.Status)
+	}
+	countEvents := func() int {
+		events, err := state.EventsFor(root, item.ID, 0)
+		if err != nil {
+			t.Fatalf("EventsFor() error = %v", err)
+		}
+		count := 0
+		for _, ev := range events {
+			if ev.Type == "skill.completed" && ev.Data["run_id"] == run.RunID {
+				count++
+			}
+		}
+		return count
+	}
+	if got := countEvents(); got != 1 {
+		t.Fatalf("journal has %d skill.completed events, want 1 from the first attempt", got)
+	}
+
+	// Input dir restored: the retry must NOT re-journal the event but
+	// MUST apply the outcome (file the durable request).
+	if err := os.Remove(inputDir); err != nil {
+		t.Fatalf("restoring input dir: %v", err)
+	}
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("retry Collect() error = %v", err)
+	}
+	if got.Status != "retry" {
+		t.Fatalf("run status = %s after retry, want retry (await_input parks the run)", got.Status)
+	}
+	if got.AwaitingInput == "" {
+		t.Fatal("AwaitingInput empty — the durable request was not filed on retry")
+	}
+	if got := countEvents(); got != 1 {
+		t.Fatalf("journal has %d skill.completed events after retry, want 1 (no duplicate)", got)
+	}
+}
+
+// TestRetriedCollectRejectsOutcomeTypeChange covers the revised-output
+// replay: a run journaled skill.completed whose output.json is rewritten
+// to failed must refuse rather than journal skill.failed alongside it —
+// the outcome lookup checks BOTH event types (#53).
+func TestRetriedCollectRejectsOutcomeTypeChange(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which option?"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	// Simulate the pending-restore state: outcome journaled, run pending.
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	// Revise the outcome: blocked+await_input → failed+needs_rework. The
+	// schema-valid pairing still yields the skill.failed event type.
+	out["status"] = "failed"
+	out["verdict"] = "needs_rework"
+	out["next_action"] = map[string]any{"type": "retry", "reason": "gave up"}
+	writeOutput(t, root, run.RunID, out)
+
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted a revised outcome over the journaled skill.completed")
+	} else if !strings.Contains(err.Error(), "changed since") {
+		t.Fatalf("Collect() error = %v, want drift refusal", err)
+	}
+
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	completed, failed := 0, 0
+	for _, ev := range events {
+		if ev.Data["run_id"] != run.RunID {
+			continue
+		}
+		switch ev.Type {
+		case "skill.completed":
+			completed++
+		case "skill.failed":
+			failed++
+		}
+	}
+	if completed != 1 || failed != 0 {
+		t.Fatalf("journal has %d completed + %d failed for the run, want 1 + 0 (revised outcome refused)", completed, failed)
+	}
+	if reloaded2, _ := LoadRun(root, run.RunID); reloaded2.Status != "pending" {
+		t.Fatalf("run status = %s after drift refusal, want pending (re-dispatchable)", reloaded2.Status)
+	}
+}
+
+// TestCollectKeepsPendingOnInvalidOutputWithJournaledOutcome covers the
+// post-journal corruption edge: a run whose skill.completed is already
+// journaled (restored to pending because applyOutcome could not finish)
+// must NOT be marked failed when output.json no longer validates — a
+// failed run is terminal, so the journaled outcome could never apply.
+// The run stays pending so a corrected output.json can re-collect (#53).
+func TestCollectKeepsPendingOnInvalidOutputWithJournaledOutcome(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	// Simulate the pending-restore state: outcome journaled, run pending.
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	// Corrupt output.json so it fails schema validation.
+	if err := os.WriteFile(filepath.Join(reloaded.Dir, "output.json"), []byte(`{"status": "complete", "verdict": 42}`), 0o644); err != nil {
+		t.Fatalf("corrupting output.json: %v", err)
+	}
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted schema-invalid output")
+	} else if !strings.Contains(err.Error(), "journaled") {
+		t.Fatalf("Collect() error = %v, want journaled-outcome explanation", err)
+	}
+	reloaded2, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded2.Status != "pending" {
+		t.Fatalf("run status = %s after invalid output with journaled outcome, want pending (re-collectable)", reloaded2.Status)
+	}
+	// No skill.failed may land beside the journaled skill.completed.
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	for _, ev := range events {
+		if ev.Data["run_id"] == run.RunID && ev.Type == "skill.failed" {
+			t.Fatalf("skill.failed journaled beside the existing outcome event: %+v", ev.Data)
+		}
+	}
+
+	// Restoring the journaled output lets the same run re-collect: the
+	// recorded outcome applies, no re-dispatch needed.
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("re-collect after restoring journaled output: %v", err)
+	}
+	if got.Status != "collected" {
+		t.Fatalf("run status = %s after re-collect, want collected", got.Status)
+	}
+}
+
+// TestCollectKeepsPendingOnUnsafeArtifactPathWithJournaledOutcome applies
+// the same journaled-outcome rule to the artifact-path validation branch:
+// a pending run with a journaled outcome whose output now declares an
+// unsafe artifact path stays re-collectable, not failed (#53).
+func TestCollectKeepsPendingOnUnsafeArtifactPathWithJournaledOutcome(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	out := validOutput("specify")
+	out["artifacts"] = []any{"WI-0005*/plan.md"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted an unsafe artifact path")
+	} else if !strings.Contains(err.Error(), "journaled") {
+		t.Fatalf("Collect() error = %v, want journaled-outcome explanation", err)
+	}
+	reloaded2, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded2.Status != "pending" {
+		t.Fatalf("run status = %s after unsafe artifact path with journaled outcome, want pending", reloaded2.Status)
+	}
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	for _, ev := range events {
+		if ev.Data["run_id"] == run.RunID && ev.Type == "skill.failed" {
+			t.Fatalf("skill.failed journaled beside the existing outcome event: %+v", ev.Data)
+		}
+	}
+}
+
+// TestRetriedCollectRejectsChangedInputRequest covers request-field drift:
+// a retried collect whose output now asks a different question must not
+// stack a second pending request for the same run (#53).
+func TestRetriedCollectRejectsChangedInputRequest(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	out := validOutput("specify")
+	out["status"] = "blocked"
+	out["verdict"] = "blocked"
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "which option?"}
+	writeOutput(t, root, run.RunID, out)
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if got.AwaitingInput == "" {
+		t.Fatal("AwaitingInput empty — the durable request was not filed")
+	}
+
+	// Pending-restore: journaled outcome + filed request, run pending.
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	// Same verdict/action/status — only the question changed.
+	out["next_action"] = map[string]any{"type": "await_input", "reason": "a different question entirely"}
+	writeOutput(t, root, run.RunID, out)
+
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() filed a different question over the run's pending request")
+	} else if !strings.Contains(err.Error(), "refusing to file") {
+		t.Fatalf("Collect() error = %v, want request drift refusal", err)
+	}
+	pending, perrs := input.Pending(root)
+	if len(perrs) > 0 {
+		t.Fatalf("Pending() errors = %v", perrs)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending requests = %d, want 1 (no stacked request)", len(pending))
+	}
+}

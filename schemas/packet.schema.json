@@ -28,6 +28,14 @@
       "type": "string",
       "pattern": "^WI-[0-9]{4,}$"
     },
+    "work_item_dir": {
+      "type": "string",
+      "description": ".ox-agent-relative path of the work item's directory (e.g. work/active/WI-0007-some-slug). Resolved by the compiler — skills must use it instead of deriving or globbing the path."
+    },
+    "artifacts_dir": {
+      "type": "string",
+      "description": ".ox-agent-relative path where the skill writes artifact files (work_item_dir + /artifacts). Created at dispatch; declared artifact paths must stay relative and free of characters invalid on Windows checkouts."
+    },
     "skill": {
       "type": "string",
       "minLength": 1
