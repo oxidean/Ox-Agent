@@ -17,7 +17,7 @@ Verify tests, traceability, policy compliance, rollback readiness, and operation
 
 ## Consumes
 
-- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `changed_paths` artifacts via `context.prior_outputs`.
+- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `artifacts` entries via `context.prior_outputs` — each `{path, summary}` entry records a changed file.
 
 ## Produces
 

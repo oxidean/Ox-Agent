@@ -46,11 +46,12 @@ tracked by ` + "`assets.lock`" + `. ` + "`kind: core`" + ` in a skill manifest m
 with the distribution and sync-owned (repaired on ` + "`init --repair --sync`" + `);
 ` + "`kind: extension`" + ` means added post-init and never reconciled. To customize a
 core skill, fork it under a new directory name: set its manifest ` + "`name:`" + ` to
-` + "`<new-name>`" + ` — the bare name matching the directory, the same convention
-bundled manifests use — and ` + "`kind:`" + ` to ` + "`extension`" + `, and update the
+` + "`ox-agent/<new-name>`" + ` — the qualified form bundled manifests and packets
+carry — its SKILL.md frontmatter ` + "`name:`" + ` to the bare ` + "`<new-name>`" + `
+matching the directory, and ` + "`kind:`" + ` to ` + "`extension`" + `, and update the
 ` + "`skill`" + ` constants in ` + "`schemas/input.schema.json`" + ` and
-` + "`schemas/output.schema.json`" + ` to ` + "`ox-agent/<new-name>`" + ` — packets always
-carry the qualified form — plus the ` + "`skill:`" + ` field in
+` + "`schemas/output.schema.json`" + ` to ` + "`ox-agent/<new-name>`" + `, plus the
+` + "`skill:`" + ` field in
 ` + "`evals/evals.yaml`" + ` — ` + "`eval --emit`" + ` packets and recorded results take
 that qualified name, so a fork still naming the original evaluates under the original
 skill. Packets and outputs validate against the schema constants, so a fork

@@ -74,7 +74,11 @@ health_ok() {
   # is configured — a bare probe would read healthy-as-down and ensure
   # would cold-start against a live, authenticated service (#53).
   if [[ -n "${WATERMARKS_SERVER_API_KEY:-}" ]]; then
-    curl -sf --max-time 2       -H "Authorization: Bearer ${WATE...KEY}"       "${WM_URL}/health" >/dev/null 2>&1
+    # The key must not ride curl's argv — ps leaks argv to other users for
+    # the probe's lifetime. -H @- reads the header from stdin instead
+    # (curl >= 7.55); the token never touches the process table (#53).
+    printf 'Authorization: Bearer %s\n' "$WATERMARKS_SERVER_API_KEY" \
+      | curl -sf --max-time 2 -H @- "${WM_URL}/health" >/dev/null 2>&1
   else
     curl -sf --max-time 2 "${WM_URL}/health" >/dev/null 2>&1
   fi
