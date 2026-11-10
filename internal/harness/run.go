@@ -324,8 +324,11 @@ func deferForJournaledOutcome(root string, run *Run) string {
 	if err != nil || !journaledOutcome {
 		return ""
 	}
-	saveErr := run.save(root)
-	return fmt.Sprintf("outcome already journaled — run kept pending so a corrected output.json can re-collect (save: %v)", saveErr)
+	msg := "outcome already journaled — run kept pending so a corrected output.json can re-collect"
+	if saveErr := run.save(root); saveErr != nil {
+		msg += fmt.Sprintf(" (also failed to save run: %v)", saveErr)
+	}
+	return msg
 }
 
 // journalFailureOnce appends skill.failed unless the journal already holds

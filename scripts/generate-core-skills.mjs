@@ -85,7 +85,7 @@ const skills = {
   verify: {
     category: 'verification',
     description: 'Verify tests, traceability, policy compliance, rollback readiness, and operational requirements before shipping.',
-    consumes: "- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `changed_paths` artifacts via `context.prior_outputs`.",
+    consumes: "- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `artifacts` entries via `context.prior_outputs` — each entry's `path` points at that run's output.json; its `artifacts` list records changed files as bare path strings or `{path, ...}` objects (any `summary` is an optional annotation, not guaranteed). Read the files at those paths; never verify from a summary.",
     produces: '- verification results in `findings` (command, outcome, evidence) and a `pass`/`needs_rework` `verdict`.',
       evalFlags: 'command_run`, `evidence_in_findings`, `criteria_checked',
   },
