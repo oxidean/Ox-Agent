@@ -316,19 +316,15 @@ func outcomeJournaled(root, itemID, runID string) (bool, error) {
 // explanation when it does. When the journal already holds this run's
 // outcome, the event stays authoritative: a failed run is terminal, so
 // marking it failed would strand the journaled outcome unapplied forever —
-// the operator corrects output.json and re-collects instead (#53). The run
-// record is saved so reconcile warnings stay durable; an unreadable journal
-// is treated as unknown, keeping the failure path the authority.
+// the operator corrects output.json and re-collects instead (#53). An
+// unreadable journal is treated as unknown, keeping the failure path the
+// authority.
 func deferForJournaledOutcome(root string, run *Run) string {
 	journaledOutcome, err := outcomeJournaled(root, run.WorkItemID, run.RunID)
 	if err != nil || !journaledOutcome {
 		return ""
 	}
-	msg := "outcome already journaled — run kept pending so a corrected output.json can re-collect"
-	if saveErr := run.save(root); saveErr != nil {
-		msg += fmt.Sprintf(" (also failed to save run: %v)", saveErr)
-	}
-	return msg
+	return "outcome already journaled — run kept pending so a corrected output.json can re-collect"
 }
 
 // journalFailureOnce appends skill.failed unless the journal already holds
