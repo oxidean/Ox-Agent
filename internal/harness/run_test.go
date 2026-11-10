@@ -1309,6 +1309,121 @@ func TestRetriedCollectRejectsOutcomeTypeChange(t *testing.T) {
 	}
 }
 
+// TestCollectKeepsPendingOnInvalidOutputWithJournaledOutcome covers the
+// post-journal corruption edge: a run whose skill.completed is already
+// journaled (restored to pending because applyOutcome could not finish)
+// must NOT be marked failed when output.json no longer validates — a
+// failed run is terminal, so the journaled outcome could never apply.
+// The run stays pending so a corrected output.json can re-collect (#53).
+func TestCollectKeepsPendingOnInvalidOutputWithJournaledOutcome(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	// Simulate the pending-restore state: outcome journaled, run pending.
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	// Corrupt output.json so it fails schema validation.
+	if err := os.WriteFile(filepath.Join(reloaded.Dir, "output.json"), []byte(`{"status": "complete", "verdict": 42}`), 0o644); err != nil {
+		t.Fatalf("corrupting output.json: %v", err)
+	}
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted schema-invalid output")
+	} else if !strings.Contains(err.Error(), "journaled") {
+		t.Fatalf("Collect() error = %v, want journaled-outcome explanation", err)
+	}
+	reloaded2, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded2.Status != "pending" {
+		t.Fatalf("run status = %s after invalid output with journaled outcome, want pending (re-collectable)", reloaded2.Status)
+	}
+	// No skill.failed may land beside the journaled skill.completed.
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	for _, ev := range events {
+		if ev.Data["run_id"] == run.RunID && ev.Type == "skill.failed" {
+			t.Fatalf("skill.failed journaled beside the existing outcome event: %+v", ev.Data)
+		}
+	}
+
+	// Restoring the journaled output lets the same run re-collect: the
+	// recorded outcome applies, no re-dispatch needed.
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	got, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("re-collect after restoring journaled output: %v", err)
+	}
+	if got.Status != "collected" {
+		t.Fatalf("run status = %s after re-collect, want collected", got.Status)
+	}
+}
+
+// TestCollectKeepsPendingOnUnsafeArtifactPathWithJournaledOutcome applies
+// the same journaled-outcome rule to the artifact-path validation branch:
+// a pending run with a journaled outcome whose output now declares an
+// unsafe artifact path stays re-collectable, not failed (#53).
+func TestCollectKeepsPendingOnUnsafeArtifactPathWithJournaledOutcome(t *testing.T) {
+	root, item := initProject(t)
+	run, err := Dispatch(context.Background(), root, item, DispatchRequest{Skill: "specify", Stage: "specification"})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	writeOutput(t, root, run.RunID, validOutput("specify"))
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	reloaded, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	reloaded.Status = "pending"
+	if err := reloaded.save(root); err != nil {
+		t.Fatalf("restoring pending: %v", err)
+	}
+
+	out := validOutput("specify")
+	out["artifacts"] = []any{"WI-0005*/plan.md"}
+	writeOutput(t, root, run.RunID, out)
+	if _, _, err := Collect(root, run.RunID); err == nil {
+		t.Fatal("Collect() accepted an unsafe artifact path")
+	} else if !strings.Contains(err.Error(), "journaled") {
+		t.Fatalf("Collect() error = %v, want journaled-outcome explanation", err)
+	}
+	reloaded2, err := LoadRun(root, run.RunID)
+	if err != nil {
+		t.Fatalf("LoadRun() error = %v", err)
+	}
+	if reloaded2.Status != "pending" {
+		t.Fatalf("run status = %s after unsafe artifact path with journaled outcome, want pending", reloaded2.Status)
+	}
+	events, err := state.EventsFor(root, item.ID, 0)
+	if err != nil {
+		t.Fatalf("EventsFor() error = %v", err)
+	}
+	for _, ev := range events {
+		if ev.Data["run_id"] == run.RunID && ev.Type == "skill.failed" {
+			t.Fatalf("skill.failed journaled beside the existing outcome event: %+v", ev.Data)
+		}
+	}
+}
+
 // TestRetriedCollectRejectsChangedInputRequest covers request-field drift:
 // a retried collect whose output now asks a different question must not
 // stack a second pending request for the same run (#53).

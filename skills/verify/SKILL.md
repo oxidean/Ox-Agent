@@ -17,7 +17,7 @@ Verify tests, traceability, policy compliance, rollback readiness, and operation
 
 ## Consumes
 
-- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `artifacts` entries via `context.prior_outputs` — each `{path, summary}` entry records a changed file.
+- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `artifacts` entries via `context.prior_outputs` — each entry's `path` points at that run's output.json; its `artifacts` list records changed files as bare path strings or `{path, ...}` objects (any `summary` is an optional annotation, not guaranteed). Read the files at those paths; never verify from a summary.
 
 ## Produces
 

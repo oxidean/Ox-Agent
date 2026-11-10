@@ -311,6 +311,23 @@ func outcomeJournaled(root, itemID, runID string) (bool, error) {
 	return false, nil
 }
 
+// deferForJournaledOutcome reports whether a collect-time output rejection
+// must leave the run pending instead of failing it, returning a non-empty
+// explanation when it does. When the journal already holds this run's
+// outcome, the event stays authoritative: a failed run is terminal, so
+// marking it failed would strand the journaled outcome unapplied forever —
+// the operator corrects output.json and re-collects instead (#53). The run
+// record is saved so reconcile warnings stay durable; an unreadable journal
+// is treated as unknown, keeping the failure path the authority.
+func deferForJournaledOutcome(root string, run *Run) string {
+	journaledOutcome, err := outcomeJournaled(root, run.WorkItemID, run.RunID)
+	if err != nil || !journaledOutcome {
+		return ""
+	}
+	saveErr := run.save(root)
+	return fmt.Sprintf("outcome already journaled — run kept pending so a corrected output.json can re-collect (save: %v)", saveErr)
+}
+
 // journalFailureOnce appends skill.failed unless the journal already holds
 // an outcome event for the run. An unreadable journal is treated as unknown,
 // so the append path stays the authority (#53).
@@ -384,6 +401,9 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	skill := strings.TrimPrefix(run.Skill, "ox-agent/")
 	schemaPath := filepath.Join(root, ".ox-agent", "skills", skill, "schemas", "output.schema.json")
 	if err := contract.ValidateFile(schemaPath, outputData); err != nil {
+		if deferred := deferForJournaledOutcome(root, run); deferred != "" {
+			return run, nil, fmt.Errorf("output for %s failed validation: %w (%s)", runID, err, deferred)
+		}
 		run.Status = "failed"
 		run.Error = "output failed schema validation: " + err.Error()
 		saveErr := run.save(root)
@@ -413,6 +433,9 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		// a path like "WI-0005*/plan.md" creates a literal-star directory
 		// that fails Windows checkout outright (#52). Fail like a schema
 		// error so the run is re-dispatchable after the skill corrects it.
+		if deferred := deferForJournaledOutcome(root, run); deferred != "" {
+			return run, output, fmt.Errorf("invalid artifact path for %s: %w (%s)", runID, err, deferred)
+		}
 		run.Status = "failed"
 		run.Error = "invalid artifact path: " + err.Error()
 		saveErr := run.save(root)

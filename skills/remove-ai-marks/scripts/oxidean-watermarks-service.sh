@@ -937,9 +937,13 @@ run_with_service() {
   # interrupt skips teardown and leaves it running against a stale state file.
   trap 'teardown >/dev/null || true; exit 130' INT
   trap 'teardown >/dev/null || true; exit 143' TERM
-  local ec=0
+  local ec=0 teardown_ec=0
   "$@" || ec=$?
-  teardown >/dev/null || true
+  teardown >/dev/null || teardown_ec=$?
+  # A successful payload still reports teardown failure: an unremoved hold
+  # or unconfirmed stop leaves the service pinned while callers believe it
+  # was released (#53).
+  [[ "$ec" -ne 0 ]] || ec="$teardown_ec"
   return "$ec"
 }
 
