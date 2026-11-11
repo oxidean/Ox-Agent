@@ -3,6 +3,9 @@ name: Go CI
 on:
   pull_request:
     branches: [main]
+    # edited re-fires the gate on title/body changes — otherwise a
+    # post-green metadata edit could land attribution unchecked.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
