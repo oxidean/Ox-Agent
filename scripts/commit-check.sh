@@ -41,7 +41,7 @@ check_attribution() {
     _co=$(printf '%s\n' "$_msg" | grep -iE '^[[:space:]]*co-?authored-by:' || :)
     # Unambiguous machine signals anywhere in the trailer: [bot] tags,
     # bot@ addresses, *-ai-integration logins, and AI-vendor domains.
-    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|[a-z0-9-]*bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code)\.(com|ai|dev|io)>'; then
+    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code)\.(com|ai|dev|io)>'; then
         err "AI Co-authored-by trailer"
     # A bare vendor identity as the display name — "Co-authored-by:
     # Claude <noreply@anthropic.com>" hits the domain rule above; this
@@ -63,7 +63,7 @@ check_attribution() {
     fi
     # standalone "via <tool>" / "by <tool>" / "with <tool>" lines — the
     # footer regex above needs a leading verb, so a lone via-line slips.
-    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+(claude|cursor|copilot|chatgpt|codex|gemini|devin([[:space:]-]ai)?|openai|anthropic|codeium|windsurf|swe-[0-9a-z.-]*)[[:space:].!]*$'; then
+    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+(claude|cursor|copilot|chatgpt|codex|gemini|devin|openai|anthropic|codeium|windsurf|swe-[0-9a-z.-]*)([[:space:]-]ai)?[[:space:].!]*$'; then
         err "attribution via-line"
     fi
     # bot-emoji generator signature
