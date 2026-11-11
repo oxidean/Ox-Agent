@@ -46,7 +46,8 @@ jobs:
     needs: guard
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.6
+      issues: write   # reusable files a tracking issue when site dispatch fails
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.7
     with:
       tag: ${{ inputs.tag }}
       src-ref: ${{ inputs.src_ref }}

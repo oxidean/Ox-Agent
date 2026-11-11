@@ -91,7 +91,8 @@ jobs:
     if: needs.docs-check.outputs.has_docs == 'true'
     permissions:
       contents: write
-    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.6
+      issues: write   # reusable files a tracking issue when site dispatch fails
+    uses: oxidean/docs-manifest/.github/workflows/release.yml@v0.1.7
     with:
       tag: ${{ needs.release.outputs.tag }}
       product: ox-agent
