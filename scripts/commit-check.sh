@@ -41,7 +41,7 @@ check_attribution() {
     _co=$(printf '%s\n' "$_msg" | grep -iE '^[[:space:]]*co-?authored-by:' || :)
     # Unambiguous machine signals anywhere in the trailer: [bot] tags,
     # bot@ addresses, *-ai-integration logins, and AI-vendor domains.
-    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code)\.(com|ai|dev|io)>'; then
+    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code)\.(com|ai|dev|io)([[:space:]>]|$)'; then
         err "AI Co-authored-by trailer"
     # A bare vendor identity as the display name — "Co-authored-by:
     # Claude <noreply@anthropic.com>" hits the domain rule above; this
@@ -49,7 +49,7 @@ check_attribution() {
     # CONTAIN a vendor token ("Claude Martin <claude.martin@…>") stay
     # legal per .cursor/rules/no-ai-attribution.mdc.
     elif printf '%s\n' "$_co" | sed 's/^[^:]*:[[:space:]]*//; s/<.*//' \
-        | grep -qiE '^(claude|cursor|copilot|chatgpt|codex|gemini|devin|openai|anthropic|codeium|windsurf|swe-)([[:space:]-]ai)?[[:space:]]*$'; then
+        | grep -qiE '^(claude|cursor|copilot|chatgpt|codex|gemini|devin|openai|anthropic|codeium|windsurf|swe-|github[[:space:]]+copilot|(claude|gemini)[[:space:]]+(opus|sonnet|pro|ultra))([[:space:]-]ai)?[[:space:]]*$'; then
         err "AI Co-authored-by trailer"
     fi
     # generator footers: "Generated with <tool>", "Made with: X",
