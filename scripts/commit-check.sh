@@ -68,7 +68,7 @@ check_attribution() {
     fi
     # standalone "via <tool>" / "by <tool>" / "with <tool>" lines — the
     # footer regex above needs a leading verb, so a lone via-line slips.
-    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]ai)?[[:space:].!]*$'; then
+    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]ai)?([^a-z0-9]|$)'; then
         err "attribution via-line"
     fi
     # bot-emoji signature: a bare 🤖 line, or 🤖 sharing a line with
