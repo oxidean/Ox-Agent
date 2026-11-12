@@ -158,23 +158,31 @@ jobs:
                 echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
                 exit 1 ;;
             esac
-            # Reject on any failed check before accepting a mergeable state —
-            # CLEAN means required checks passed, but a failed optional check
-            # on the release cut should still stop the tag.
-            if [ "$(gh pr checks "$pr" --json bucket --jq '[.[]|select(.bucket=="fail")]|length' 2>/dev/null || echo 0)" != "0" ]; then
+            # Gate on every check, not just required ones: a failed check on
+            # the release cut stops the tag, and a still-pending check keeps
+            # the loop waiting. A failed query is not a pass — retry it.
+            if ! read -r fails pending < <(gh pr checks "$pr" --json bucket \
+                --jq '"\([.[]|select(.bucket=="fail")]|length) \([.[]|select(.bucket=="pending")]|length)"' 2>/dev/null); then
+              echo "::warning::could not read checks for bump PR #$pr — retrying"
+              sleep 20
+              continue
+            fi
+            if [ "$fails" != "0" ]; then
               echo "::error::bump PR #$pr has a failing check — rerun tag-release"
               gh pr checks "$pr" || true
               exit 1
             fi
             case "$state" in
-              CLEAN|UNSTABLE) break ;;
+              CLEAN) break ;;
+              UNSTABLE) [ "$pending" = "0" ] && break ;;
             esac
             sleep 20
           done
-          case "$state" in
-            CLEAN|UNSTABLE) ;;
-            *) echo "::error::bump PR #$pr never became mergeable (mergeStateStatus=$state)"; gh pr checks "$pr" || true; exit 1 ;;
-          esac
+          if [ "$state" != "CLEAN" ] && ! { [ "$state" = "UNSTABLE" ] && [ "$pending" = "0" ]; }; then
+            echo "::error::bump PR #$pr never reached a clean state (mergeStateStatus=$state)"
+            gh pr checks "$pr" || true
+            exit 1
+          fi
           # Pin the squash subject/body: the default body can fold in a
           # Co-authored-by trailer for the bot, which the attribution gate
           # scans on the post-merge push run.
