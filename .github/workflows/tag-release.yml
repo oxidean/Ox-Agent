@@ -20,6 +20,7 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -87,7 +88,7 @@ jobs:
           [ -f "$manifest" ] || { echo "no docs/site manifest — skipping"; emit "$head"; exit 0; }
           ver="${TAG#v}"
           getver() { sed -nE 's/^version[[:space:]]*:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/p' | head -1; }
-          current="$(getver < "$manifest")"
+          current="$(getver < "$manifest" || true)"
           if [ "$current" = "$ver" ]; then
             echo "manifest already at $ver"
             emit "$head"
@@ -102,11 +103,13 @@ jobs:
             # Tag the commit that set the version, not the latest commit
             # that touched the manifest — a later non-version edit must
             # not become the release cut.
+            target=""
             for c in $(git rev-list --first-parent origin/main -- "$manifest"); do
               v="$(git show "$c:$manifest" 2>/dev/null | getver || true)"
               [ "$v" = "$ver" ] || break
               target="$c"
             done
+            [ -n "$target" ] || { echo "::error::no commit on main carries manifest version $ver"; exit 1; }
             emit "$target"
             exit 0
           fi
@@ -126,29 +129,161 @@ jobs:
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -am "chore(release): bump docs manifest to $ver"
           git push -f origin "$branch"
-          pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          expected_sha="$(git rev-parse HEAD)"
+          # Pin resolution to base=main and the pushed head SHA — head
+          # branches can carry PRs against other bases, and the merge must
+          # target this exact bump commit. A lookup failure is not an empty
+          # result: retry, then refuse to create a possible duplicate.
+          resolve_pr() {
+            local out
+            for _ in 1 2 3; do
+              if out="$(gh pr list --head "$branch" --base main --state open \
+                  --json number,baseRefName,headRefOid \
+                  --jq ".[] | select(.baseRefName==\"main\" and .headRefOid==\"$expected_sha\") | .number" \
+                  | head -1)"; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              sleep 10
+            done
+            return 1
+          }
+          pr="$(resolve_pr)" || { echo "::error::bump PR lookup failed for $branch — refusing to create a duplicate"; exit 1; }
           if [ -z "$pr" ]; then
             gh pr create --base main --head "$branch" \
               --title "chore(release): bump docs manifest to $ver" \
-              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore"
+              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore" \
+              || { echo "::error::gh pr create failed for $branch"; exit 1; }
             # gh pr create prints only the URL — re-read the number via list.
-            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+            pr="$(resolve_pr)" || { echo "::error::post-create bump PR lookup failed for $branch"; exit 1; }
           fi
-          m=""
-          for i in $(seq 1 30); do
-            m="$(gh pr view "$pr" --json mergeable --jq '.mergeable')"
-            [ "$m" = "MERGEABLE" ] && break
-            if [ "$m" = "CONFLICTING" ]; then
-              echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
+          [ -n "$pr" ] || { echo "::error::could not resolve bump PR number for $branch"; exit 1; }
+          # The bump PR is bot-authored: its pull_request runs arrive held at
+          # action_required (GITHUB_TOKEN can't self-trigger), so required
+          # checks never report and branch policy blocks the merge. Approve
+          # held runs every poll — late-spawning runs get caught too — and
+          # wait on mergeStateStatus rather than mergeable, which reports
+          # conflicts only and stays MERGEABLE while required checks pend.
+          state=""
+          merged_gate=0
+          updates=0
+          # ~50min of polling inside the 60min job timeout — slower legs must
+          # not hit "never reached a clean state" while budget remains.
+          deadline=$((SECONDS + 3000))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            # Held runs surface under different markers across API shapes —
+            # match all reported forms, and scope to the current head SHA so
+            # stale runs on older heads are never approved. -X GET keeps the
+            # -f fields as query params; without it gh api posts them as a
+            # body and the runs endpoint 404s, killing the approve pass.
+            if held_json="$(gh api -X GET "repos/${{ github.repository }}/actions/runs" \
+                -f "branch=$branch" -f event=pull_request -f "head_sha=$expected_sha" \
+                -f per_page=50 2>/dev/null)"; then
+              held="$(printf '%s' "$held_json" | jq -r '.workflow_runs[] | select(.status=="waiting" or .status=="action_required" or .conclusion=="action_required") | .id' 2>/dev/null || true)"
+            else
+              held=""
+              echo "::warning::held-run query failed — approve pass skipped this round"
+            fi
+            for rid in $held; do
+              if err="$(gh api -X POST "repos/${{ github.repository }}/actions/runs/$rid/approve" 2>&1)"; then
+                echo "approved held run $rid"
+              else
+                echo "::warning::approve call failed for held run $rid — $err"
+              fi
+            done
+            state="$(gh pr view "$pr" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null)" || {
+              echo "::warning::could not read merge state for bump PR #$pr — retrying"
+              sleep 20
+              continue
+            }
+            case "$state" in
+              CONFLICTING|DIRTY)
+                echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
+                exit 1 ;;
+            esac
+            # Gate on every check, not just required ones: a failed check on
+            # the release cut stops the tag, and a still-pending check keeps
+            # the loop waiting. cancel counts as fail — a cancelled required
+            # check must not slip through as "settled". ACTION_REQUIRED runs
+            # are held, not failed — the approve pass above releases them.
+            # A failed query is not a pass — retry it.
+            # gh pr checks exits non-zero when any check pends/fails even with
+            # --json — the read guard tests stdout, so JSON still lands first.
+            if ! read -r fails pending < <(gh pr checks "$pr" --json bucket,state \
+                --jq '"\([.[]|select((.bucket=="fail" or .bucket=="cancel") and .state!="ACTION_REQUIRED")]|length) \([.[]|select(.bucket=="pending" or .state=="ACTION_REQUIRED")]|length)"' 2>/dev/null); then
+              echo "::warning::could not read checks for bump PR #$pr — retrying"
+              sleep 20
+              continue
+            fi
+            if [ "$fails" != "0" ]; then
+              echo "::error::bump PR #$pr has a failing check — rerun tag-release"
+              gh pr checks "$pr" || true
               exit 1
             fi
-            sleep 2
+            case "$state" in
+              CLEAN) merged_gate=1; break ;;
+              UNSTABLE) if [ "$pending" = "0" ]; then merged_gate=1; break; fi ;;
+              # BEHIND fails the merge outright when the ruleset requires
+              # up-to-date branches. update-branch via the API won't spawn
+              # checks under GITHUB_TOKEN, so merge main locally and push —
+              # the synchronize runs arrive held like the original ones and
+              # the approve loop picks them up once expected_sha tracks the
+              # new head.
+              BEHIND)
+                if [ "$pending" = "0" ]; then
+                  if [ "$updates" -lt 3 ]; then
+                    updates=$((updates+1))
+                    if git merge --abort 2>/dev/null; git fetch origin main -q \
+                      && git -c user.name="github-actions[bot]" \
+                           -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                           merge --no-edit origin/main >/dev/null 2>&1 \
+                      && git push -f origin "$branch" >/dev/null 2>&1; then
+                      expected_sha="$(git rev-parse HEAD)"
+                      # The PR follows the branch — headRefOid lags the push
+                      # briefly, so keep the old number if re-resolution
+                      # hasn't caught up yet.
+                      newpr="$(resolve_pr || true)"
+                      [ -n "$newpr" ] && pr="$newpr"
+                      echo "bump PR #$pr BEHIND — merged main and pushed ($updates/3)"
+                    else
+                      echo "::warning::could not merge main into bump branch — retrying"
+                    fi
+                  else
+                    echo "::error::bump PR #$pr could not be brought up to date — rerun tag-release"
+                    exit 1
+                  fi
+                fi ;;
+            esac
+            sleep 20
           done
-          [ "$m" = "MERGEABLE" ] || { echo "::error::bump PR #$pr never became mergeable"; exit 1; }
-          gh pr merge "$pr" --squash --delete-branch
+          if [ "$merged_gate" != "1" ]; then
+            echo "::error::bump PR #$pr never reached a clean state (mergeStateStatus=$state)"
+            gh pr checks "$pr" || true
+            exit 1
+          fi
+          # Pin the squash subject/body: the default body can fold in a
+          # Co-authored-by trailer for the bot, which the attribution gate
+          # scans on the post-merge push run.
+          merged_now=0
+          for i in 1 2 3; do
+            if gh pr merge "$pr" --squash --delete-branch \
+              --subject "chore(release): bump docs manifest to $ver (#$pr)" \
+              --body "Automated docs-manifest sync for $TAG."; then
+              merged_now=1
+              break
+            fi
+            # gh pr merge fails non-zero even when the merge landed but a
+            # trailing op (e.g. --delete-branch) errored — probe state first.
+            if [ "$(gh pr view "$pr" --json state --jq '.state' 2>/dev/null || true)" = "MERGED" ]; then
+              merged_now=1
+              break
+            fi
+            [ "$i" = "3" ] || sleep 5
+          done
+          [ "$merged_now" = "1" ] || { echo "::error::bump PR #$pr merge refused after clean state"; exit 1; }
           mc=""
           for i in $(seq 1 15); do
-            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid')"
+            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid' || true)"
             [ -n "$mc" ] && break
             sleep 2
           done
