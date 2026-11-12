@@ -20,7 +20,7 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -143,10 +143,11 @@ jobs:
           # wait on mergeStateStatus rather than mergeable, which reports
           # conflicts only and stays MERGEABLE while required checks pend.
           state=""
-          for i in $(seq 1 45); do
+          merged_gate=0
+          for i in $(seq 1 100); do
             held="$(gh api "repos/${{ github.repository }}/actions/runs" \
               -f "branch=$branch" -f event=pull_request -f per_page=50 \
-              --jq '.workflow_runs[] | select(.conclusion=="action_required") | .id' 2>/dev/null || true)"
+              --jq '.workflow_runs[] | select(.status=="waiting" or .conclusion=="action_required") | .id' 2>/dev/null || true)"
             for rid in $held; do
               if err="$(gh api -X POST "repos/${{ github.repository }}/actions/runs/$rid/approve" 2>&1)"; then
                 echo "approved held run $rid"
@@ -154,7 +155,11 @@ jobs:
                 echo "::warning::approve call failed for held run $rid — $err"
               fi
             done
-            state="$(gh pr view "$pr" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null || true)"
+            state="$(gh pr view "$pr" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null)" || {
+              echo "::warning::could not read merge state for bump PR #$pr — retrying"
+              sleep 20
+              continue
+            }
             case "$state" in
               CONFLICTING|DIRTY)
                 echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
@@ -177,19 +182,18 @@ jobs:
               exit 1
             fi
             case "$state" in
-              CLEAN) break ;;
+              CLEAN) merged_gate=1; break ;;
               # BEHIND is mergeable unless the ruleset demands up-to-date
               # branches — let the merge call arbitrate once checks settle.
-              UNSTABLE|BEHIND) if [ "$pending" = "0" ]; then break; fi ;;
+              UNSTABLE|BEHIND) if [ "$pending" = "0" ]; then merged_gate=1; break; fi ;;
             esac
             sleep 20
           done
-          case "$state" in
-            CLEAN) ;;
-            UNSTABLE|BEHIND)
-              [ "$pending" = "0" ] || { echo "::error::bump PR #$pr never reached a clean state (mergeStateStatus=$state)"; gh pr checks "$pr" || true; exit 1; } ;;
-            *) echo "::error::bump PR #$pr never became mergeable (mergeStateStatus=$state)"; gh pr checks "$pr" || true; exit 1 ;;
-          esac
+          if [ "$merged_gate" != "1" ]; then
+            echo "::error::bump PR #$pr never reached a clean state (mergeStateStatus=$state)"
+            gh pr checks "$pr" || true
+            exit 1
+          fi
           # Pin the squash subject/body: the default body can fold in a
           # Co-authored-by trailer for the bot, which the attribution gate
           # scans on the post-merge push run.
@@ -212,7 +216,7 @@ jobs:
           [ "$merged_now" = "1" ] || { echo "::error::bump PR #$pr merge refused after clean state"; exit 1; }
           mc=""
           for i in $(seq 1 15); do
-            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid' 2>/dev/null || true)"
+            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid' || true)"
             [ -n "$mc" ] && break
             sleep 2
           done
