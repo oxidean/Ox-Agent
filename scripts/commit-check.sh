@@ -48,7 +48,7 @@ check_attribution() {
     # privacy relay get flagged), and a vendor token inside a bare email
     # (no <display name>) — bot forms like
     # "Co-authored-by: 175728472+Copilot@users.noreply.github.com".
-    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_+-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code|cursor|gemini|chatgpt|codex|copilot|google)\.(com|ai|dev|io)([[:space:]>]|$)|:[[:space:]]*[^<[:space:]]*('"$_VENDOR"')[^<[:space:]]*@'; then
+    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_+-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code|cursor|gemini|chatgpt|codex|copilot)\.(com|ai|dev|io)([[:space:]>]|$)|:[[:space:]]*[^<[:space:]]*('"$_VENDOR"')[^<[:space:]]*@|[a-z0-9._+-]*(ai[-_.](agent|assistant)|(agent|assistant)[-_.]ai)[a-z0-9._+-]*@'; then
         err "AI Co-authored-by trailer"
     # A bare vendor identity as the display name — "Co-authored-by:
     # Claude <noreply@anthropic.com>" hits the domain rule above; this
@@ -72,7 +72,10 @@ check_attribution() {
     fi
     # standalone "via <tool>" / "by <tool>" / "with <tool>" lines — the
     # footer regex above needs a leading verb, so a lone via-line slips.
-    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]?ai)?([^a-z0-9]|$)'; then
+    # "via"/"by" are attribution verbs — trailing context still flags.
+    # "with"/"using" open ordinary sentences too, so they only count as
+    # a signature when the tool name closes out the line.
+    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]?ai)?([^a-z0-9]|$)|^[[:space:]]*(with|using)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]?ai)?[[:space:].!,;:()]*$'; then
         err "attribution via-line"
     fi
     # bot-emoji signature: a bare 🤖 line, or 🤖 sharing a line with
@@ -87,7 +90,7 @@ check_attribution() {
         err "AI self-attribution"
     fi
     # vendor-stamped HTML comments smuggled into the message
-    if printf '%s\n' "$_msg" | grep -iqE '<!--[^>]*('"$_VENDOR"'|generated|🤖)'; then
+    if printf '%s\n' "$_msg" | grep -iqE '<!--[^>]*(generated|made|created|authored|written|produced|co-?authored|attributed|🤖)[^>]*'; then
         err "attribution HTML comment"
     fi
     # zero-width / invisible markers: U+200B..D, U+2060, U+FEFF as raw
