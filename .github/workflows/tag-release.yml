@@ -144,23 +144,31 @@ jobs:
           state=""
           for i in $(seq 1 45); do
             held="$(gh api "repos/${{ github.repository }}/actions/runs?branch=$branch&event=pull_request&per_page=50" \
-              --jq '.workflow_runs[] | select(.conclusion=="action_required") | .databaseId' 2>/dev/null || true)"
+              --jq '.workflow_runs[] | select(.conclusion=="action_required") | .id' 2>/dev/null || true)"
             for rid in $held; do
-              gh api -X POST "repos/${{ github.repository }}/actions/runs/$rid/approve" >/dev/null \
-                && echo "approved held run $rid" || true
+              if err="$(gh api -X POST "repos/${{ github.repository }}/actions/runs/$rid/approve" 2>&1)"; then
+                echo "approved held run $rid"
+              else
+                echo "::warning::approve call failed for held run $rid — $err"
+              fi
             done
             state="$(gh pr view "$pr" --json mergeStateStatus --jq '.mergeStateStatus')"
             case "$state" in
-              CLEAN|UNSTABLE) break ;;
-              CONFLICTING)
+              CONFLICTING|DIRTY)
                 echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
                 exit 1 ;;
             esac
+            # Reject on any failed check before accepting a mergeable state —
+            # CLEAN means required checks passed, but a failed optional check
+            # on the release cut should still stop the tag.
             if [ "$(gh pr checks "$pr" --json bucket --jq '[.[]|select(.bucket=="fail")]|length' 2>/dev/null || echo 0)" != "0" ]; then
               echo "::error::bump PR #$pr has a failing check — rerun tag-release"
               gh pr checks "$pr" || true
               exit 1
             fi
+            case "$state" in
+              CLEAN|UNSTABLE) break ;;
+            esac
             sleep 20
           done
           case "$state" in
