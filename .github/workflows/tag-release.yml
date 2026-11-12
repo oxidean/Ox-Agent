@@ -174,7 +174,7 @@ jobs:
             fi
             case "$state" in
               CLEAN) break ;;
-              UNSTABLE) [ "$pending" = "0" ] && break ;;
+              UNSTABLE) if [ "$pending" = "0" ]; then break; fi ;;
             esac
             sleep 20
           done
