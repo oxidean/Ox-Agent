@@ -127,14 +127,15 @@ jobs:
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -am "chore(release): bump docs manifest to $ver"
           git push -f origin "$branch"
-          pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+          pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)"
           if [ -z "$pr" ]; then
             gh pr create --base main --head "$branch" \
               --title "chore(release): bump docs manifest to $ver" \
               --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore"
             # gh pr create prints only the URL — re-read the number via list.
-            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')"
+            pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)"
           fi
+          [ -n "$pr" ] || { echo "::error::could not resolve bump PR number for $branch"; exit 1; }
           # The bump PR is bot-authored: its pull_request runs arrive held at
           # action_required (GITHUB_TOKEN can't self-trigger), so required
           # checks never report and branch policy blocks the merge. Approve
@@ -143,7 +144,8 @@ jobs:
           # conflicts only and stays MERGEABLE while required checks pend.
           state=""
           for i in $(seq 1 45); do
-            held="$(gh api "repos/${{ github.repository }}/actions/runs?branch=$branch&event=pull_request&per_page=50" \
+            held="$(gh api "repos/${{ github.repository }}/actions/runs" \
+              -f "branch=$branch" -f event=pull_request -f per_page=50 \
               --jq '.workflow_runs[] | select(.conclusion=="action_required") | .id' 2>/dev/null || true)"
             for rid in $held; do
               if err="$(gh api -X POST "repos/${{ github.repository }}/actions/runs/$rid/approve" 2>&1)"; then
@@ -152,7 +154,7 @@ jobs:
                 echo "::warning::approve call failed for held run $rid — $err"
               fi
             done
-            state="$(gh pr view "$pr" --json mergeStateStatus --jq '.mergeStateStatus')"
+            state="$(gh pr view "$pr" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null || true)"
             case "$state" in
               CONFLICTING|DIRTY)
                 echo "::error::bump PR #$pr conflicts with main — rerun tag-release"
@@ -161,6 +163,8 @@ jobs:
             # Gate on every check, not just required ones: a failed check on
             # the release cut stops the tag, and a still-pending check keeps
             # the loop waiting. A failed query is not a pass — retry it.
+            # gh pr checks exits non-zero when any check pends/fails even with
+            # --json — the read guard tests stdout, so JSON still lands first.
             if ! read -r fails pending < <(gh pr checks "$pr" --json bucket \
                 --jq '"\([.[]|select(.bucket=="fail")]|length) \([.[]|select(.bucket=="pending")]|length)"' 2>/dev/null); then
               echo "::warning::could not read checks for bump PR #$pr — retrying"
@@ -174,28 +178,41 @@ jobs:
             fi
             case "$state" in
               CLEAN) break ;;
-              UNSTABLE) if [ "$pending" = "0" ]; then break; fi ;;
+              # BEHIND is mergeable unless the ruleset demands up-to-date
+              # branches — let the merge call arbitrate once checks settle.
+              UNSTABLE|BEHIND) if [ "$pending" = "0" ]; then break; fi ;;
             esac
             sleep 20
           done
-          if [ "$state" != "CLEAN" ] && ! { [ "$state" = "UNSTABLE" ] && [ "$pending" = "0" ]; }; then
-            echo "::error::bump PR #$pr never reached a clean state (mergeStateStatus=$state)"
-            gh pr checks "$pr" || true
-            exit 1
-          fi
+          case "$state" in
+            CLEAN) ;;
+            UNSTABLE|BEHIND)
+              [ "$pending" = "0" ] || { echo "::error::bump PR #$pr never reached a clean state (mergeStateStatus=$state)"; gh pr checks "$pr" || true; exit 1; } ;;
+            *) echo "::error::bump PR #$pr never became mergeable (mergeStateStatus=$state)"; gh pr checks "$pr" || true; exit 1 ;;
+          esac
           # Pin the squash subject/body: the default body can fold in a
           # Co-authored-by trailer for the bot, which the attribution gate
           # scans on the post-merge push run.
+          merged_now=0
           for i in 1 2 3; do
-            gh pr merge "$pr" --squash --delete-branch \
+            if gh pr merge "$pr" --squash --delete-branch \
               --subject "chore(release): bump docs manifest to $ver (#$pr)" \
-              --body "Automated docs-manifest sync for $TAG." && break
-            [ "$i" = "3" ] && { echo "::error::bump PR #$pr merge refused after clean state"; exit 1; }
-            sleep 5
+              --body "Automated docs-manifest sync for $TAG."; then
+              merged_now=1
+              break
+            fi
+            # gh pr merge fails non-zero even when the merge landed but a
+            # trailing op (e.g. --delete-branch) errored — probe state first.
+            if [ "$(gh pr view "$pr" --json state --jq '.state' 2>/dev/null || true)" = "MERGED" ]; then
+              merged_now=1
+              break
+            fi
+            [ "$i" = "3" ] || sleep 5
           done
+          [ "$merged_now" = "1" ] || { echo "::error::bump PR #$pr merge refused after clean state"; exit 1; }
           mc=""
           for i in $(seq 1 15); do
-            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid')"
+            mc="$(gh pr view "$pr" --json mergeCommit,state --jq 'select(.state=="MERGED") | .mergeCommit.oid' 2>/dev/null || true)"
             [ -n "$mc" ] && break
             sleep 2
           done
