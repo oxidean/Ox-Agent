@@ -43,8 +43,12 @@ check_attribution() {
     # ban is on AI vendors, bots, and *-ai-* / [bot] addresses.
     _co=$(printf '%s\n' "$_msg" | grep -iE '^[[:space:]]*co-?authored-by:' || :)
     # Unambiguous machine signals anywhere in the trailer: [bot] tags,
-    # bot@ addresses, *-ai-integration logins, and AI-vendor domains.
-    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code)\.(com|ai|dev|io)([[:space:]>]|$)'; then
+    # bot@ addresses, *-ai-integration logins, AI-vendor domains (literal
+    # list of vendor-owned domains — never github.com, or humans on the
+    # privacy relay get flagged), and a vendor token inside a bare email
+    # (no <display name>) — bot forms like
+    # "Co-authored-by: 175728472+Copilot@users.noreply.github.com".
+    if printf '%s\n' "$_co" | grep -qiE '\[bot\]|(^|[<.[:space:]_+-])bot@|ai-integration|noreply@(anthropic|openai)\.|@(anthropic|openai|cognition|devin|codeium|windsurf|claude-code|cursor|gemini|chatgpt|codex|copilot|google)\.(com|ai|dev|io)([[:space:]>]|$)|:[[:space:]]*[^<[:space:]]*('"$_VENDOR"')[^<[:space:]]*@'; then
         err "AI Co-authored-by trailer"
     # A bare vendor identity as the display name — "Co-authored-by:
     # Claude <noreply@anthropic.com>" hits the domain rule above; this
@@ -52,7 +56,7 @@ check_attribution() {
     # CONTAIN a vendor token ("Claude Martin <claude.martin@…>") stay
     # legal per .cursor/rules/no-ai-attribution.mdc.
     elif printf '%s\n' "$_co" | sed 's/^[^:]*:[[:space:]]*//; s/<.*//' \
-        | grep -qiE '^\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]ai)?[[:space:]]*$'; then
+        | grep -qiE '^\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]?ai)?[[:space:]]*$'; then
         err "AI Co-authored-by trailer"
     fi
     # generator footers: "Generated with <tool>", "Made with: X",
@@ -68,7 +72,7 @@ check_attribution() {
     fi
     # standalone "via <tool>" / "by <tool>" / "with <tool>" lines — the
     # footer regex above needs a leading verb, so a lone via-line slips.
-    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]ai)?([^a-z0-9]|$)'; then
+    if printf '%s\n' "$_msg" | grep -qiE '^[[:space:]]*(via|by|using|with)[[:space:]]+\[?('"$_VENDOR"')\]?(\([^)]*\))?([[:space:]-]?ai)?([^a-z0-9]|$)'; then
         err "attribution via-line"
     fi
     # bot-emoji signature: a bare 🤖 line, or 🤖 sharing a line with
