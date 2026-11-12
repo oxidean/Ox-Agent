@@ -38,6 +38,24 @@ jobs:
           # run that died between tag push and dispatch) is still dispatched
           # below — tag creation is skipped, the release is not.
           existing="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)"
+          if [ -z "$existing" ]; then
+            # Recovery: the release tag sits on the docs-manifest bump merge,
+            # a direct child of HEAD. A run that died between tag push and
+            # dispatch left it there — a rerun on the same commit must find
+            # and dispatch it, not mint the next version over the same tree.
+            # Only on-main bump commits qualify: a tagged child on another
+            # branch would publish an unrelated tree under the tag.
+            git fetch origin main -q
+            for child in $(git rev-list --all --children \
+                | awk -v s="$(git rev-parse HEAD)" '$1==s {$1=""; print}'); do
+              git merge-base --is-ancestor "$child" origin/main 2>/dev/null || continue
+              git log -1 --format=%s "$child" \
+                | grep -q '^chore(release): bump docs manifest to ' || continue
+              existing="$(git tag --points-at "$child" \
+                | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV | head -n1 || true)"
+              [ -n "$existing" ] && break
+            done
+          fi
           if [ -n "$existing" ]; then
             echo "existing=$existing" >> "$GITHUB_OUTPUT"
           fi
