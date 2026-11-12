@@ -88,7 +88,7 @@ jobs:
           [ -f "$manifest" ] || { echo "no docs/site manifest — skipping"; emit "$head"; exit 0; }
           ver="${TAG#v}"
           getver() { sed -nE 's/^version[[:space:]]*:[[:space:]]*"?([^"[:space:]]*)"?[[:space:]]*$/\1/p' | head -1; }
-          current="$(getver < "$manifest")"
+          current="$(getver < "$manifest" || true)"
           if [ "$current" = "$ver" ]; then
             echo "manifest already at $ver"
             emit "$head"
@@ -103,11 +103,13 @@ jobs:
             # Tag the commit that set the version, not the latest commit
             # that touched the manifest — a later non-version edit must
             # not become the release cut.
+            target=""
             for c in $(git rev-list --first-parent origin/main -- "$manifest"); do
               v="$(git show "$c:$manifest" 2>/dev/null | getver || true)"
               [ "$v" = "$ver" ] || break
               target="$c"
             done
+            [ -n "$target" ] || { echo "::error::no commit on main carries manifest version $ver"; exit 1; }
             emit "$target"
             exit 0
           fi
@@ -150,7 +152,8 @@ jobs:
           if [ -z "$pr" ]; then
             gh pr create --base main --head "$branch" \
               --title "chore(release): bump docs manifest to $ver" \
-              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore"
+              --body "Automated docs-manifest sync for $TAG — the docs bundle packs from the tagged tree and gates on manifest.version == tag. @coderabbitai ignore" \
+              || { echo "::error::gh pr create failed for $branch"; exit 1; }
             # gh pr create prints only the URL — re-read the number via list.
             pr="$(resolve_pr)" || { echo "::error::post-create bump PR lookup failed for $branch"; exit 1; }
           fi
