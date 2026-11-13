@@ -38,6 +38,7 @@ type PacketContext struct {
 	Project      map[string]any `json:"project"`
 	Standards    []string       `json:"standards,omitempty"`
 	Decisions    []string       `json:"decisions,omitempty"`
+	Specs        []string       `json:"specs,omitempty"`
 	References   []string       `json:"references,omitempty"`
 	PriorOutputs []PriorOutput  `json:"prior_outputs,omitempty"`
 	Inputs       []PacketInput  `json:"inputs,omitempty"`
@@ -136,6 +137,7 @@ func Compile(root string, item *state.WorkItem, skill, stage string, budget int,
 	}{
 		{"standard", &packet.Context.Standards},
 		{"decision", &packet.Context.Decisions},
+		{"spec", &packet.Context.Specs},
 		{"other", &packet.Context.References},
 	} {
 		entries, err := Entries(root, kind.kind)

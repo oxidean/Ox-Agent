@@ -46,6 +46,8 @@ func kindOf(rel string) string {
 		return "standard"
 	case hasPrefix(rel, "context/decisions/"):
 		return "decision"
+	case hasPrefix(rel, "context/specs/"):
+		return "spec"
 	case hasPrefix(rel, "discussions/"):
 		return "discussion"
 	default:

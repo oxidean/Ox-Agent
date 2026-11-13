@@ -3,6 +3,7 @@ package project
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -69,7 +70,7 @@ func Doctor(root string) *DoctorReport {
 		}
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
 	}
-	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml", "README.md"} {
+	for _, seed := range []string{"framework.yaml", "config.yaml", "policy.yaml", ".gitignore", ".gitattributes", "assets.lock", "state/events.ndjson", "context/project.yaml", "context/specs/README.md", "README.md"} {
 		_, err := os.Stat(filepath.Join(base, filepath.FromSlash(seed)))
 		report.add("file "+seed, wrapMissing(err, "missing"), true)
 	}
@@ -88,6 +89,7 @@ func Doctor(root string) *DoctorReport {
 	report.checkAssets(base)
 	report.checkAssetModes(base)
 	report.checkIntegration(root)
+	report.checkSourceControl(root)
 	return report
 }
 
@@ -507,6 +509,40 @@ func (r *DoctorReport) checkIntegration(root string) {
 	}
 	if !wired {
 		r.Warnings = append(r.Warnings, "no harness integration detected; run `ox-agent integrate` so agents discover the materialized skills")
+	}
+}
+
+// checkSourceControl nudges projects toward committing the .ox-agent trail:
+// work artifacts and promoted specs are the repo's spec record, so a git
+// rule covering the state dirs is a finding and a wholly untracked tree a
+// warning. Skipped entirely when git is unavailable.
+func (r *DoctorReport) checkSourceControl(root string) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		return
+	}
+	inside, err := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree").Output()
+	if err != nil || strings.TrimSpace(string(inside)) != "true" {
+		r.Warnings = append(r.Warnings, "not inside a git work tree — .ox-agent has no source-control trail; commit it so work artifacts and specs travel with the project")
+		return
+	}
+	probes := []string{".ox-agent", ".ox-agent/work", ".ox-agent/state", ".ox-agent/state/events.ndjson", ".ox-agent/discussions", ".ox-agent/context"}
+	ignored, err := exec.Command(git, append([]string{"-C", root, "check-ignore", "--"}, probes...)...).Output()
+	if err == nil && len(strings.TrimSpace(string(ignored))) > 0 {
+		paths := strings.Split(strings.TrimSpace(string(ignored)), "\n")
+		r.add("source control", fmt.Errorf("git rules ignore .ox-agent paths: %v — the spec trail must be committed", paths), false)
+		return
+	}
+	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() > 1 {
+		return // check-ignore itself failed; nothing reliable to report
+	}
+	tracked, err := exec.Command(git, "-C", root, "ls-files", "--", ".ox-agent").Output()
+	if err != nil {
+		return
+	}
+	r.add("source control", nil, false)
+	if len(strings.TrimSpace(string(tracked))) == 0 {
+		r.Warnings = append(r.Warnings, "no .ox-agent files are tracked by git — commit them so work artifacts, specs, and the event journal travel with the project")
 	}
 }
 

@@ -89,8 +89,8 @@ the recorded output and applies its next action.
 ├── workflows/           # lifecycle stage and gate definitions
 ├── pipelines/           # ordered execution plans
 ├── lifecycle/           # state definitions
-├── context/             # project standards and context
-├── work/                # active and archived work items
+├── context/             # standards, decisions, and promoted specs (specs/)
+├── work/                # the spec trail: active + archived work items
 ├── state/               # append-only event journal and snapshots
 ├── integrations/        # harness configuration
 └── runtime/             # generated packets, runs, cache, and locks
