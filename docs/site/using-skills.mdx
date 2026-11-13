@@ -44,17 +44,18 @@ is needed (`ox-agent start`), compiles the bounded context packet
 `ox-agent run collect` validates and journals it. You never touch
 `packet.json` — that contract belongs to the harness.
 
-What you see is the artifact the run leaves: `brainstorm.md`, `spec.md`,
-`plan.md` under `.ox-agent/work/active/WI-NNNN-<slug>/artifacts/`, all
-committed with the repo. Finished items archive under `work/archived/` —
+What you see is the artifact the run leaves — e.g. `brainstorm.md`,
+`spec.md`, `plan.md` under
+`.ox-agent/work/active/WI-NNNN-<slug>/artifacts/`, all committed with
+the repo. Finished items archive under `work/archived/` —
 the permanent spec trail — and specs worth reusing promote into
 `context/specs/` where future packets pick them up.
 
 ## When a skill needs you
 
 - A skill that needs an answer returns `await_input`; the runtime files a
-  durable request and the run stays pending rather than expiring your
-  chat turn. List and answer:
+  durable request and marks the run `retry` — still dispatchable once
+  answered — rather than expiring your chat turn. List and answer:
 
   ```bash
   ox-agent input list
@@ -92,8 +93,9 @@ Drop a directory with `skill.yaml`, `SKILL.md`, and `schemas/` into
 never touches it. `ox-agent skills install <git-url>` pins remote skills
 to a resolved commit SHA in `remote-skills.lock`. To customize a bundled
 skill, fork it under a new directory name —
-[Architecture](./architecture/) covers the rename contract — because
-in-place edits to core skills reconcile away on `init --repair --sync`.
+[docs/architecture.md](https://github.com/oxidean/Ox-Agent/blob/main/docs/architecture.md)
+covers the rename contract — because in-place edits to core skills
+reconcile away on `init --repair --sync`.
 
 <Aside type="tip">
 	Working inside an agent that can't invoke skills by name? Ask it to

@@ -19,14 +19,15 @@ Run inside the repository you want to manage:
 
 ```bash
 ox-agent init
-ox-agent doctor          # → project healthy
 ox-agent init --integrate   # optional: wire .agents/skills + AGENTS.md
+ox-agent doctor             # → project healthy
 ```
 
 `init` materializes the skill library, lifecycle, workflows, pipelines,
-schemas, and policy into `.ox-agent/`. `--integrate` symlinks
-`.agents/skills` (and `.claude/skills`) at `.ox-agent/skills` and adds a
-managed block to `AGENTS.md` so coding agents discover the toolkit.
+schemas, and policy into `.ox-agent/`. `--integrate` links
+`.agents/skills` → `.ox-agent/skills` and `.claude/skills` →
+`.agents/skills`, and adds a managed block to `AGENTS.md` so coding
+agents discover the toolkit.
 Without `--integrate` nothing outside `.ox-agent/` advertises the toolkit —
 `doctor` warns when no integration is detected. On Windows, symlink creation
 needs Developer Mode or an elevated shell; `integrate` reports a warning and
@@ -120,7 +121,7 @@ ox-agent state explain WI-0001
 dispatch every ready step up to `policy.budgets.max_parallel_agents`:
 
 ```bash
-ox-agent review WI-0001    # dispatched: code-review → run_...
+ox-agent review WI-0001    # dispatched: review → run_... (code-review)
 ox-agent run pending       # anything awaiting output.json
 ox-agent ship WI-0001      # verify → ship steps in dependency order
 ```

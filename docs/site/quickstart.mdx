@@ -67,7 +67,7 @@ through the configured harness adapter; the agent writes `output.json`;
 `run collect` schema-validates it, journals the result, and applies
 `next_action` (`advance_stage`, `retry`, `escalate`, `await_input`,
 `complete`). When every skill mapped to a stage is collected, the work
-item auto-advances — discovery → brainstorm → specification → planning →
+item auto-advances — discovery → brainstorming → specification → planning →
 implementation → verification → shipping → retrospective.
 
 `review` and `ship` run the bundled pipeline DAGs, dispatching every
@@ -84,10 +84,12 @@ is the boundary.
 ├── framework.yaml          # binary + schema compatibility (required_version)
 ├── config.yaml             # workflow profile, stage_skills
 ├── policy.yaml             # autonomy + budgets (max_parallel_agents)
+├── assets.lock             # hash manifest of ox-owned assets
 ├── lifecycle/workflow.yaml # states + legal transition edges + gates
 ├── skills/                 # materialized skill packages (owned by the binary)
-├── workflows/              # profiles mapping stages to skills
+├── workflows/              # stage-order profiles
 ├── pipelines/              # DAGs of skill steps (review, ship)
+├── schemas/                # input/output contract schemas
 ├── integrations/           # harness adapters (manual.yaml default)
 ├── context/                # standards, decisions, specs/, project.yaml, index
 ├── work/{active,archived}/ # the spec trail: work items + artifacts
@@ -101,8 +103,8 @@ is the boundary.
 
 <Aside type="tip">
 	`.ox-agent/` is meant to be committed — it is the project's spec
-	trail. `work/` keeps every item's `spec.md`, `plan.md`, and
-	artifacts through `work/archived/`; specs worth handing to future
+	trail. `work/` keeps each item's artifacts — e.g. `spec.md`,
+	`plan.md` — through `work/archived/`; specs worth handing to future
 	work promote into `context/specs/`. The scaffold's `.gitattributes`
 	marks `state/events.ndjson` `merge=union` so the append-only journal
 	merges cleanly across branches; only generated `runtime/` is

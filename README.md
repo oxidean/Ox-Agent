@@ -91,10 +91,12 @@ needs an answer. [docs/cli.md](docs/cli.md) covers the full surface.
 ├── framework.yaml       # binary and schema compatibility
 ├── config.yaml          # project configuration
 ├── policy.yaml          # autonomy and approval policy
+├── assets.lock          # hash manifest of ox-owned assets
 ├── skills/              # repository-local skill definitions
-├── workflows/           # lifecycle stage and gate definitions
+├── workflows/           # stage-order profiles
 ├── pipelines/           # ordered execution plans
-├── lifecycle/           # state definitions
+├── lifecycle/           # states, transition edges, and gates
+├── schemas/             # input/output contract schemas
 ├── context/             # project standards and context
 ├── work/                # active and archived work items
 ├── state/               # append-only event journal and snapshots
@@ -162,7 +164,7 @@ Available in the standalone distribution:
 - Pipeline DAG execution honoring `policy.budgets.max_parallel_agents`.
 - Durable discussion threads with compacted summaries.
 - Durable human-input requests for async harness hosts — `await_input`
-  leaves runs pending instead of blocking the turn.
+  marks runs `retry` (still dispatchable) instead of blocking the turn.
 - Harness dispatch through `manual`, `spawn-cli`, and `webhook` adapters.
 - Remote skill installs pinned to a resolved commit SHA with provenance
   tracked in `remote-skills.lock`.

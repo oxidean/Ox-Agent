@@ -47,7 +47,7 @@ Create a work item in lifecycle state `intake`. Returns an id like `WI-0001`.
 ### `ox-agent status [work-item]`
 
 Without arguments, list active work items. With an id, show the full record:
-state, profile, current stage, blocked_from, and artifacts.
+state, profile, current stage, blocked_from, and the last few journal events.
 
 ### `ox-agent transition <work-item> <state>`
 
@@ -182,7 +182,8 @@ Requests are filed automatically when they are needed: a `human`-gated
 the pending action (`respond IN-.... --by <you> --approve` completes it),
 a run collected with a blocked/escalated outcome leaves a clarification
 request carrying the reason, and `next_action.type: await_input` files a
-clarification (or decision, when `next_action.options` is given) without
+clarification (or decision, when two or more `next_action.options` are
+given) without
 blocking the item. `wait` polls with exponential backoff so agents never
 hot-loop or expire a synchronous ask — a bounded `--timeout` expiring
 reports the request as still `pending` rather than failing, so async
@@ -211,8 +212,8 @@ to. With a work item (id or directory name) only its events print.
 `--type <prefix>` filters by event-type prefix (e.g. `work_item`), `--json`
 emits the raw journal lines.
 
-Snapshots are written under `.ox-agent/state/snapshots/` and journal
-`snapshot.written` events.
+Snapshots are written under `.ox-agent/state/snapshots/`; `state replay`
+resumes from them when the journal prefix is verifiably intact.
 
 ## Context commands
 
