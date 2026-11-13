@@ -12,6 +12,8 @@ pages:
     link: /install/
   - label: Quickstart
     link: /quickstart/
+  - label: Using skills
+    link: /using-skills/
   - label: CLI
     link: /cli/
   - label: Architecture

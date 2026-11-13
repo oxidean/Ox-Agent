@@ -32,11 +32,40 @@ Without `--integrate` nothing outside `.ox-agent/` advertises the toolkit —
 needs Developer Mode or an elevated shell; `integrate` reports a warning and
 leaves the rest of the wiring in place when it cannot link.
 
-The scaffold commits to git: `.ox-agent/.gitignore` keeps `runtime/` out;
-`.gitattributes` marks the event journal and discussion threads `merge=union`
-so append-only files merge cleanly across branches.
+The scaffold commits to git: `.ox-agent/.gitignore` keeps only generated
+`runtime/` out, and `.gitattributes` marks `state/events.ndjson`
+`merge=union` so the append-only journal merges cleanly across branches.
+Everything else — work items, the journal, promoted specs under
+`context/specs/` — is the project's spec trail and belongs in history.
 
 ## Your first work item
+
+There are two ways to drive a work item: invoke the skills inside your
+agent, or run the dispatch loop from the shell yourself. Most people do
+the former; the loop below is what the agent executes on your behalf.
+
+### In your agent
+
+`init --integrate` linked the materialized skills where harnesses look for
+them — `.agents/skills`, `.claude/skills`, and a managed `AGENTS.md`
+block. Open the repository in your agent and describe the work:
+
+```text
+> /brainstorm add rate limiting to the API
+```
+
+The agent files the work item (`ox-agent start`), dispatches the
+stage-mapped skill, writes its result, and collects it — the
+`run`/`run collect` loop below — for every stage until the item ships.
+When a skill needs a decision it files a durable request instead of
+blocking your chat; answer whenever:
+
+```bash
+ox-agent input list
+ox-agent input respond IN-0001 --by <you> --answer "..."
+```
+
+### The dispatch loop (what the agent runs)
 
 ```bash
 ox-agent start "Add rate limiting to the API"

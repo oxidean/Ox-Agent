@@ -40,6 +40,10 @@ The binary never reasons about the work; it resolves configuration,
 enforces schemas, sequences stages, and journals events. The harness, any
 agent that can read a file and write a file, does the reasoning.
 
+Two surfaces share the one binary: the commands you type to set up and
+steer (`init`, `doctor`, `status`, `input respond`), and the skill
+contracts your agent executes when you invoke a skill inside its harness.
+
 ## Where to next
 
 <CardGrid>
@@ -52,6 +56,11 @@ agent that can read a file and write a file, does the reasoning.
 		title="Quickstart"
 		href="./quickstart/"
 		description="init, doctor, and your first work item."
+	/>
+	<LinkCard
+		title="Using skills"
+		href="./using-skills/"
+		description="Invoke the skill set from inside your agent harness."
 	/>
 	<LinkCard
 		title="CLI surface"

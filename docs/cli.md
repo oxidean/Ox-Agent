@@ -4,6 +4,12 @@ Ox-Agent is a globally installed Go binary. Run it from any repository after
 installing the release binary. Commands that touch project state operate on
 the nearest `.ox-agent/` directory.
 
+Two audiences share this surface. The commands a person types are mostly
+setup and steering — `init`, `doctor`, `start`, `status`, `input respond`,
+`update`. `run`, `run collect`, `context compile`, and the pipeline
+commands are the agent/harness contract: your agent executes them when you
+invoke a skill, and integrators wire them to adapters.
+
 ## Project commands
 
 ### `ox-agent init`

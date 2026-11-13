@@ -1,76 +1,81 @@
 ---
 title: Ox-Agent quickstart
-description: Initialize a repository, validate the setup, and drive your first work item through the dispatch loop.
+description: Install the binary, initialize a repository, and drive your first work item from inside your agent.
 ---
 
 import { Aside, Steps } from "@astrojs/starlight/components";
 
 <Steps>
-1. From the repository you want to manage:
+1. Install the binary:
 
    ```bash
-   ox-agent init
+   curl -fsSL \
+     https://github.com/oxidean/Ox-Agent/releases/latest/download/install.sh \
+     | bash
+   ```
+
+   It lands in `~/.local/bin` — the only thing you install globally.
+   Windows uses `install.ps1`; [Install](./install/) covers platforms,
+   pinning, and `update`.
+
+2. From the repository you want to manage:
+
+   ```bash
+   ox-agent init --integrate
    ox-agent doctor
    ```
 
-   `init` is non-destructive and refuses to overwrite an existing
-   `.ox-agent/`. `ox-agent init --integrate` additionally wires
-   `AGENTS.md` and `.agents/skills` so agent harnesses discover the
-   materialized skills; `doctor` warns when no integration is detected.
+   `init` materializes skills, workflows, and contracts into `.ox-agent/`
+   and refuses to overwrite an existing one. `--integrate` wires
+   `AGENTS.md` and `.agents/skills` (plus `.claude/skills`) so your agent
+   harness discovers the materialized skills. `doctor` validates the
+   setup — it warns when no integration is detected, and fails when a git
+   rule would keep `.ox-agent/` out of source control.
 
-2. Open a work item:
+3. Open the repository in your agent and invoke a skill:
 
-   ```bash
-   ox-agent start "Add a health-check endpoint"
-   # → WI-0001: Add a health-check endpoint
+   ```text
+   > /brainstorm add a health-check endpoint
    ```
 
-3. Dispatch the first stage:
+   Skills are how you talk to the system: `/brainstorm` for divergent
+   options, `/specify` for the spec, `/multi-stage-plan` for the staged
+   implementation plan. [Using skills](./using-skills/) maps the bundled
+   set to the lifecycle stages they serve.
+
+4. Answer when it asks. A skill that needs a decision files a durable
+   request instead of blocking your chat:
 
    ```bash
-   ox-agent run WI-0001
-   # run_... dispatched (adapter: manual)
-   #   packet:    .ox-agent/runtime/runs/run_.../packet.json
-   #   write result to: .ox-agent/runtime/runs/run_.../output.json
+   ox-agent input list
+   ox-agent input respond IN-0001 --by <you> --answer "..."
    ```
 
-   With the default `manual` adapter, hand `packet.json` and the mapped
-   `SKILL.md` to any agent (or work the skill yourself), then write the
-   skill's output JSON to `output.json`.
-
-4. Collect and loop:
+5. Watch the trail:
 
    ```bash
-   ox-agent run collect run_...
+   ox-agent status         # active work items
+   ox-agent events WI-0001 # the journal so far
    ```
-
-   `collect` validates the output against the skill's
-   `schemas/output.schema.json`, journals the result, and applies its
-   `next_action`. When every skill for the stage is collected the work
-   item auto-advances; `ox-agent advance`, `transition`, `review`, and
-   `ship` move it along the lifecycle. `ox-agent run pending` lists runs
-   still awaiting output.
 </Steps>
 
-Human-gated transitions file a durable approval request when no `--by` is
-given: `ox-agent input list` shows it, and
-`ox-agent input respond IN-0001 --by <you> --approve` completes it
-whenever answered. Automation should treat that exit as "waiting on the
-human", not a failure.
+## What your agent does under the hood
 
-## Pipelines
+Every skill invocation runs the same contract. `ox-agent run` compiles a
+bounded packet — `context`, `constraints`, `output` — and dispatches it
+through the configured harness adapter; the agent writes `output.json`;
+`run collect` schema-validates it, journals the result, and applies
+`next_action` (`advance_stage`, `retry`, `escalate`, `await_input`,
+`complete`). When every skill mapped to a stage is collected, the work
+item auto-advances — discovery → brainstorm → specification → planning →
+implementation → verification → shipping → retrospective.
 
-`review` and `ship` run the bundled pipelines: DAGs of skill steps that
-dispatch every ready step up to `policy.budgets.max_parallel_agents`:
-
-```bash
-ox-agent review WI-0001    # dispatched: code-review → run_...
-ox-agent run pending       # anything awaiting output.json
-ox-agent ship WI-0001      # verify → ship steps in dependency order
-```
-
-Keep invoking the pipeline command and collecting runs until it prints
-`pipeline <name> complete`.
+`review` and `ship` run the bundled pipeline DAGs, dispatching every
+ready step up to `policy.budgets.max_parallel_agents`; `ox-agent run
+pending` lists runs still awaiting output. The [CLI reference](./cli/)
+covers the adapters (`manual`, `spawn-cli`, `webhook`) and the full
+command surface; [Architecture](./architecture/) explains why the packet
+is the boundary.
 
 ## What lands in the repo
 
@@ -84,8 +89,8 @@ Keep invoking the pipeline command and collecting runs until it prints
 ├── workflows/              # profiles mapping stages to skills
 ├── pipelines/              # DAGs of skill steps (review, ship)
 ├── integrations/           # harness adapters (manual.yaml default)
-├── context/                # standards, decisions, project.yaml, index
-├── work/{active,archived}/ # work items: index.json + artifacts
+├── context/                # standards, decisions, specs/, project.yaml, index
+├── work/{active,archived}/ # the spec trail: work items + artifacts
 ├── state/
 │   ├── events.ndjson       # append-only journal, the state spine
 │   ├── snapshots/          # folded state checkpoints
@@ -95,11 +100,13 @@ Keep invoking the pipeline command and collecting runs until it prints
 ```
 
 <Aside type="tip">
-	`.ox-agent/` is meant to be committed. Work items, decisions, and
-	standards are repo history like the code itself. The scaffold's
-	`.gitattributes` marks the event journal and discussion threads
-	`merge=union` so append-only files merge cleanly; `runtime/` is
-	gitignored generated scratch.
+	`.ox-agent/` is meant to be committed — it is the project's spec
+	trail. `work/` keeps every item's `spec.md`, `plan.md`, and
+	artifacts through `work/archived/`; specs worth handing to future
+	work promote into `context/specs/`. The scaffold's `.gitattributes`
+	marks `state/events.ndjson` `merge=union` so the append-only journal
+	merges cleanly across branches; only generated `runtime/` is
+	gitignored.
 </Aside>
 
 ## Maintaining the skill set
