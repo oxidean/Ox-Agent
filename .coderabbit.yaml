@@ -11,6 +11,15 @@ reviews:
 
   auto_approvals:
     enabled: true
+  # Auto review disabled — reviews trigger manually via `@coderabbitai review`
+  # on the PR. Keeps fair-usage quota for deliberate reviews instead of
+  # burning it on every push during review loops.
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+    ignore_title_keywords: []
+    drafts: false
+    base_branches: []
   pre_merge_checks:
     docstrings:
       # CLI/toolchain repo — doc comments welcome but unmeasured (same
