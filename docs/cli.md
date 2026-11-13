@@ -225,6 +225,10 @@ Entries classify by path: `context/standards/` → `standard`,
 else `other`. Compiled packets hand standards, decisions, and specs to skills
 as named context lists; `other` lands under `context.references`.
 
+The index is a stored catalog: `context compile` reads it as written, so
+rerun `context index` after adding or changing files under `context/` and
+`discussions/` — otherwise new entries stay out of compiled packets.
+
 ### `ox-agent context compile <work-item>`
 
 Compile a token-budgeted context packet for `--skill` at the work item's

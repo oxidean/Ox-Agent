@@ -526,8 +526,20 @@ func (r *DoctorReport) checkSourceControl(root string) {
 		r.Warnings = append(r.Warnings, "not inside a git work tree — .ox-agent has no source-control trail; commit it so work artifacts and specs travel with the project")
 		return
 	}
-	probes := []string{".ox-agent", ".ox-agent/work", ".ox-agent/state", ".ox-agent/state/events.ndjson", ".ox-agent/discussions", ".ox-agent/context"}
-	ignored, err := exec.Command(git, append([]string{"-C", root, "check-ignore", "--"}, probes...)...).Output()
+	// Probe real artifact paths beneath each protected dir, not only the
+	// dirs: a rule like `.ox-agent/work/**` ignores contents while leaving
+	// the dir itself trackable, so dir-only probes miss it. `--no-index`
+	// keeps tracked probes eligible — plain check-ignore skips paths already
+	// in the index, which would hide a rule added after the trail committed.
+	probes := []string{
+		".ox-agent",
+		".ox-agent/work/active/WI-1/spec.md",
+		".ox-agent/state/events.ndjson",
+		".ox-agent/discussions/general.yaml",
+		".ox-agent/context/project.yaml",
+		".ox-agent/context/specs/README.md",
+	}
+	ignored, err := exec.Command(git, append([]string{"-C", root, "check-ignore", "--no-index", "--"}, probes...)...).Output()
 	if err == nil && len(strings.TrimSpace(string(ignored))) > 0 {
 		paths := strings.Split(strings.TrimSpace(string(ignored)), "\n")
 		r.add("source control", fmt.Errorf("git rules ignore .ox-agent paths: %v — the spec trail must be committed", paths), false)

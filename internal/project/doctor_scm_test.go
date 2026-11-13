@@ -51,6 +51,7 @@ func hasWarning(report *DoctorReport, substr string) bool {
 // TestDoctorSourceControlNotARepo verifies a project outside git gets the
 // nudge as a warning, never a failed check.
 func TestDoctorSourceControlNotARepo(t *testing.T) {
+	gitOrSkip(t)
 	root := t.TempDir()
 	if err := Init(root); err != nil {
 		t.Fatalf("Init() error = %v", err)
@@ -84,6 +85,47 @@ func TestDoctorSourceControlIgnored(t *testing.T) {
 	}
 	if !strings.Contains(check.Detail, ".ox-agent") {
 		t.Fatalf("check detail missing paths: %s", check.Detail)
+	}
+}
+
+// TestDoctorSourceControlGlobRule verifies a contents-only glob rule
+// (`.ox-agent/work/**`) still fails the check — dir-level probes miss it,
+// so the check must probe artifact paths beneath the protected dirs.
+func TestDoctorSourceControlGlobRule(t *testing.T) {
+	git := gitOrSkip(t)
+	root := t.TempDir()
+	runGit(t, git, root, "init", "-q")
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".ox-agent/work/**\n"), 0o644); err != nil {
+		t.Fatalf("writing .gitignore: %v", err)
+	}
+	report := Doctor(root)
+	check := findCheck(report, "source control")
+	if check == nil || check.OK {
+		t.Fatalf("contents-only glob not flagged: %+v", report.Checks)
+	}
+}
+
+// TestDoctorSourceControlTrackedIgnored verifies a rule added after the
+// trail is staged still fails — plain check-ignore skips indexed paths, so
+// the check must evaluate rules independently of the index.
+func TestDoctorSourceControlTrackedIgnored(t *testing.T) {
+	git := gitOrSkip(t)
+	root := t.TempDir()
+	runGit(t, git, root, "init", "-q")
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	runGit(t, git, root, "add", ".ox-agent")
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".ox-agent/state/\n"), 0o644); err != nil {
+		t.Fatalf("writing .gitignore: %v", err)
+	}
+	report := Doctor(root)
+	check := findCheck(report, "source control")
+	if check == nil || check.OK {
+		t.Fatalf("rule over tracked paths not flagged: %+v", report.Checks)
 	}
 }
 

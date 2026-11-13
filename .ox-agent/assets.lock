@@ -31,7 +31,7 @@
     "skills/adr/schemas/input.schema.json": "sha256:6c142e0110f3f7662c76a23a7fc97b4d3dab6f4e238c810cb2712992a0d3548b",
     "skills/adr/schemas/output.schema.json": "sha256:722b541997c61a3af2cf01e196cebabcdabfcdf1f81588754307f6ef8fd04aa7",
     "skills/adr/skill.yaml": "sha256:70ffbfb7ada166f059b20f6d35b2847c104cc216e4f8a688bc7c12e44d894d8a",
-    "skills/brainstorm/SKILL.md": "sha256:c45dd38c747f83bec42ecb6b96b2f693e7cd4ec226692e8e72b38160efdbdfe0",
+    "skills/brainstorm/SKILL.md": "sha256:09e666f85a652eb2aa569d4ed623f4760cdb2b386aeb796a397e1135eb66dc00",
     "skills/brainstorm/evals/evals.yaml": "sha256:16374187765a2f4fe45fcd5af9c4bd1427405d5fddca6fa98301ba2028b34e96",
     "skills/brainstorm/schemas/input.schema.json": "sha256:3976eaf87347208d0fc66b6408a780401ab35133d9dd777c2ce1a0e51990ac4d",
     "skills/brainstorm/schemas/output.schema.json": "sha256:70ad1b667a07f7c08b90e629ef873c18ae1a09bafa9861f783e1d6d0b08271f1",
