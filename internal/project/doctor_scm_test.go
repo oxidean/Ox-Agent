@@ -129,6 +129,26 @@ func TestDoctorSourceControlTrackedIgnored(t *testing.T) {
 	}
 }
 
+// TestDoctorFreshClone verifies a git clone of a committed project passes
+// doctor: .gitkeep sentinels carry the required-but-initially-empty dirs,
+// and the gitignored runtime/ tree is never required.
+func TestDoctorFreshClone(t *testing.T) {
+	git := gitOrSkip(t)
+	src := t.TempDir()
+	runGit(t, git, src, "init", "-q")
+	if err := Init(src); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	runGit(t, git, src, "add", "-A")
+	runGit(t, git, src, "-c", "user.email=ox-agent@example.invalid", "-c", "user.name=ox-agent test", "commit", "-qm", "scaffold")
+	parent := t.TempDir()
+	runGit(t, git, parent, "clone", "-q", src, "clone")
+	report := Doctor(filepath.Join(parent, "clone"))
+	if !report.Healthy() {
+		t.Fatalf("fresh clone unhealthy: %+v", report.Checks)
+	}
+}
+
 // TestDoctorSourceControlUntracked verifies an inited-but-uncommitted project
 // passes the check with the commit nudge as a warning, and that staging
 // .ox-agent clears it.

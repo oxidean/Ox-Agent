@@ -42,6 +42,58 @@ func TestInitDoctor(t *testing.T) {
 	}
 }
 
+// TestInitSeedsGitkeep verifies every required-but-initially-empty scaffold
+// dir carries a .gitkeep sentinel — git drops empty directories on clone,
+// so without sentinels a fresh clone loses dirs doctor requires. runtime/
+// is not scaffolded at all: it is gitignored generated state every writer
+// recreates on demand.
+func TestInitSeedsGitkeep(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	for _, dir := range gitkeepDirs {
+		target := filepath.Join(base, filepath.FromSlash(dir), ".gitkeep")
+		if _, err := os.Stat(target); err != nil {
+			t.Fatalf("%s/.gitkeep missing: %v", dir, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "runtime")); !os.IsNotExist(err) {
+		t.Fatal("runtime/ scaffolded; it must stay generated on demand")
+	}
+}
+
+// TestRepairRestoresGitkeep verifies --repair rewrites a missing .gitkeep
+// sentinel so the recovered dir persists through git again.
+func TestRepairRestoresGitkeep(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	target := filepath.Join(base, "work", "active", ".gitkeep")
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("removing .gitkeep: %v", err)
+	}
+	report, err := Repair(root, false)
+	if err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	found := false
+	for _, rel := range report.SeedsWritten {
+		if rel == "work/active/.gitkeep" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf(".gitkeep absent from SeedsWritten: %v", report.SeedsWritten)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf(".gitkeep not restored: %v", err)
+	}
+}
+
 // TestInitIsNonDestructive verifies init refuses to overwrite an existing project.
 func TestInitIsNonDestructive(t *testing.T) {
 	root := t.TempDir()

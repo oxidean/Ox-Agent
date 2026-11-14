@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oxidean/Ox-Agent/internal/input"
@@ -65,6 +66,22 @@ func TestIndexClassifiesKinds(t *testing.T) {
 	}
 	if _, changed, _, err := Write(root, index); err != nil || changed != 0 {
 		t.Fatalf("first Write() = changed %d, err %v; want 0 additions counted as new", changed, err)
+	}
+}
+
+// TestIndexSkipsDotfiles verifies sentinels and OS noise never index as
+// context — a .gitkeep under standards/ or discussions/ must not reach
+// packets as a standard or a thread.
+func TestIndexSkipsDotfiles(t *testing.T) {
+	root := initProject(t)
+	index, err := Build(root)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, f := range index.Files {
+		if strings.HasPrefix(filepath.Base(f.Path), ".") {
+			t.Fatalf("dotfile indexed: %s", f.Path)
+		}
 	}
 }
 

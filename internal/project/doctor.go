@@ -63,7 +63,8 @@ func Doctor(root string) *DoctorReport {
 	for _, dir := range scaffoldDirs {
 		_, err := os.Stat(filepath.Join(base, dir))
 		if dir == "state/input" && os.IsNotExist(err) {
-			// Requests are created on demand; a fresh clone legitimately
+			// Requests are created on demand and new scaffolds carry a
+			// .gitkeep, but a clone of an older project legitimately
 			// lacks the directory — report ok rather than missing.
 			report.add("dir "+dir, nil, true)
 			continue

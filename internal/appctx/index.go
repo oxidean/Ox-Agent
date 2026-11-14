@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -71,6 +72,12 @@ func Build(root string) (*Index, error) {
 				return err
 			}
 			if info.IsDir() {
+				return nil
+			}
+			// Dotfiles are sentinels and OS noise, not context: indexing a
+			// .gitkeep would hand skills a placeholder as a standard or a
+			// discussion thread.
+			if strings.HasPrefix(info.Name(), ".") {
 				return nil
 			}
 			rel, err := filepath.Rel(base, path)

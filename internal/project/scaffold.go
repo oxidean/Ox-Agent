@@ -79,12 +79,23 @@ func requiredVersionRange() string {
 	return fmt.Sprintf(">=%s <%s.%d.0", floor, parts[0], minor+1)
 }
 
-// scaffoldDirs lists the directories every project scaffold provides.
+// scaffoldDirs lists the committed directories every project scaffold
+// provides. runtime/ is deliberately absent: it holds generated state the
+// scaffold .gitignore excludes and every writer recreates on demand, so
+// pre-creating it only made doctor require what a fresh clone can never
+// carry.
 var scaffoldDirs = []string{
 	"skills", "work/active", "work/archived", "context/standards",
 	"context/decisions", "context/specs", "lifecycle", "workflows", "pipelines",
 	"discussions", "state", "state/snapshots", "state/input", "integrations",
-	"runtime/packets", "runtime/runs", "runtime/cache", "runtime/locks",
+}
+
+// gitkeepDirs are the scaffold dirs that start empty but must persist
+// through source control: git drops empty directories on clone, so each
+// gets a .gitkeep sentinel.
+var gitkeepDirs = []string{
+	"work/active", "work/archived", "context/standards", "context/decisions",
+	"discussions", "state/snapshots", "state/input",
 }
 
 // Init materializes a new .ox-agent project scaffold at dir.
@@ -222,6 +233,11 @@ func writeSeeds(base, project string) error {
 	specsReadme := filepath.Join(base, "context", "specs", "README.md")
 	if err := os.WriteFile(specsReadme, []byte(specsDirReadme), 0o644); err != nil {
 		return fmt.Errorf("writing context/specs/README.md: %w", err)
+	}
+	for _, dir := range gitkeepDirs {
+		if err := os.WriteFile(filepath.Join(base, filepath.FromSlash(dir), ".gitkeep"), nil, 0o644); err != nil {
+			return fmt.Errorf("writing %s/.gitkeep: %w", dir, err)
+		}
 	}
 	return nil
 }
@@ -598,6 +614,25 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			return nil, err
 		}
 		report.SeedsWritten = append(report.SeedsWritten, rel)
+	}
+	// .gitkeep sentinels keep the required-but-initially-empty scaffold
+	// dirs tracked through git; without them a fresh clone loses the dirs
+	// and doctor reports missing scaffold. The dirs themselves already
+	// exist — the scaffoldDirs pass above recreates any that were lost.
+	for _, dir := range gitkeepDirs {
+		target := filepath.Join(base, filepath.FromSlash(dir), ".gitkeep")
+		if _, err := os.Stat(target); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err := ConfinedTarget(resolvedBase, target); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(target, nil, 0o644); err != nil {
+			return nil, err
+		}
+		report.SeedsWritten = append(report.SeedsWritten, dir+"/.gitkeep")
 	}
 	// Refresh the lock so it describes the running binary's embedded
 	// manifest; its content is deterministic, and a stale or corrupt lock

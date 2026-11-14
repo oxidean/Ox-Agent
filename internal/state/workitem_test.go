@@ -90,11 +90,17 @@ func TestStartSerializesConcurrentAllocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading active work items: %v", err)
 	}
-	if len(entries) != workers {
-		t.Fatalf("active work items = %d, want %d", len(entries), workers)
+	var dirs []os.DirEntry
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, entry)
+		}
+	}
+	if len(dirs) != workers {
+		t.Fatalf("active work items = %d, want %d", len(dirs), workers)
 	}
 	ids := map[string]bool{}
-	for _, entry := range entries {
+	for _, entry := range dirs {
 		parts := strings.SplitN(entry.Name(), "-", 3)
 		if ids[parts[0]+"-"+parts[1]] {
 			t.Fatalf("duplicate work item number allocated: %s", entry.Name())
@@ -149,8 +155,10 @@ func TestStartRollsBackWhenEventAppendFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading active work items: %v", err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("rolled-back work item remains: %v", entries)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			t.Fatalf("rolled-back work item remains: %v", entry.Name())
+		}
 	}
 }
 
