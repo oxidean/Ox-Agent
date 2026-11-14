@@ -34,8 +34,8 @@ reasoning and returns a structured output.
 ├── workflows/                 profiles mapping stages -> skills
 ├── pipelines/                 DAGs of skill steps (plan, review, ship)
 ├── integrations/              harness configs (manual.yaml default)
-├── context/                   standards, decisions, project.yaml, index
-├── work/{active,archived}/    work items: index.json + artifacts
+├── context/                   standards, decisions, specs/, project.yaml, index
+├── work/{active,archived}/    the spec trail: work items + artifacts
 ├── state/
 │   ├── events.ndjson          append-only journal — the state spine
 │   ├── snapshots/             folded state checkpoints

@@ -32,6 +32,13 @@ framework compatibility and semver pins, stage-skill mappings, pipeline
 references, integrations, lifecycle edges, and the asset lock. Reports all
 issues. `--fix` repairs fixable problems (missing directories, stale locks).
 
+It also checks source control. Everything under `.ox-agent/` except
+`runtime/` is meant to be committed — `work/` is the project's spec trail
+and `context/specs/` its curated layer — so a git ignore rule covering any
+of `work/`, `state/`, `discussions/`, or `context/` fails the check, and a
+wholly untracked tree warns.
+Projects outside a git work tree warn rather than fail.
+
 ## Work item commands
 
 ### `ox-agent start <title>`
@@ -213,6 +220,15 @@ Snapshots are written under `.ox-agent/state/snapshots/` and journal
 ### `ox-agent context index`
 
 Build the context index over `.ox-agent/context/` and `.ox-agent/discussions/`.
+Entries classify by path: `context/standards/` → `standard`,
+`context/decisions/` → `decision`, `context/specs/` → `spec`,
+`discussions/` → `discussion`, `context/project.yaml` → `project`, everything
+else `other`. Compiled packets hand standards, decisions, and specs to skills
+as named context lists; `other` lands under `context.references`.
+
+The index is a stored catalog: `context compile` reads it as written, so
+rerun `context index` after adding or changing files under `context/` and
+`discussions/` — otherwise new entries stay out of compiled packets.
 
 ### `ox-agent context compile <work-item>`
 

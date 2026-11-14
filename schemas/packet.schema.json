@@ -77,6 +77,13 @@
             "type": "string"
           }
         },
+        "specs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Paths under context/specs/ — promoted specifications handed to the skill as prior-art context."
+        },
         "references": {
           "type": "array",
           "items": {
