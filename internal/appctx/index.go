@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -79,6 +80,12 @@ func Build(root string) (*Index, error) {
 			}
 			rel = filepath.ToSlash(rel)
 			if rel == "context/index.yaml" {
+				return nil
+			}
+			// Dot-prefixed paths are sentinels and OS noise, not context:
+			// indexing a .gitkeep (or anything under a hidden directory)
+			// would hand skills a placeholder as a standard or a thread.
+			if strings.Contains("/"+rel, "/.") {
 				return nil
 			}
 			data, err := os.ReadFile(path)
@@ -165,7 +172,12 @@ func Entries(root, kind string) ([]IndexEntry, error) {
 	}
 	var out []IndexEntry
 	for _, f := range index.Files {
-		if f.Kind == kind {
+		// Stored indexes written before dotfile filtering can still carry
+		// sentinel entries — filter on read too, not only at Build time.
+		// ToSlash keeps the rule working on hand-edited or foreign-written
+		// indexes that use backslash separators.
+		p := filepath.ToSlash(f.Path)
+		if f.Kind == kind && p != "context/index.yaml" && !strings.Contains("/"+p, "/.") {
 			out = append(out, f)
 		}
 	}

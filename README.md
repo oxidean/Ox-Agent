@@ -101,7 +101,7 @@ needs an answer. [docs/cli.md](docs/cli.md) covers the full surface.
 ├── work/                # the spec trail: active + archived work items
 ├── state/               # append-only event journal and snapshots
 ├── integrations/        # harness configuration
-└── runtime/             # generated packets, runs, cache, and locks
+└── runtime/             # generated packets, runs, evals, and locks (gitignored)
 ```
 
 The stable separation is:

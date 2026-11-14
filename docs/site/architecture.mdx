@@ -48,11 +48,12 @@ does the reasoning and returns a structured output.
 │   ├── snapshots/             folded state checkpoints
 │   └── input/                 durable human-input requests
 ├── discussions/               append-only hash-chained threads
-└── runtime/                   generated packets, runs, cache (gitignored)
+└── runtime/                   generated packets, runs, evals, locks (gitignored)
 ```
 
 Canonical asset trees at the repo root (`skills/`, `schemas/`,
-`workflows/`, `pipelines/`) are mirrored into `internal/assets/embedded/`
+`workflows/`, `pipelines/`, `lifecycle/`, `integrations/`) are mirrored
+into `internal/assets/embedded/`
 by `scripts/sync-assets.sh`; CI rejects drift. `init` materializes the
 embedded tree into `.ox-agent/` and writes `assets.lock`, a hash manifest
 the binary uses to distinguish ox-owned files (safe to repair) from
@@ -78,7 +79,7 @@ schema}}`, with `prior_outputs` and `inputs` nested under `context`. The
 harness writes `output.json` at `output.path`, resolved against
 `.ox-agent/` — not the project root the harness runs from; `collect`
 validates it
-against `schemas/output.schema.json` and honors `next_action`
+against the skill's `schemas/output.schema.json` and honors `next_action`
 (`advance_stage | retry | escalate | await_input | complete`).
 
 **Await input** is the async-chat path: when a skill returns
@@ -121,7 +122,7 @@ files are the interface; transport is pluggable.
 ## Versioning and updates
 
 - `framework.required_version` is derived from the binary's minor line
-  at `init --repair --sync` time; `doctor` enforces it.
+  at `init` and reconciled on `init --repair --sync`; `doctor` enforces it.
 - `ox-agent update` replaces the binary (checksum-verified), then
   re-execs it to sync `.ox-agent` assets to the new embedded tree
   (`--binary-only` skips).
@@ -132,6 +133,6 @@ files are the interface; transport is pluggable.
 
 - `assets.lock`: embedded-asset hashes; only ox-owned files are repaired.
 - `remote-skills.lock`: `skills install` pins every fetched file to the
-  resolved commit SHA; `skills check` and `doctor` verify drift.
+  resolved commit SHA; `skills check` verifies drift.
 - All materialization writes pass through path confinement (symlinks are
   never followed outside `.ox-agent/`).

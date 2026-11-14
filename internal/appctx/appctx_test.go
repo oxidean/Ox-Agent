@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oxidean/Ox-Agent/internal/input"
@@ -65,6 +66,69 @@ func TestIndexClassifiesKinds(t *testing.T) {
 	}
 	if _, changed, _, err := Write(root, index); err != nil || changed != 0 {
 		t.Fatalf("first Write() = changed %d, err %v; want 0 additions counted as new", changed, err)
+	}
+}
+
+// TestIndexSkipsDotfiles verifies sentinels and OS noise never index as
+// context — a .gitkeep under standards/ or discussions/ must not reach
+// packets as a standard or a thread.
+func TestIndexSkipsDotfiles(t *testing.T) {
+	root := initProject(t)
+	base := filepath.Join(root, ".ox-agent")
+	// Files under a hidden directory carry no dot-prefix on their leaf —
+	// the skip must cover any dot-prefixed path segment.
+	hidden := filepath.Join(base, "context", ".archive", "old.md")
+	if err := os.MkdirAll(filepath.Dir(hidden), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(hidden, []byte("# old\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	index, err := Build(root)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, f := range index.Files {
+		if strings.Contains("/"+f.Path, "/.") {
+			t.Fatalf("dotfile indexed: %s", f.Path)
+		}
+	}
+	// A stored index written before dotfile filtering can still carry a
+	// sentinel — Entries must filter on read, not only at Build time.
+	index.Files = append(index.Files,
+		IndexEntry{
+			Path:   "context/standards/.gitkeep",
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Kind:   "standard",
+		},
+		// Backslash separators and the index file itself can appear in
+		// hand-edited or foreign-written stored indexes — the read filter
+		// must drop both, not just slash-form dot paths.
+		IndexEntry{
+			Path:   "context\\standards\\.gitkeep",
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Kind:   "standard",
+		},
+		IndexEntry{
+			Path:   "context/index.yaml",
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Kind:   "standard",
+		},
+	)
+	if _, _, _, err := Write(root, index); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	entries, err := Entries(root, "standard")
+	if err != nil {
+		t.Fatalf("Entries() error = %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains("/"+filepath.ToSlash(e.Path), "/.") {
+			t.Fatalf("Entries returned dotfile: %s", e.Path)
+		}
+		if e.Path == "context/index.yaml" {
+			t.Fatal("Entries returned the index itself")
+		}
 	}
 }
 

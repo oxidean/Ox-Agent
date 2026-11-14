@@ -188,6 +188,12 @@ func (item *WorkItem) Archive(root, actor, approver, reason string) error {
 		return err
 	}
 	target := filepath.Join(workRoot(root), "archived", filepath.Base(item.Dir))
+	// work/archived can be absent on clones older than the .gitkeep
+	// sentinels — recreate it rather than failing the rename on ENOENT.
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		_ = os.WriteFile(indexPath(item.Dir), previous, 0o644)
+		return fmt.Errorf("archiving work item: %w", err)
+	}
 	if err := os.Rename(item.Dir, target); err != nil {
 		_ = os.WriteFile(indexPath(item.Dir), previous, 0o644)
 		return fmt.Errorf("archiving work item: %w", err)
