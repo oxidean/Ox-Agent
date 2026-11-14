@@ -74,7 +74,9 @@ func Doctor(root string) *DoctorReport {
 			}
 		}
 		if err == nil && !info.IsDir() {
-			report.add("dir "+dir, fmt.Errorf("exists but is not a directory"), true)
+			// Not fixable: repair refuses to remove a path that could
+			// carry user content, so the --fix hint would mislead.
+			report.add("dir "+dir, fmt.Errorf("exists but is not a directory"), false)
 			continue
 		}
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
