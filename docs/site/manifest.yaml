@@ -4,7 +4,7 @@ product:
   name: Ox-Agent
   repo: oxidean/Ox-Agent
   tag_pattern: "v*"
-version: "0.1.20"
+version: "0.1.21"
 pages:
   - label: Ox-Agent
     link: /
