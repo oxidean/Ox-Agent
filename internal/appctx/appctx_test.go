@@ -74,12 +74,22 @@ func TestIndexClassifiesKinds(t *testing.T) {
 // packets as a standard or a thread.
 func TestIndexSkipsDotfiles(t *testing.T) {
 	root := initProject(t)
+	base := filepath.Join(root, ".ox-agent")
+	// Files under a hidden directory carry no dot-prefix on their leaf —
+	// the skip must cover any dot-prefixed path segment.
+	hidden := filepath.Join(base, "context", ".archive", "old.md")
+	if err := os.MkdirAll(filepath.Dir(hidden), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(hidden, []byte("# old\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 	index, err := Build(root)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
 	for _, f := range index.Files {
-		if strings.HasPrefix(filepath.Base(f.Path), ".") {
+		if strings.Contains("/"+f.Path, "/.") {
 			t.Fatalf("dotfile indexed: %s", f.Path)
 		}
 	}
@@ -98,7 +108,7 @@ func TestIndexSkipsDotfiles(t *testing.T) {
 		t.Fatalf("Entries() error = %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(filepath.Base(e.Path), ".") {
+		if strings.Contains("/"+e.Path, "/.") {
 			t.Fatalf("Entries returned dotfile: %s", e.Path)
 		}
 	}

@@ -61,12 +61,16 @@ func Doctor(root string) *DoctorReport {
 	report.add(".ox-agent exists", nil, false)
 
 	for _, dir := range scaffoldDirs {
-		_, err := os.Stat(filepath.Join(base, dir))
+		info, err := os.Stat(filepath.Join(base, dir))
 		if dir == "state/input" && os.IsNotExist(err) {
 			// Requests are created on demand and new scaffolds carry a
 			// .gitkeep, but a clone of an older project legitimately
 			// lacks the directory — report ok rather than missing.
 			report.add("dir "+dir, nil, true)
+			continue
+		}
+		if err == nil && !info.IsDir() {
+			report.add("dir "+dir, fmt.Errorf("exists but is not a directory"), true)
 			continue
 		}
 		report.add("dir "+dir, wrapMissing(err, "missing"), true)
@@ -541,6 +545,7 @@ func (r *DoctorReport) checkSourceControl(root string) {
 	// in the index, which would hide a rule added after the trail committed.
 	probes := []string{
 		".ox-agent",
+		".ox-agent/work/active/.gitkeep",
 		".ox-agent/work/active/WI-0001/spec.md",
 		".ox-agent/work/archived/WI-0001/spec.md",
 		".ox-agent/state/events.ndjson",

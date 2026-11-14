@@ -372,7 +372,9 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	}
 	for _, dir := range scaffoldDirs {
 		path := filepath.Join(base, dir)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		info, err := os.Stat(path)
+		switch {
+		case os.IsNotExist(err):
 			// A missing path may sit under a symlinked ancestor (or be a
 			// dangling symlink); confine before MkdirAll so directory
 			// creation cannot escape the project.
@@ -383,8 +385,12 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 				return nil, fmt.Errorf("creating %s: %w", dir, err)
 			}
 			report.DirsCreated = append(report.DirsCreated, dir)
-		} else if err != nil {
+		case err != nil:
 			return nil, err
+		case !info.IsDir():
+			// A regular file at a scaffold path would fail later writes
+			// with an unhelpful ENOTDIR — name it instead.
+			return nil, fmt.Errorf("%s exists but is not a directory", path)
 		}
 	}
 	files, err := assets.List("")

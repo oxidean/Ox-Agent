@@ -1,9 +1,6 @@
 node_modules/
 dist/
 /ox-agent
-.ox-agent/runtime/cache/
-.ox-agent/runtime/packets/
-.ox-agent/runtime/runs/
-.ox-agent/runtime/locks/
+.ox-agent/runtime/
 __pycache__/
 .DS_Store

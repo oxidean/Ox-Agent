@@ -218,7 +218,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	if len(report.DirsCreated) == 0 || len(report.FilesRestored) == 0 || len(report.SeedsWritten) == 0 {
 		t.Fatalf("incomplete repair report: %+v", report)
 	}
-	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "README.md", "context/specs/README.md"} {
+	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "discussions/.gitkeep", "README.md", "context/specs/README.md"} {
 		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s not restored: %v", rel, err)
 		}
@@ -290,6 +290,31 @@ func TestInitWritesReadme(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "ox-agent integrate") {
 		t.Fatal("README.md does not point at integrate")
+	}
+}
+
+// TestDoctorFlagsNonDirScaffoldPath verifies a regular file occupying a
+// required scaffold path fails the dir check instead of passing as ok —
+// and that Repair names the blockage instead of dying later on ENOTDIR.
+func TestDoctorFlagsNonDirScaffoldPath(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	base := Base(root)
+	target := filepath.Join(base, "work", "active")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatalf("removing work/active: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("blocker\n"), 0o644); err != nil {
+		t.Fatalf("planting file at work/active: %v", err)
+	}
+	report := Doctor(root)
+	if report.Healthy() {
+		t.Fatalf("file at work/active passed doctor: %+v", report.Checks)
+	}
+	if _, err := Repair(root, false); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("Repair() error = %v, want not-a-directory", err)
 	}
 }
 

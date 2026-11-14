@@ -74,18 +74,18 @@ func Build(root string) (*Index, error) {
 			if info.IsDir() {
 				return nil
 			}
-			// Dotfiles are sentinels and OS noise, not context: indexing a
-			// .gitkeep would hand skills a placeholder as a standard or a
-			// discussion thread.
-			if strings.HasPrefix(info.Name(), ".") {
-				return nil
-			}
 			rel, err := filepath.Rel(base, path)
 			if err != nil {
 				return err
 			}
 			rel = filepath.ToSlash(rel)
 			if rel == "context/index.yaml" {
+				return nil
+			}
+			// Dot-prefixed paths are sentinels and OS noise, not context:
+			// indexing a .gitkeep (or anything under a hidden directory)
+			// would hand skills a placeholder as a standard or a thread.
+			if strings.Contains("/"+rel, "/.") {
 				return nil
 			}
 			data, err := os.ReadFile(path)
@@ -174,7 +174,7 @@ func Entries(root, kind string) ([]IndexEntry, error) {
 	for _, f := range index.Files {
 		// Stored indexes written before dotfile filtering can still carry
 		// sentinel entries — filter on read too, not only at Build time.
-		if f.Kind == kind && !strings.HasPrefix(filepath.Base(f.Path), ".") {
+		if f.Kind == kind && !strings.Contains("/"+f.Path, "/.") {
 			out = append(out, f)
 		}
 	}
