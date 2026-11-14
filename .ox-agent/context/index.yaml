@@ -1,0 +1,11 @@
+schema_version: 1
+generated_at: "2026-11-14T00:02:33Z"
+files:
+    - path: context/project.yaml
+      sha256: fcd2d293e2b935b286e3bf107a5795a25cd2c9294582bb37b4c86c6460c1c03e
+      bytes: 47
+      kind: project
+    - path: context/specs/README.md
+      sha256: 9c575c24754d068193dbe24096f187afcefdabf2187b7611ba3437a5dd454666
+      bytes: 652
+      kind: spec

@@ -82,7 +82,7 @@ func requiredVersionRange() string {
 // scaffoldDirs lists the directories every project scaffold provides.
 var scaffoldDirs = []string{
 	"skills", "work/active", "work/archived", "context/standards",
-	"context/decisions", "lifecycle", "workflows", "pipelines",
+	"context/decisions", "context/specs", "lifecycle", "workflows", "pipelines",
 	"discussions", "state", "state/snapshots", "state/input", "integrations",
 	"runtime/packets", "runtime/runs", "runtime/cache", "runtime/locks",
 }
@@ -219,6 +219,10 @@ func writeSeeds(base, project string) error {
 	if err := os.WriteFile(filepath.Join(base, "README.md"), []byte(scaffoldReadme), 0o644); err != nil {
 		return fmt.Errorf("writing README.md: %w", err)
 	}
+	specsReadme := filepath.Join(base, "context", "specs", "README.md")
+	if err := os.WriteFile(specsReadme, []byte(specsDirReadme), 0o644); err != nil {
+		return fmt.Errorf("writing context/specs/README.md: %w", err)
+	}
 	return nil
 }
 
@@ -233,14 +237,36 @@ skills, contracts, and the event journal live here.
 - ` + "`skills/`" + `, ` + "`schemas/`" + `, ` + "`workflows/`" + `, ` + "`pipelines/`" + `, ` + "`lifecycle/`" + `, ` + "`integrations/`" + ` —
   materialized assets tracked by ` + "`assets.lock`" + `; do not edit in place. Add
   extension skills as new directories under ` + "`skills/`" + `.
-- ` + "`work/`" + `, ` + "`state/`" + `, ` + "`discussions/`" + ` — live project state; committed so context
-  travels through PRs. ` + "`state/events.ndjson`" + ` is the append-only journal.
+- ` + "`work/`" + ` — the project's spec trail. Every work item keeps its ` + "`spec.md`" + `,
+  ` + "`plan.md`" + `, and artifacts under ` + "`work/active/`" + `, and ` + "`archived/`" + ` holds
+  the permanent record of what shipped. Commit it — the history is documentation.
+- ` + "`context/`" + ` — project standards, decisions, and promoted specifications
+  (` + "`specs/`" + `). What lives here indexes into future work-item packets.
+- ` + "`state/`" + `, ` + "`discussions/`" + ` — the append-only journal (` + "`events.ndjson`" + `)
+  and durable threads; committed with everything above.
 - ` + "`runtime/`" + ` — generated packets and runs; gitignored.
 
 ` + "`ox-agent doctor`" + ` validates this setup. ` + "`ox-agent integrate`" + ` wires it into
 agent harnesses (a managed ` + "`AGENTS.md`" + ` block plus ` + "`/.agents/skills`" + ` and
 ` + "`/.claude/skills`" + ` links) so the materialized skills are discoverable during
 agentic work — without it, nothing outside this directory advertises the toolkit.
+`
+
+// specsDirReadme seeds context/specs/: the curated layer of the spec trail —
+// specs promoted out of completed work items and migrated docsets, indexed
+// as kind "spec" and handed to future packets under context.specs.
+const specsDirReadme = `# context/specs — promoted specifications
+
+` + "`work/`" + ` is the full trail: every work item keeps its own ` + "`spec.md`" + `,
+` + "`plan.md`" + `, and artifacts through ` + "`work/archived/`" + `. This directory is
+the curated layer — specifications promoted out of finished work because they
+should inform future work, plus spec docsets migrated from before the project
+ran ox-agent — keep their originals outside ` + "`context/`" + ` (the archived work
+item is provenance enough) so they don't index as specs themselves.
+
+` + "`ox-agent context index`" + ` classifies files here as ` + "`spec`" + `, and packet
+compilation hands them to skills under ` + "`context.specs`" + `. Everything here is
+meant to be committed.
 `
 
 // ConfinedTarget verifies that writing target stays inside resolvedBase: a
@@ -515,6 +541,9 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 		"README.md": func() error {
 			return os.WriteFile(filepath.Join(base, "README.md"), []byte(scaffoldReadme), 0o644)
 		},
+		"context/specs/README.md": func() error {
+			return os.WriteFile(filepath.Join(base, "context", "specs", "README.md"), []byte(specsDirReadme), 0o644)
+		},
 		"state/events.ndjson": func() error { return os.WriteFile(filepath.Join(base, "state", "events.ndjson"), nil, 0o644) },
 		"framework.yaml": func() error {
 			framework := FrameworkConfig{SchemaVersion: 1}
@@ -555,7 +584,7 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 			return writeYAML(filepath.Join(base, "context", "project.yaml"), ctx)
 		},
 	}
-	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "README.md", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
+	for _, rel := range []string{".gitignore", ".gitattributes", "assets.lock", "README.md", "context/specs/README.md", "state/events.ndjson", "framework.yaml", "config.yaml", "policy.yaml", "context/project.yaml"} {
 		target := filepath.Join(base, filepath.FromSlash(rel))
 		if _, err := os.Stat(target); err == nil {
 			continue

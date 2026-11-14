@@ -17,7 +17,7 @@ Run structured divergent and convergent analysis for a work item while preservin
 
 ## Consumes
 
-- the problem framing in the packet plus `context.references` for prior exploration.
+- the problem framing in the packet plus `context.references` and `context.specs` for prior exploration.
 
 ## Produces
 

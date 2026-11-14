@@ -29,6 +29,7 @@ func TestIndexClassifiesKinds(t *testing.T) {
 	for path, content := range map[string]string{
 		"context/standards/base.md": "# standards\n",
 		"context/decisions/0001.md": "# use go\n",
+		"context/specs/api-v2.md":   "# api spec\n",
 		"discussions/d-001.yaml":    "thread_id: d-001\n",
 		"context/notes/scratch.txt": "misc\n",
 	} {
@@ -52,6 +53,8 @@ func TestIndexClassifiesKinds(t *testing.T) {
 		"context/project.yaml":      "project",
 		"context/standards/base.md": "standard",
 		"context/decisions/0001.md": "decision",
+		"context/specs/api-v2.md":   "spec",
+		"context/specs/README.md":   "spec",
 		"discussions/d-001.yaml":    "discussion",
 		"context/notes/scratch.txt": "other",
 	}
@@ -97,6 +100,29 @@ func TestCompileBuildsContract(t *testing.T) {
 	}
 	if _, err := Compile(root, item, "no-such-skill", "specification", 0, ""); err == nil {
 		t.Fatal("Compile() with unknown skill succeeded; want error")
+	}
+}
+
+// TestCompileIncludesSpecs verifies specs promoted under context/specs reach
+// the packet under context.specs — the curated layer future work loads.
+func TestCompileIncludesSpecs(t *testing.T) {
+	root := initProject(t)
+	item, err := state.Start(root, "spec consumer")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	packet, err := Compile(root, item, "specify", "specification", 0, "")
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	found := false
+	for _, spec := range packet.Context.Specs {
+		if spec == "context/specs/README.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("seeded spec missing from packet: %v", packet.Context.Specs)
 	}
 }
 
