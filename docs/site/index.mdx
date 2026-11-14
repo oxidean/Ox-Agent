@@ -18,9 +18,9 @@ version-controlled; the binary is the only runtime. MIT-licensed.
   current stage needs (`ox-agent context compile`).
 - **Structured work items**: explicit state, progress, and lifecycle
   records instead of chat scrollback.
-- **Async-chat native**: `await_input` files a durable request and leaves
-  the run pending; a messenger-style host answers minutes or hours later
-  and the run resumes.
+- **Async-chat native**: `await_input` files a durable request and marks
+  the run `retry` — still dispatchable; a messenger-style host answers
+  minutes or hours later and the next run resumes.
 - **One binary**: no npm, Bun, or project-local runtime dependency.
   Harness adapters (`manual`, `spawn-cli`, `webhook`) are configuration,
   and orgs can ship a compatible asset set from their own fork.
@@ -40,6 +40,10 @@ The binary never reasons about the work; it resolves configuration,
 enforces schemas, sequences stages, and journals events. The harness, any
 agent that can read a file and write a file, does the reasoning.
 
+Two surfaces share the one binary: the commands you type to set up and
+steer (`init`, `doctor`, `status`, `input respond`), and the skill
+contracts your agent executes when you invoke a skill inside its harness.
+
 ## Where to next
 
 <CardGrid>
@@ -52,6 +56,11 @@ agent that can read a file and write a file, does the reasoning.
 		title="Quickstart"
 		href="./quickstart/"
 		description="init, doctor, and your first work item."
+	/>
+	<LinkCard
+		title="Using skills"
+		href="./using-skills/"
+		description="Invoke the skill set from inside your agent harness."
 	/>
 	<LinkCard
 		title="CLI surface"

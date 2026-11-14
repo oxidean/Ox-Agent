@@ -1,0 +1,104 @@
+---
+title: Using skills
+description: Invoke ox-agent skills from your agent harness — the end-user surface of the work pipeline.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+`ox-agent init --integrate` materializes the bundled skill set under
+`.ox-agent/skills/` and links it where agent harnesses scan:
+`.agents/skills` → `.ox-agent/skills`, `.claude/skills` → `.agents/skills`,
+plus a managed `AGENTS.md` block. From there, skills are commands you
+invoke by name inside the agent — `/brainstorm`, `/specify`,
+`/multi-stage-plan` — or describe in prose and let the agent pick.
+
+## The bundled set
+
+Workflows map skills to lifecycle stages, so an invoked skill runs where
+it belongs in the pipeline:
+
+| Skill               | Stage(s)               | What it does                                        |
+| ------------------- | ---------------------- | --------------------------------------------------- |
+| `discover-context`  | discovery              | gather standards, architecture, prior decisions     |
+| `brainstorm`        | brainstorming          | divergent options with tradeoffs preserved          |
+| `adr`               | brainstorming, specification | record a consequential decision durably         |
+| `specify`           | specification          | turn intent into a testable spec                    |
+| `multi-stage-plan`  | planning               | decompose the spec into staged work                 |
+| `tdd`               | implementation         | red-green-refactor evidence for a stage             |
+| `implementation`    | implementation         | execute one bounded, approved stage                 |
+| `code-review`       | verification           | independent spec-vs-implementation review           |
+| `verify`            | verification           | tests, traceability, rollback readiness             |
+| `shipping`          | shipping               | release notes, rollout evidence, rollback steps     |
+| `retrospective`     | retrospective          | quality, cost, and rework analysis after shipping   |
+| `progress`          | retrospective          | compact progress updates folded from the journal    |
+
+Three skills stay unmapped and run ad hoc — `discussion` (durable threaded
+debate outside stages), `clean-user-facing-text`, and `remove-ai-marks`
+(text and metadata hygiene utilities).
+
+## How an invocation runs
+
+You name the skill; the agent does the rest. It opens a work item when one
+is needed (`ox-agent start`), compiles the bounded context packet
+(`ox-agent context compile`), writes the skill's structured result, and
+`ox-agent run collect` validates and journals it. You never touch
+`packet.json` — that contract belongs to the harness.
+
+What you see is the artifact the run leaves — e.g. `brainstorm.md`,
+`spec.md`, `plan.md` under
+`.ox-agent/work/active/WI-NNNN-<slug>/artifacts/`, all committed with
+the repo. Finished items archive under `work/archived/` —
+the permanent spec trail — and specs worth reusing promote into
+`context/specs/` where future packets pick them up.
+
+## When a skill needs you
+
+- A skill that needs an answer returns `await_input`; the runtime files a
+  durable request and marks the run `retry` — still dispatchable once
+  answered — rather than expiring your chat turn. List and answer:
+
+  ```bash
+  ox-agent input list
+  ox-agent input respond IN-0001 --by <you> --answer "..."
+  ```
+
+- Human-gated transitions (like shipping) file an approval request the
+  same way — `input respond IN-0001 --by <you> --approve` completes the
+  gated edge with you recorded as approver.
+- A skill that hits a wall escalates: the item blocks and files a
+  clarification request. Answer it, then `ox-agent unblock WI-0001`.
+
+## Steering the loop
+
+```bash
+ox-agent status              # active work items
+ox-agent status WI-0001      # one item's full record
+ox-agent events WI-0001      # its journal so far
+ox-agent state explain WI-0001
+ox-agent advance WI-0001     # next profile stage
+ox-agent transition WI-0001 <state> --by <you>
+ox-agent archive WI-0001     # terminal: work/active → work/archived
+```
+
+## Maintaining the set
+
+```bash
+ox-agent skills list     # materialized skills: enabled, drift, compat
+ox-agent skills check    # contract-validate every skill
+ox-agent skills update   # restore embedded files; --yes overwrites drift
+```
+
+Drop a directory with `skill.yaml`, `SKILL.md`, and `schemas/` into
+`.ox-agent/skills/` and it becomes a project-local skill; `skills update`
+never touches it. `ox-agent skills install <git-url>` pins remote skills
+to a resolved commit SHA in `remote-skills.lock`. To customize a bundled
+skill, fork it under a new directory name —
+[docs/architecture.md](https://github.com/oxidean/Ox-Agent/blob/main/docs/architecture.md)
+covers the rename contract — because in-place edits to core skills
+reconcile away on `init --repair --sync`.
+
+<Aside type="tip">
+	Working inside an agent that can't invoke skills by name? Ask it to
+	read the skill's `SKILL.md` under `.ox-agent/skills/<name>/` — same
+	contract, just without the slash-command sugar.
+</Aside>

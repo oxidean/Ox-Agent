@@ -19,24 +19,54 @@ Run inside the repository you want to manage:
 
 ```bash
 ox-agent init
-ox-agent doctor          # → project healthy
 ox-agent init --integrate   # optional: wire .agents/skills + AGENTS.md
+ox-agent doctor             # → project healthy
 ```
 
 `init` materializes the skill library, lifecycle, workflows, pipelines,
-schemas, and policy into `.ox-agent/`. `--integrate` symlinks
-`.agents/skills` (and `.claude/skills`) at `.ox-agent/skills` and adds a
-managed block to `AGENTS.md` so coding agents discover the toolkit.
+schemas, and policy into `.ox-agent/`. `--integrate` links
+`.agents/skills` → `.ox-agent/skills` and `.claude/skills` →
+`.agents/skills`, and adds a managed block to `AGENTS.md` so coding
+agents discover the toolkit.
 Without `--integrate` nothing outside `.ox-agent/` advertises the toolkit —
 `doctor` warns when no integration is detected. On Windows, symlink creation
 needs Developer Mode or an elevated shell; `integrate` reports a warning and
 leaves the rest of the wiring in place when it cannot link.
 
-The scaffold commits to git: `.ox-agent/.gitignore` keeps `runtime/` out;
-`.gitattributes` marks `state/events.ndjson` `merge=union`
-so the append-only journal merges cleanly across branches.
+The scaffold commits to git: `.ox-agent/.gitignore` keeps only generated
+`runtime/` out, and `.gitattributes` marks `state/events.ndjson`
+`merge=union` so the append-only journal merges cleanly across branches.
+Everything else — work items, the journal, promoted specs under
+`context/specs/` — is the project's spec trail and belongs in history.
 
 ## Your first work item
+
+There are two ways to drive a work item: invoke the skills inside your
+agent, or run the dispatch loop from the shell yourself. Most people do
+the former; the loop below is what the agent executes on your behalf.
+
+### In your agent
+
+`init --integrate` linked the materialized skills where harnesses look for
+them — `.agents/skills`, `.claude/skills`, and a managed `AGENTS.md`
+block. Open the repository in your agent and describe the work:
+
+```text
+> /brainstorm add rate limiting to the API
+```
+
+The agent files the work item (`ox-agent start`), dispatches the
+stage-mapped skill, writes its result, and collects it — the
+`run`/`run collect` loop below — for every stage until the item ships.
+When a skill needs a decision it files a durable request instead of
+blocking your chat; answer whenever:
+
+```bash
+ox-agent input list
+ox-agent input respond IN-0001 --by <you> --answer "..."
+```
+
+### The dispatch loop (what the agent runs)
 
 ```bash
 ox-agent start "Add rate limiting to the API"
@@ -91,7 +121,7 @@ ox-agent state explain WI-0001
 dispatch every ready step up to `policy.budgets.max_parallel_agents`:
 
 ```bash
-ox-agent review WI-0001    # dispatched: code-review → run_...
+ox-agent review WI-0001    # dispatched: review → run_... (code-review)
 ox-agent run pending       # anything awaiting output.json
 ox-agent ship WI-0001      # verify → ship steps in dependency order
 ```

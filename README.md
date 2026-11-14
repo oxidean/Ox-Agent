@@ -64,19 +64,25 @@ Windows installation uses `install.ps1` from the matching GitHub release.
 From the repository you want to manage:
 
 ```bash
-ox-agent init
+ox-agent init --integrate
 ox-agent doctor
-ox-agent start "Add a health-check endpoint"
-ox-agent status
 ```
 
 `init` is non-destructive and refuses to overwrite an existing `.ox-agent/`
 directory. The globally installed binary materializes the official skills,
-workflows, pipelines, and schemas into `.ox-agent/`.
+workflows, pipelines, and schemas into `.ox-agent/`; `--integrate` wires
+`AGENTS.md` and `.agents/skills` so your agent harness discovers them.
 
-`run` dispatches the stage-mapped skill through a configured harness
-integration — the manual adapter works with any agent. `run collect` validates
-the recorded output and applies its next action.
+Then open the repository in your agent and invoke a skill:
+
+```text
+> /brainstorm add a health-check endpoint
+```
+
+The agent files the work item and drives the dispatch loop itself — `run`,
+`run collect`, and `context compile` are its contract, not yours. You steer
+with `ox-agent start`, `status`, `events`, and `input respond` when a skill
+needs an answer. [docs/cli.md](docs/cli.md) covers the full surface.
 
 ## Repository-local layout
 
@@ -85,10 +91,12 @@ the recorded output and applies its next action.
 ├── framework.yaml       # binary and schema compatibility
 ├── config.yaml          # project configuration
 ├── policy.yaml          # autonomy and approval policy
+├── assets.lock          # hash manifest of ox-owned assets
 ├── skills/              # repository-local skill definitions
-├── workflows/           # lifecycle stage and gate definitions
+├── workflows/           # stage-order profiles
 ├── pipelines/           # ordered execution plans
-├── lifecycle/           # state definitions
+├── lifecycle/           # states, transition edges, and gates
+├── schemas/             # input/output contract schemas
 ├── context/             # standards, decisions, and promoted specs (specs/)
 ├── work/                # the spec trail: active + archived work items
 ├── state/               # append-only event journal and snapshots
@@ -107,6 +115,10 @@ work     = what happened
 ```
 
 ## Current CLI
+
+Two surfaces, one binary: you drive `init`, `doctor`, `start`, `status`,
+`input respond`, and `update`; your agent drives `run`, `run collect`,
+`context compile`, and the pipelines inside its harness.
 
 ```text
 ox-agent version                        Show the installed binary version
@@ -152,7 +164,7 @@ Available in the standalone distribution:
 - Pipeline DAG execution honoring `policy.budgets.max_parallel_agents`.
 - Durable discussion threads with compacted summaries.
 - Durable human-input requests for async harness hosts — `await_input`
-  leaves runs pending instead of blocking the turn.
+  marks runs `retry` (still dispatchable) instead of blocking the turn.
 - Harness dispatch through `manual`, `spawn-cli`, and `webhook` adapters.
 - Remote skill installs pinned to a resolved commit SHA with provenance
   tracked in `remote-skills.lock`.
@@ -183,6 +195,11 @@ Official skills are materialized under `.ox-agent/skills/` and include:
 - `progress`
 - `shipping`
 - `retrospective`
+
+With `init --integrate` these resolve through `.agents/skills` (and
+`.claude/skills`), so agents invoke them by name — `/brainstorm`,
+`/specify`, `/multi-stage-plan` — inside the harness. Each invocation runs
+against a schema-checked packet the binary compiles.
 
 Workflows select skills by lifecycle stage. Pipelines define ordered and
 parallel agent execution. These files are project-local and inspectable; the

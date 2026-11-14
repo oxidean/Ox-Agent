@@ -3,9 +3,19 @@ title: Ox-Agent CLI
 description: "The ox-agent command surface: work items, runs, input requests, skill maintenance, state replay, and self-update."
 ---
 
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="note">
+	This is the full command surface. You type the setup and steering
+	commands — `init`, `doctor`, `start`, `status`, `input respond`,
+	`update` — while your agent drives `run`, `run collect`,
+	`context compile`, and the pipelines when you invoke a skill. See
+	[Using skills](./using-skills/) for that side of the surface.
+</Aside>
+
 ```text
 ox-agent version                          Show the installed binary version
-ox-agent init [--repair|--sync|--integrate]
+ox-agent init [--repair [--sync]] [--integrate]
                                           Materialize or repair .ox-agent/
 ox-agent integrate                        Wire AGENTS.md + .agents/.claude links
 ox-agent doctor [--fix]                   Validate the local Ox-Agent setup

@@ -4,7 +4,9 @@ description: "How Ox-Agent fits together: the execution boundary, .ox-agent/ lay
 ---
 
 How Ox-Agent fits together: the model every contract, command, and file
-exists to serve.
+exists to serve. This page documents the agent/harness surface — packets,
+dispatch, the journal; the end-user flow lives in
+[Quickstart](./quickstart/) and [Using skills](./using-skills/).
 
 ## The execution boundary
 
@@ -31,14 +33,16 @@ does the reasoning and returns a structured output.
 ├── framework.yaml             binary + schema compat (required_version)
 ├── config.yaml                project config: workflow profile, stage_skills
 ├── policy.yaml                autonomy + budgets (max_parallel_agents)
+├── assets.lock                hash manifest of ox-owned assets
 ├── lifecycle/workflow.yaml    states + legal transition edges + gates
 ├── skills/                    materialized skill packages (owned by binary)
 │   └── <skill>/{skill.yaml, SKILL.md, schemas/, evals/}
-├── workflows/                 profiles mapping stages -> skills
+├── schemas/                   input/output contract schemas (materialized)
+├── workflows/                 stage-order profiles (normal.yaml)
 ├── pipelines/                 DAGs of skill steps (plan, review, ship)
 ├── integrations/              harness configs (manual.yaml default)
-├── context/                   standards, decisions, project.yaml, index
-├── work/{active,archived}/    work items: index.json + artifacts
+├── context/                   standards, decisions, specs/, index
+├── work/{active,archived}/    the spec trail: work items + artifacts
 ├── state/
 │   ├── events.ndjson          append-only journal, the state spine
 │   ├── snapshots/             folded state checkpoints
@@ -90,10 +94,11 @@ new packet carries the answer in `context.inputs`.
 
 `state/events.ndjson` is append-only and committed (`.gitattributes`
 applies `merge=union`). Every mutation journals an event:
-`work_item.created | transitioned | shipped`, `skill.invoked |
-completed`, `pipeline.started | step_ready | completed`,
-`input.requested | scoped | answered`, `discussion.*`,
-`snapshot.written`, `eval.completed`, and more.
+`work_item.created | transitioned | stage_advanced | archived`,
+`skill.invoked | completed | failed`, `pipeline.completed`,
+`input.requested | scoped | answered | expired | cancelled`,
+`discussion.*`, `context.compiled`, `eval.completed`,
+`skills.installed | uninstalled`.
 
 `state replay` folds the journal into current state; `--snapshot`
 persists the fold and later replays resume from it when the journal
