@@ -83,6 +83,25 @@ func TestIndexSkipsDotfiles(t *testing.T) {
 			t.Fatalf("dotfile indexed: %s", f.Path)
 		}
 	}
+	// A stored index written before dotfile filtering can still carry a
+	// sentinel — Entries must filter on read, not only at Build time.
+	index.Files = append(index.Files, IndexEntry{
+		Path:   "context/standards/.gitkeep",
+		SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		Kind:   "standard",
+	})
+	if _, _, _, err := Write(root, index); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	entries, err := Entries(root, "standard")
+	if err != nil {
+		t.Fatalf("Entries() error = %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(filepath.Base(e.Path), ".") {
+			t.Fatalf("Entries returned dotfile: %s", e.Path)
+		}
+	}
 }
 
 // TestCompileBuildsContract verifies the compiled packet satisfies the

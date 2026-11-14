@@ -172,7 +172,9 @@ func Entries(root, kind string) ([]IndexEntry, error) {
 	}
 	var out []IndexEntry
 	for _, f := range index.Files {
-		if f.Kind == kind {
+		// Stored indexes written before dotfile filtering can still carry
+		// sentinel entries — filter on read too, not only at Build time.
+		if f.Kind == kind && !strings.HasPrefix(filepath.Base(f.Path), ".") {
 			out = append(out, f)
 		}
 	}
