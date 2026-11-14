@@ -48,7 +48,7 @@ does the reasoning and returns a structured output.
 │   ├── snapshots/             folded state checkpoints
 │   └── input/                 durable human-input requests
 ├── discussions/               append-only hash-chained threads
-└── runtime/                   generated packets, runs, cache (gitignored)
+└── runtime/                   generated packets, runs, locks (gitignored)
 ```
 
 Canonical asset trees at the repo root (`skills/`, `schemas/`,
@@ -121,7 +121,7 @@ files are the interface; transport is pluggable.
 ## Versioning and updates
 
 - `framework.required_version` is derived from the binary's minor line
-  at `init --repair --sync` time; `doctor` enforces it.
+  at `init` and reconciled on `init --repair --sync`; `doctor` enforces it.
 - `ox-agent update` replaces the binary (checksum-verified), then
   re-execs it to sync `.ox-agent` assets to the new embedded tree
   (`--binary-only` skips).
