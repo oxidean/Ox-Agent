@@ -627,8 +627,15 @@ func Repair(root string, sync bool) (*RepairReport, error) {
 	// exist — the scaffoldDirs pass above recreates any that were lost.
 	for _, dir := range gitkeepDirs {
 		target := filepath.Join(base, filepath.FromSlash(dir), ".gitkeep")
-		if _, err := os.Stat(target); err == nil {
-			continue
+		if info, err := os.Stat(target); err == nil {
+			if !info.IsDir() {
+				continue
+			}
+			// A .gitkeep that is itself an empty directory defeats the
+			// sentinel — git still drops the parent. Replace it.
+			if err := os.RemoveAll(target); err != nil {
+				return nil, err
+			}
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}

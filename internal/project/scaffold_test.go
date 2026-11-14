@@ -94,6 +94,33 @@ func TestRepairRestoresGitkeep(t *testing.T) {
 	}
 }
 
+// TestRepairReplacesGitkeepDirectory verifies a .gitkeep path occupied by a
+// directory is replaced with the sentinel file — an empty dir still lets
+// git drop the parent on clone, so stat-ok alone would defeat the repair.
+func TestRepairReplacesGitkeepDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	target := filepath.Join(Base(root), "work", "archived", ".gitkeep")
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("removing .gitkeep: %v", err)
+	}
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("mkdir .gitkeep: %v", err)
+	}
+	if _, err := Repair(root, false); err != nil {
+		t.Fatalf("Repair() error = %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf(".gitkeep not restored: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatal(".gitkeep directory left in place; sentinel not restored")
+	}
+}
+
 // TestInitIsNonDestructive verifies init refuses to overwrite an existing project.
 func TestInitIsNonDestructive(t *testing.T) {
 	root := t.TempDir()
@@ -315,6 +342,26 @@ func TestDoctorFlagsNonDirScaffoldPath(t *testing.T) {
 	}
 	if _, err := Repair(root, false); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("Repair() error = %v, want not-a-directory", err)
+	}
+}
+
+// TestDoctorFlagsDanglingInputSymlink verifies a dangling symlink at
+// state/input reports as a finding — the absent-dir tolerance exists for
+// clones older than the sentinel convention, not for broken links.
+func TestDoctorFlagsDanglingInputSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	target := filepath.Join(Base(root), "state", "input")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatalf("removing state/input: %v", err)
+	}
+	symlinkOrSkip(t, filepath.Join(root, "nonexistent-target"), target)
+	report := Doctor(root)
+	check := findCheck(report, "dir state/input")
+	if check == nil || check.OK {
+		t.Fatalf("dangling symlink reported ok: %+v", report.Checks)
 	}
 }
 

@@ -95,11 +95,26 @@ func TestIndexSkipsDotfiles(t *testing.T) {
 	}
 	// A stored index written before dotfile filtering can still carry a
 	// sentinel — Entries must filter on read, not only at Build time.
-	index.Files = append(index.Files, IndexEntry{
-		Path:   "context/standards/.gitkeep",
-		SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-		Kind:   "standard",
-	})
+	index.Files = append(index.Files,
+		IndexEntry{
+			Path:   "context/standards/.gitkeep",
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Kind:   "standard",
+		},
+		// Backslash separators and the index file itself can appear in
+		// hand-edited or foreign-written stored indexes — the read filter
+		// must drop both, not just slash-form dot paths.
+		IndexEntry{
+			Path:   "context\\standards\\.gitkeep",
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Kind:   "standard",
+		},
+		IndexEntry{
+			Path:   "context/index.yaml",
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Kind:   "standard",
+		},
+	)
 	if _, _, _, err := Write(root, index); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
@@ -108,8 +123,11 @@ func TestIndexSkipsDotfiles(t *testing.T) {
 		t.Fatalf("Entries() error = %v", err)
 	}
 	for _, e := range entries {
-		if strings.Contains("/"+e.Path, "/.") {
+		if strings.Contains("/"+filepath.ToSlash(e.Path), "/.") {
 			t.Fatalf("Entries returned dotfile: %s", e.Path)
+		}
+		if e.Path == "context/index.yaml" {
+			t.Fatal("Entries returned the index itself")
 		}
 	}
 }

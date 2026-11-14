@@ -174,7 +174,10 @@ func Entries(root, kind string) ([]IndexEntry, error) {
 	for _, f := range index.Files {
 		// Stored indexes written before dotfile filtering can still carry
 		// sentinel entries — filter on read too, not only at Build time.
-		if f.Kind == kind && !strings.Contains("/"+f.Path, "/.") {
+		// ToSlash keeps the rule working on hand-edited or foreign-written
+		// indexes that use backslash separators.
+		p := filepath.ToSlash(f.Path)
+		if f.Kind == kind && p != "context/index.yaml" && !strings.Contains("/"+p, "/.") {
 			out = append(out, f)
 		}
 	}

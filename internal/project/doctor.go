@@ -61,13 +61,17 @@ func Doctor(root string) *DoctorReport {
 	report.add(".ox-agent exists", nil, false)
 
 	for _, dir := range scaffoldDirs {
-		info, err := os.Stat(filepath.Join(base, dir))
+		p := filepath.Join(base, dir)
+		info, err := os.Stat(p)
 		if dir == "state/input" && os.IsNotExist(err) {
 			// Requests are created on demand and new scaffolds carry a
 			// .gitkeep, but a clone of an older project legitimately
-			// lacks the directory — report ok rather than missing.
-			report.add("dir "+dir, nil, true)
-			continue
+			// lacks the directory — report ok rather than missing. A
+			// dangling symlink is not absence: Lstat still sees it.
+			if _, lerr := os.Lstat(p); os.IsNotExist(lerr) {
+				report.add("dir "+dir, nil, true)
+				continue
+			}
 		}
 		if err == nil && !info.IsDir() {
 			report.add("dir "+dir, fmt.Errorf("exists but is not a directory"), true)
@@ -526,7 +530,11 @@ func (r *DoctorReport) checkSourceControl(root string) {
 	if err != nil {
 		return
 	}
-	out, err := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree").CombinedOutput()
+	cmd := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree")
+	// Localized git translates the "not a git repository" fatal; pin the
+	// locale so the stderr check below matches on every install.
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.CombinedOutput()
 	// rev-parse exits non-zero both outside a repo ("not a git repository")
 	// and when git can't read it (dubious ownership, corruption) — warn on
 	// the former, stay silent on the latter since nothing reliable follows.
@@ -545,16 +553,21 @@ func (r *DoctorReport) checkSourceControl(root string) {
 	// in the index, which would hide a rule added after the trail committed.
 	probes := []string{
 		".ox-agent",
-		".ox-agent/work/active/.gitkeep",
 		".ox-agent/work/active/WI-0001/spec.md",
 		".ox-agent/work/archived/WI-0001/spec.md",
 		".ox-agent/state/events.ndjson",
 		".ox-agent/state/input/IN-0001.yaml",
+		".ox-agent/state/snapshots/WI-0001.json",
 		".ox-agent/discussions/general.yaml",
 		".ox-agent/context/project.yaml",
 		".ox-agent/context/standards/base.md",
 		".ox-agent/context/decisions/0001.md",
 		".ox-agent/context/specs/README.md",
+	}
+	// A sentinel probe per gitkept dir catches per-dir ignore rules the
+	// artifact probes miss (e.g. `.ox-agent/state/snapshots/` alone).
+	for _, dir := range gitkeepDirs {
+		probes = append(probes, ".ox-agent/"+dir+"/.gitkeep")
 	}
 	ignored, err := exec.Command(git, append([]string{"-C", root, "check-ignore", "--no-index", "--"}, probes...)...).Output()
 	if err == nil && len(strings.TrimSpace(string(ignored))) > 0 {
@@ -562,8 +575,10 @@ func (r *DoctorReport) checkSourceControl(root string) {
 		r.add("source control", fmt.Errorf("git rules ignore .ox-agent paths: %v — the spec trail must be committed", paths), false)
 		return
 	}
-	if ee, ok := err.(*exec.ExitError); err != nil && (!ok || ee.ExitCode() > 1) {
-		return // check-ignore couldn't evaluate; nothing reliable to report
+	// check-ignore exits 1 on no matches; anything else — usage errors
+	// (>1) or a signal kill (-1) — means nothing reliable follows.
+	if ee, ok := err.(*exec.ExitError); err != nil && (!ok || ee.ExitCode() != 1) {
+		return
 	}
 	tracked, err := exec.Command(git, "-C", root, "ls-files", "--", ".ox-agent").Output()
 	if err != nil {

@@ -129,6 +129,32 @@ func TestDoctorSourceControlTrackedIgnored(t *testing.T) {
 	}
 }
 
+// TestDoctorSourceControlPerDirRule verifies a rule covering a single
+// sentinel dir is caught — only the per-dir .gitkeep probes reach paths
+// like `.ox-agent/state/snapshots/`, which carry no other artifact probe.
+func TestDoctorSourceControlPerDirRule(t *testing.T) {
+	git := gitOrSkip(t)
+	for _, rule := range []string{
+		".ox-agent/state/snapshots/",
+		".ox-agent/work/archived/",
+		".ox-agent/discussions/",
+		".ox-agent/state/input/",
+	} {
+		root := t.TempDir()
+		runGit(t, git, root, "init", "-q")
+		if err := Init(root); err != nil {
+			t.Fatalf("Init() error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(rule+"\n"), 0o644); err != nil {
+			t.Fatalf("writing .gitignore: %v", err)
+		}
+		check := findCheck(Doctor(root), "source control")
+		if check == nil || check.OK {
+			t.Fatalf("per-dir rule %q not flagged", rule)
+		}
+	}
+}
+
 // TestDoctorFreshClone verifies a git clone of a committed project passes
 // doctor: .gitkeep sentinels carry the required-but-initially-empty dirs,
 // and the gitignored runtime/ tree is never required.
