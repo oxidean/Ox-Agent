@@ -86,7 +86,8 @@ prints the skill documentation path, and waits for
 Supported adapters are `manual`, `spawn-cli`, and `webhook`; new adapters
 are added per concrete consumer, never as generic placeholders. A `spawn-cli`
 integration shells a command template — `{packet}`, `{output}`, and
-`{run_dir}` expand to paths under the run directory — and works for any
+`{run_dir}` expand to paths under the run directory, `{work_item}`,
+`{skill}`, `{stage}` to their names — and works for any
 agent CLI, including remote dispatch (`ssh host agent ...`). Example, saved
 as `.ox-agent/integrations/myagent.yaml`:
 
@@ -262,7 +263,7 @@ manifest is validated against the skill-manifest contract before anything
 is written. Provenance is recorded in `.ox-agent/remote-skills.lock`: the
 source URL, requested `--ref` (branch/tag/commit, default remote HEAD),
 the resolved commit SHA, and a sha256 digest of every installed file — so
-`skills check` and `doctor` verify what was reviewed is what runs.
+`skills check` verifies what was reviewed is what runs.
 
 - Embedded (ox-agent-owned) skill directories can never be shadowed.
 - An existing directory is replaced only when the lock already owns it and
