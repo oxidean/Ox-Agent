@@ -34,8 +34,9 @@ issues. `--fix` repairs fixable problems (missing directories, stale locks).
 
 It also checks source control. Everything under `.ox-agent/` except
 `runtime/` is meant to be committed — `work/` is the project's spec trail
-and `context/specs/` its curated layer — so a git ignore rule covering the
-state directories fails the check, and a wholly untracked tree warns.
+and `context/specs/` its curated layer — so a git ignore rule covering any
+of `work/`, `state/`, `discussions/`, or `context/` fails the check, and a
+wholly untracked tree warns.
 Projects outside a git work tree warn rather than fail.
 
 ## Work item commands

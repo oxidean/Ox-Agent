@@ -33,8 +33,8 @@ needs Developer Mode or an elevated shell; `integrate` reports a warning and
 leaves the rest of the wiring in place when it cannot link.
 
 The scaffold commits to git: `.ox-agent/.gitignore` keeps `runtime/` out;
-`.gitattributes` marks the event journal and discussion threads `merge=union`
-so append-only files merge cleanly across branches.
+`.gitattributes` marks `state/events.ndjson` `merge=union`
+so the append-only journal merges cleanly across branches.
 
 ## Your first work item
 

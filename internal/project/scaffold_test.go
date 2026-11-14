@@ -150,6 +150,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	for _, rel := range []string{
 		"skills/adr/SKILL.md", "config.yaml", ".gitignore", "README.md",
 		"state/events.ndjson", "context/project.yaml", "assets.lock",
+		"context/specs/README.md",
 	} {
 		if err := os.Remove(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("removing %s: %v", rel, err)
@@ -165,7 +166,7 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	if len(report.DirsCreated) == 0 || len(report.FilesRestored) == 0 || len(report.SeedsWritten) == 0 {
 		t.Fatalf("incomplete repair report: %+v", report)
 	}
-	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "README.md"} {
+	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "README.md", "context/specs/README.md"} {
 		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s not restored: %v", rel, err)
 		}

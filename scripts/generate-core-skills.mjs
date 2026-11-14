@@ -36,7 +36,7 @@ const skills = {
   brainstorm: {
     category: 'brainstorming',
     description: 'Run structured divergent and convergent analysis for a work item while preserving disagreement and producing decision-ready options.',
-    consumes: '- the problem framing in the packet plus `context.references` for prior exploration.',
+    consumes: '- the problem framing in the packet plus `context.references` and `context.specs` for prior exploration.',
     produces: '- candidate directions as `artifacts` (one per option) with tradeoffs and open questions in `findings`; feeds `specify` once a direction is chosen.',
       evalFlags: 'divergent_options`, `tradeoffs_documented`, `preserves_disagreement',
   },
@@ -65,14 +65,14 @@ const skills = {
     category: 'testing',
     description: 'Guide red-green-refactor implementation and produce evidence that behavior is covered by meaningful tests.',
     consumes: '- `context.project.test_command` and `constraints.allowed_paths`.',
-    produces: '- failing-test-first then implementation artifacts as `changed_paths`; test outcomes in `findings` (red-to-green evidence).',
+    produces: '- failing-test-first then implementation artifacts as `{path, summary}` objects; test outcomes in `findings` (red-to-green evidence).',
       evalFlags: 'red_first`, `evidence_recorded`, `within_allowed_paths',
   },
   implementation: {
     category: 'implementation',
     description: 'Implement one bounded, approved work-item stage while respecting scope, standards, and file constraints.',
     consumes: '- the spec/plan artifacts in `context.references` and `constraints.allowed_paths` bounding edits.',
-    produces: '- code changes listed in `artifacts` as `changed_paths` entries with one-line summaries; failure edges in `findings`.',
+    produces: '- code changes listed in `artifacts` as `{path, summary}` objects — the one-line change note goes in `summary`, never glued onto the path; failure edges in `findings`.',
       evalFlags: 'within_allowed_paths`, `changes_listed`, `edge_cases_noted',
   },
   'code-review': {

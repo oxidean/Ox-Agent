@@ -97,8 +97,8 @@ Keep invoking the pipeline command and collecting runs until it prints
 <Aside type="tip">
 	`.ox-agent/` is meant to be committed. Work items, decisions, and
 	standards are repo history like the code itself. The scaffold's
-	`.gitattributes` marks the event journal and discussion threads
-	`merge=union` so append-only files merge cleanly; `runtime/` is
+	`.gitattributes` marks `state/events.ndjson`
+	`merge=union` so the append-only journal merges cleanly; `runtime/` is
 	gitignored generated scratch.
 </Aside>
 

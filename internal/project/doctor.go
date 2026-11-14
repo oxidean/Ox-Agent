@@ -521,9 +521,16 @@ func (r *DoctorReport) checkSourceControl(root string) {
 	if err != nil {
 		return
 	}
-	inside, err := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree").Output()
-	if err != nil || strings.TrimSpace(string(inside)) != "true" {
+	out, err := exec.Command(git, "-C", root, "rev-parse", "--is-inside-work-tree").CombinedOutput()
+	// rev-parse exits non-zero both outside a repo ("not a git repository")
+	// and when git can't read it (dubious ownership, corruption) — warn on
+	// the former, stay silent on the latter since nothing reliable follows.
+	switch {
+	case err == nil && strings.TrimSpace(string(out)) == "true":
+	case err == nil || strings.Contains(string(out), "not a git repository"):
 		r.Warnings = append(r.Warnings, "not inside a git work tree — .ox-agent has no source-control trail; commit it so work artifacts and specs travel with the project")
+		return
+	default:
 		return
 	}
 	// Probe real artifact paths beneath each protected dir, not only the
@@ -533,10 +540,14 @@ func (r *DoctorReport) checkSourceControl(root string) {
 	// in the index, which would hide a rule added after the trail committed.
 	probes := []string{
 		".ox-agent",
-		".ox-agent/work/active/WI-1/spec.md",
+		".ox-agent/work/active/WI-0001/spec.md",
+		".ox-agent/work/archived/WI-0001/spec.md",
 		".ox-agent/state/events.ndjson",
+		".ox-agent/state/input/IN-0001.yaml",
 		".ox-agent/discussions/general.yaml",
 		".ox-agent/context/project.yaml",
+		".ox-agent/context/standards/base.md",
+		".ox-agent/context/decisions/0001.md",
 		".ox-agent/context/specs/README.md",
 	}
 	ignored, err := exec.Command(git, append([]string{"-C", root, "check-ignore", "--no-index", "--"}, probes...)...).Output()
@@ -545,8 +556,8 @@ func (r *DoctorReport) checkSourceControl(root string) {
 		r.add("source control", fmt.Errorf("git rules ignore .ox-agent paths: %v — the spec trail must be committed", paths), false)
 		return
 	}
-	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() > 1 {
-		return // check-ignore itself failed; nothing reliable to report
+	if ee, ok := err.(*exec.ExitError); err != nil && (!ok || ee.ExitCode() > 1) {
+		return // check-ignore couldn't evaluate; nothing reliable to report
 	}
 	tracked, err := exec.Command(git, "-C", root, "ls-files", "--", ".ox-agent").Output()
 	if err != nil {
