@@ -1,12 +1,14 @@
 package appctx
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
 
@@ -22,6 +24,19 @@ import (
 // A name already promoted from a different work item, or an existing spec
 // file no promotion produced, refuses rather than silently re-owning it.
 func Promote(root string, item *state.WorkItem, name string) (specPath string, updated bool, err error) {
+	// Serialize promotions project-wide: the owner check → write → index →
+	// journal sequence must be atomic or two concurrent promotes of the
+	// same slug could both pass the provenance check and interleave.
+	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "promote.lock")
+	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+		var lerr error
+		specPath, updated, lerr = promote(root, item, name)
+		return lerr
+	})
+	return specPath, updated, err
+}
+
+func promote(root string, item *state.WorkItem, name string) (specPath string, updated bool, err error) {
 	source := filepath.Join(item.Dir, "artifacts", "spec.md")
 	data, err := os.ReadFile(source)
 	if err != nil {
@@ -59,6 +74,18 @@ func Promote(root string, item *state.WorkItem, name string) (specPath string, u
 	case owner != "":
 		return "", false, fmt.Errorf("%s is already promoted from %s — pass --name to pick a different spec name", rel, owner)
 	case exists:
+		// A file with no provenance normally refuses — except the orphan a
+		// crashed promotion leaves: identical content means the earlier
+		// attempt wrote it, so finishing it restores the journaled state
+		// rather than stranding the promote forever.
+		if existing, rerr := os.ReadFile(target); rerr == nil && bytes.Equal(existing, data) {
+			// Journal spec.promoted, not spec.updated: ownership only
+			// comes from promoted events, and without one this file
+			// stays ownerless — a later re-promote with real changes
+			// would refuse as foreign again.
+			exists = false
+			break
+		}
 		return "", false, fmt.Errorf("%s already exists and was not promoted from a work item — pass --name to pick a different spec name", rel)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

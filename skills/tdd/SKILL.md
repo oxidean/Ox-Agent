@@ -25,7 +25,7 @@ Guide red-green-refactor implementation and produce evidence that behavior is co
 
 ## Spec reconciliation
 
-- Where a `context.specs` entry covers the stage's paths, its contracts drive the test list alongside the work item's spec — cite the governing spec in findings.
+- Where a `context.specs` entry covers the stage's paths, its contracts drive the test list alongside the work item's spec — list the governing spec in `spec_impact.consulted` so coverage reads it as acknowledged.
 
 ## Operating rules
 

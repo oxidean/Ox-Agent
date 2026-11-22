@@ -248,8 +248,11 @@ Copy the work item's `artifacts/spec.md` into `context/specs/<slug>.md`
 (default slug: the title), refresh the index, and journal `spec.promoted`
 (first promotion) or `spec.updated` (re-promotion). The promoted file is the
 spec of record for its subject — future packets receive it under
-`context.specs` and must reconcile against it, so when a follow-up change
-amends that behavior, update the promoted file and re-promote. Promotion
+`context.specs` and must reconcile against it. Promotion always copies from
+the work item, so keep the amendment where it originates: update the item's
+`spec.md` and re-promote, or edit the spec of record directly (skills do
+this and record it in `spec_impact.updates`) — editing the promoted file
+and then re-promoting loses the edit to the item's older copy. Promotion
 refuses a slug another work item promoted, or a spec file no promotion
 produced — pass `--name` to pick a different one. `archive` prints this hint
 when it files an item whose spec was never promoted.
@@ -272,10 +275,14 @@ written). Collection journals a clean declaration as `spec.checked` and any
 drift or unacknowledged coverage touch as `spec.drift`.
 
 `policy.yaml` `specs.enforcement` controls the consequences: `warn` (the
-default) journals findings and prints warnings; `strict` additionally files
-a durable decision request (`input respond` resolves it) and keeps the run
-`retry` so a drifted outcome cannot apply until a human answers; `off`
-disables evaluation entirely.
+default) journals findings and prints warnings; `strict` files a durable
+decision request and keeps the run `retry` so the drifted outcome never
+applies; `off` disables evaluation entirely. The held run's outcome is
+dead like any parked run — the answer lands in the next packet, and
+answering "Accept the drift and proceed" releases later runs whose drift
+matches the same finding set (anything else re-files the decision when
+identical drift recurs); a re-dispatched run that conforms or resolves
+the drift completes normally.
 
 ## Skills
 

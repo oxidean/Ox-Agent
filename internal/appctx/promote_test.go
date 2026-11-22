@@ -212,3 +212,47 @@ func TestParseCovers(t *testing.T) {
 		}
 	}
 }
+
+// TestPromoteCompletesOrphanedSpec verifies a file identical to the
+// work item's spec — the orphan a crashed first promotion leaves —
+// completes on retry instead of refusing as foreign.
+func TestPromoteCompletesOrphanedSpec(t *testing.T) {
+	root := initProject(t)
+	item := startWithSpec(t, root, "the spec", "# the spec\n")
+	target := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("# the spec\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel, updated, err := Promote(root, item, "")
+	if err != nil {
+		t.Fatalf("Promote() error = %v", err)
+	}
+	if rel != "context/specs/the-spec.md" {
+		t.Fatalf("rel = %s", rel)
+	}
+	// Completing an orphaned write is still the first promotion.
+	if updated {
+		t.Fatal("orphan completion reported updated, want promoted")
+	}
+}
+
+// TestPromoteStillRefusesForeignContent verifies the orphan escape hatch
+// only opens for identical content — a different unpromoted file keeps
+// refusing.
+func TestPromoteStillRefusesForeignContent(t *testing.T) {
+	root := initProject(t)
+	item := startWithSpec(t, root, "the spec", "# the spec\n")
+	target := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("# hand written\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Promote(root, item, ""); err == nil {
+		t.Fatal("Promote() accepted foreign content")
+	}
+}

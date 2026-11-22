@@ -166,6 +166,41 @@ func Load(root string) (*Index, error) {
 	return &index, nil
 }
 
+// CoveredSpecs walks context/specs and returns each file's `covers:`
+// globs parsed fresh from front matter. Collection uses this instead of
+// the stored index: the index only refreshes on `context index`, so
+// index-driven coverage could miss a glob added (or retain one removed)
+// since the last build. Entries without covers are skipped.
+func CoveredSpecs(root string) ([]IndexEntry, error) {
+	specsDir := filepath.Join(root, ".ox-agent", "context", "specs")
+	var out []IndexEntry
+	err := filepath.Walk(specsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(filepath.Join(root, ".ox-agent"), path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.Contains("/"+rel, "/.") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if covers := parseCovers(data); len(covers) > 0 {
+			out = append(out, IndexEntry{Path: rel, Kind: "spec", Covers: covers})
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return out, err
+}
+
 // Entries returns the index entries of one kind; loading the index fresh
 // when it does not exist.
 func Entries(root, kind string) ([]IndexEntry, error) {

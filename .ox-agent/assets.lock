@@ -110,7 +110,7 @@
     "skills/specify/schemas/input.schema.json": "sha256:b3ff87a7e2e999822286731972e73972b1f786e349effcd8ae212c235f4611f6",
     "skills/specify/schemas/output.schema.json": "sha256:32b6db0463144af02cdacbf8715d880f83fb7c827720d5c78a3606aa1fbc056a",
     "skills/specify/skill.yaml": "sha256:71dba21c31c68e34cfcbab3ff0d04a9d3658a2a6fee985db2510639f0f7e8f30",
-    "skills/tdd/SKILL.md": "sha256:94133421f4d64fd0d299f4eb7a000ab07c40c2d8a5961575e9f447ebdad0f1bb",
+    "skills/tdd/SKILL.md": "sha256:6a743d601c30d0f3d078c251f553e65af0731278225b2c6af81030bc4956f249",
     "skills/tdd/evals/evals.yaml": "sha256:d42ad8f25f35172395363eb58208f00d1ab5303839bfcac20f46555f8515deb7",
     "skills/tdd/schemas/input.schema.json": "sha256:922a39b5b093b018f8f60ca695de9d95879477e11496d7d51620e243d8fbb138",
     "skills/tdd/schemas/output.schema.json": "sha256:f2b7101e28dc873aadfeda8e47a4aab20b7450ed71f7b3369cdc325f62e68ce0",

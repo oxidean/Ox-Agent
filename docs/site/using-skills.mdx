@@ -53,8 +53,9 @@ the permanent spec trail — and specs worth reusing promote into
 packets pick them up under `context.specs`. Skills reconcile against
 those specs of record and declare the relationship in their output's
 `spec_impact`; `policy.yaml` `specs.enforcement` decides whether drift
-only warns (`warn`, the default) or files a decision request that holds
-the run until answered (`strict`).
+only warns (`warn`, the default) or files a decision request that keeps
+the drifted outcome from ever applying (`strict`) — answering it with
+"accept" releases later runs whose drift matches.
 
 ## When a skill needs you
 

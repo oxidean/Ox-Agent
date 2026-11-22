@@ -465,7 +465,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// and a strict policy can veto the advancement below. An evaluation
 	// failure keeps the run pending — the broken policy or index is the
 	// thing to fix, not something to collect past.
-	specEval, err := evaluateSpecImpact(root, output)
+	specEval, err := evaluateSpecImpact(root, item, output)
 	if err != nil {
 		return run, output, err
 	}
@@ -483,7 +483,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// — but only when nothing else already parks it: rework, questions,
 	// and escalations have their own durable resolution paths.
 	strictSpecBlock := specEval != nil && specEval.enforcement == "strict" &&
-		len(specEval.findings) > 0 &&
+		len(specEval.findings) > 0 && !specEval.released &&
 		status != "failed" && !blocking && !needsInput &&
 		verdict != "needs_rework" && action != "retry"
 	switch {
@@ -546,7 +546,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			Actor:      "ox-agent",
 			Data:       eventData,
 		}); err != nil {
-			if run.Status == "collected" || blocking || needsInput {
+			if run.Status == "collected" || blocking || needsInput || strictSpecBlock {
 				// The outcome still has to run — restoring pending keeps the
 				// whole tail (journal append + applyOutcome) retryable. An
 				// event-only replay would journal the result but never
@@ -588,6 +588,9 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// the held outcome survives a restart.
 	journalSpecEvents(root, item, run, specEval)
 	if specEval != nil {
+		if specEval.released {
+			run.SpecWarnings = append(run.SpecWarnings, "spec drift released — a human already accepted this exact finding set")
+		}
 		for _, issue := range specEval.globIssues {
 			run.SpecWarnings = append(run.SpecWarnings, issue)
 		}

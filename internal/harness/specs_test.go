@@ -337,3 +337,157 @@ func TestEntriesExposeCovers(t *testing.T) {
 	}
 	t.Fatalf("covered spec missing from entries: %v", entries)
 }
+
+// TestCollectConformsOmittedPasses verifies spec_impact declaring only
+// consulted reads as a clean check — an omitted conforms is "no claim",
+// not a contradiction.
+func TestCollectConformsOmittedPasses(t *testing.T) {
+	root, item := initProject(t)
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/context.go"}
+	output["spec_impact"] = map[string]any{
+		"consulted": []any{"context/specs/api.md"},
+	}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "collected" {
+		t.Fatalf("run status = %s", run.Status)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.checked" {
+		t.Fatalf("spec events = %v", events)
+	}
+}
+
+// TestCollectArtifactDotSlashMatches verifies a leading ./ on a declared
+// artifact still matches its spec's covers glob.
+func TestCollectArtifactDotSlashMatches(t *testing.T) {
+	root, item := initProject(t)
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"./internal/cli/context.go"}
+	output["spec_impact"] = map[string]any{
+		"consulted": []any{"context/specs/api.md"},
+		"conforms":  true,
+	}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.checked" {
+		t.Fatalf("./ artifact missed coverage: spec events = %v", events)
+	}
+}
+
+// TestCollectStrictReleasesAfterAcceptance verifies the strict release
+// path: a human answering the decision with "accept" releases later runs
+// whose drift matches the same finding set — drift still journals, but
+// no duplicate decision parks the run.
+func TestCollectStrictReleasesAfterAcceptance(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/context.go"}
+
+	run1 := dispatchSpecRun(t, root, item, output)
+	run1, _, err := Collect(root, run1.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run1 error = %v", err)
+	}
+	if run1.AwaitingInput == "" {
+		t.Fatal("run1 filed no decision")
+	}
+	if _, err := input.Respond(root, run1.AwaitingInput, "human", specDecisionAccept); err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+
+	run2 := dispatchSpecRun(t, root, item, output)
+	run2, _, err = Collect(root, run2.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run2 error = %v", err)
+	}
+	if run2.Status != "collected" {
+		t.Fatalf("run2 status = %s, want collected after acceptance", run2.Status)
+	}
+	if run2.AwaitingInput != "" {
+		t.Fatalf("run2 parked a duplicate request: %s", run2.AwaitingInput)
+	}
+	pending, _ := input.Pending(root)
+	if len(pending) != 0 {
+		t.Fatalf("pending after release = %v", pending)
+	}
+	found := false
+	for _, w := range run2.SpecWarnings {
+		if strings.Contains(w, "released") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no release warning in %v", run2.SpecWarnings)
+	}
+}
+
+// TestCollectStrictDedupesPendingDecision verifies a second run drifting
+// identically while the decision is still pending reuses that request
+// rather than stacking another.
+func TestCollectStrictDedupesPendingDecision(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/context.go"}
+
+	run1 := dispatchSpecRun(t, root, item, output)
+	run1, _, err := Collect(root, run1.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run1 error = %v", err)
+	}
+	run2 := dispatchSpecRun(t, root, item, output)
+	run2, _, err = Collect(root, run2.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run2 error = %v", err)
+	}
+	if run2.AwaitingInput != run1.AwaitingInput {
+		t.Fatalf("run2 request = %s, want deduped %s", run2.AwaitingInput, run1.AwaitingInput)
+	}
+	pending, _ := input.Pending(root)
+	if len(pending) != 1 {
+		t.Fatalf("pending = %v — identical drift must share one request", pending)
+	}
+}
+
+// TestCoverageReadsCoversFresh verifies coverage parses covers: from the
+// spec file itself — a glob added after the last index build still
+// catches the touch.
+func TestCoverageReadsCoversFresh(t *testing.T) {
+	root, item := initProject(t)
+	writeCoveredSpec(t, root, "api.md", "docs/**")
+	index, err := appctx.Build(root)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, _, _, err := appctx.Write(root, index); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	// Edit covers after the index was built — the stored index still
+	// says docs/** but the file now governs internal/**.
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/context.go"}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.drift" {
+		t.Fatalf("stale-index covers missed the touch: spec events = %v", events)
+	}
+}

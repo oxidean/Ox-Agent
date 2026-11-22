@@ -31,6 +31,11 @@ type specEvaluation struct {
 	findings    []specFinding
 	enforcement string
 	globIssues  []string
+	// released reports that a human already answered a decision for this
+	// exact finding set with "accept" — the findings still journal as
+	// spec.drift, but strict enforcement steps down to warn rather than
+	// parking another identical decision behind the same question.
+	released bool
 }
 
 // evaluateSpecImpact reads the run's spec_impact declaration and checks
@@ -38,7 +43,7 @@ type specEvaluation struct {
 // skips evaluation entirely — no findings, no events. Errors here mean the
 // policy or index is unreadable, which fails the collect so the problem
 // surfaces instead of silently bypassing the gate.
-func evaluateSpecImpact(root string, output map[string]any) (*specEvaluation, error) {
+func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any) (*specEvaluation, error) {
 	policy, err := project.LoadPolicy(root)
 	if err != nil {
 		return nil, fmt.Errorf("cannot evaluate spec impact — %w", err)
@@ -57,7 +62,10 @@ func evaluateSpecImpact(root string, output map[string]any) (*specEvaluation, er
 			}
 		}
 		sort.Strings(eval.consulted)
-		conforms, _ := raw["conforms"].(bool)
+		// conforms is optional: only an explicit false declares
+		// nonconformance — an omitted key reads as "no claim", not
+		// "contradicts".
+		conforms, hasConforms := raw["conforms"].(bool)
 		driftDeclared := false
 		for _, entry := range anyMaps(raw["drift"]) {
 			spec, _ := entry["spec"].(string)
@@ -81,13 +89,20 @@ func evaluateSpecImpact(root string, output map[string]any) (*specEvaluation, er
 				})
 			}
 		}
-		if !conforms && !driftDeclared {
+		if hasConforms && !conforms && !driftDeclared {
 			eval.findings = append(eval.findings, specFinding{
 				Kind: "declared", Summary: "spec_impact declares conforms=false with no drift detail",
 			})
 		}
 	}
 	eval.findings = append(eval.findings, eval.coverageFindings(root, output, consulted)...)
+	// A previously accepted finding set releases under strict: the
+	// decision a human already made stands for identical drift rather
+	// than stacking a duplicate request.
+	if eval.enforcement == "strict" && len(eval.findings) > 0 &&
+		releasedByDecision(root, item.ID, specDecisionQuestion(item, eval.findings)) {
+		eval.released = true
+	}
 	return eval, nil
 }
 
@@ -96,22 +111,19 @@ func evaluateSpecImpact(root string, output map[string]any) (*specEvaluation, er
 // but that appears in neither consulted nor drift is an unacknowledged
 // spec touch — the mechanical part of "keep specs in mind".
 func (e *specEvaluation) coverageFindings(root string, output map[string]any, consulted map[string]bool) []specFinding {
-	specs, err := appctx.Entries(root, "spec")
+	// Coverage reads covers: straight from the spec files, not the
+	// stored index — an index entry only refreshes on `context index`,
+	// so index-driven enforcement could miss a glob added (or retain one
+	// removed) since the last build. The spec files are the truth.
+	specs, err := appctx.CoveredSpecs(root)
 	if err != nil {
-		// A missing index builds on demand; a read failure degrades to
-		// no coverage rather than failing the collect — warn-level by
-		// design, since enforcement must never hinge on index health
-		// alone.
-		e.globIssues = append(e.globIssues, fmt.Sprintf("spec coverage skipped — index unreadable: %v", err))
+		// A read failure degrades to no coverage rather than failing the
+		// collect — warn-level by design, since enforcement must never
+		// hinge on filesystem health alone.
+		e.globIssues = append(e.globIssues, fmt.Sprintf("spec coverage skipped — specs unreadable: %v", err))
 		return nil
 	}
-	var covered []appctx.IndexEntry
-	for _, entry := range specs {
-		if len(entry.Covers) > 0 {
-			covered = append(covered, entry)
-		}
-	}
-	if len(covered) == 0 {
+	if len(specs) == 0 {
 		return nil
 	}
 	artifactPaths := artifactPaths(output["artifacts"])
@@ -119,7 +131,7 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 		return nil
 	}
 	var findings []specFinding
-	for _, spec := range covered {
+	for _, spec := range specs {
 		var matched []string
 		for _, glob := range spec.Covers {
 			if _, err := path.Match(glob, ""); err != nil {
@@ -198,11 +210,60 @@ func journalSpecEvents(root string, item *state.WorkItem, run *Run, eval *specEv
 }
 
 // specDecisionOptions are the resolutions a strict-mode spec-drift
-// decision offers.
+// decision offers. specDecisionAccept is the release answer: an
+// answered request carrying it releases later runs whose drift matches
+// the same question.
 var specDecisionOptions = []string{
 	"Update the spec(s) to match the change",
 	"Accept the drift and proceed",
 	"Rework the change to conform",
+}
+
+const specDecisionAccept = "Accept the drift and proceed"
+
+// specDecisionQuestion builds the durable decision's question text from
+// the finding set alone — never the run ID. A stable question is what
+// makes the durable machinery work: filing dedupes across re-runs on
+// work-item + question, and an answered "accept" request releases every
+// later run whose drift hashes to the same text.
+func specDecisionQuestion(item *state.WorkItem, findings []specFinding) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "spec drift in %s:", item.ID)
+	parts := make([]string, 0, len(findings))
+	for _, f := range findings {
+		switch {
+		case f.Kind == "unacknowledged":
+			parts = append(parts, fmt.Sprintf("%s touched covered paths %v without consultation", f.Spec, f.Paths))
+		case f.Spec != "":
+			parts = append(parts, fmt.Sprintf("%s: %s", f.Spec, f.Summary))
+		default:
+			parts = append(parts, f.Summary)
+		}
+	}
+	sort.Strings(parts)
+	for _, p := range parts {
+		fmt.Fprintf(&b, " %s;", p)
+	}
+	b.WriteString(" resolve the spec of record before this outcome applies.")
+	return b.String()
+}
+
+// releasedByDecision reports whether a human already answered this exact
+// spec-drift question for the work item with "accept". That answer is the
+// release path: the drift still journals, but strict enforcement steps
+// down to warn rather than parking the next run behind a duplicate of a
+// decision already made.
+func releasedByDecision(root, workItemID, question string) bool {
+	requests, _ := input.List(root)
+	for _, r := range requests {
+		if r == nil || r.WorkItemID != workItemID || r.Question != question {
+			continue
+		}
+		if r.Status == input.StatusAnswered && r.Answer == specDecisionAccept {
+			return true
+		}
+	}
+	return false
 }
 
 // fileSpecDecision files the durable decision request a strict-mode spec
@@ -211,20 +272,7 @@ var specDecisionOptions = []string{
 // changes" means in ox-agent idiom, the same durable-request pattern as
 // await_input and gate approvals.
 func fileSpecDecision(root string, item *state.WorkItem, run *Run, findings []specFinding) (*input.Request, error) {
-	var b strings.Builder
-	fmt.Fprintf(&b, "spec drift in run %s (%s):", run.RunID, run.Skill)
-	for _, f := range findings {
-		switch {
-		case f.Kind == "unacknowledged":
-			fmt.Fprintf(&b, " %s touched covered paths %v without consultation;", f.Spec, f.Paths)
-		case f.Spec != "":
-			fmt.Fprintf(&b, " %s: %s;", f.Spec, f.Summary)
-		default:
-			fmt.Fprintf(&b, " %s;", f.Summary)
-		}
-	}
-	b.WriteString(" resolve the spec of record before this outcome applies.")
-	req, err := fileInputRequest(root, item.ID, run.RunID, b.String(), specDecisionOptions)
+	req, err := fileInputRequest(root, item.ID, run.RunID, specDecisionQuestion(item, findings), specDecisionOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -245,13 +293,15 @@ func normalizeSpecRef(ref string) string {
 func artifactPaths(raw any) []string {
 	var out []string
 	for _, entry := range toAnySlice(raw) {
+		var p string
 		switch v := entry.(type) {
 		case string:
-			out = append(out, v)
+			p = v
 		case map[string]any:
-			if p, ok := v["path"].(string); ok {
-				out = append(out, p)
-			}
+			p, _ = v["path"].(string)
+		}
+		if p != "" {
+			out = append(out, p)
 		}
 	}
 	return out
@@ -264,7 +314,9 @@ func artifactPaths(raw any) []string {
 func matchSpecGlob(pattern, name string) bool {
 	pattern = strings.ReplaceAll(pattern, "\\", "/")
 	name = strings.ReplaceAll(name, "\\", "/")
-	return matchGlobSegments(strings.Split(pattern, "/"), strings.Split(name, "/"))
+	// Clean both sides so `./internal/x.go` and `a/../b.go` match the
+	// same coverage as their canonical forms.
+	return matchGlobSegments(strings.Split(path.Clean(pattern), "/"), strings.Split(path.Clean(name), "/"))
 }
 
 // matchGlobSegments matches pattern segments against name segments,
