@@ -416,6 +416,7 @@ func TestCollectStrictRejectsInvalidCoverage(t *testing.T) {
 	for name, content := range map[string]string{
 		"scalar": "---\ncovers: internal/**\n---\n# spec\n",
 		"glob":   "---\ncovers:\n  - internal/[unclosed\n---\n# spec\n",
+		"empty":  "---\ncovers: []\n---\n# spec\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			root, item := initProject(t)
@@ -574,6 +575,29 @@ func TestNormalizeSpecRefCleansPathSegments(t *testing.T) {
 		if got := normalizeSpecRef(input); got != want {
 			t.Errorf("normalizeSpecRef(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestJournalSpecEventsDedupesAgainstLatestFindingSet(t *testing.T) {
+	root, item := initProject(t)
+	run := &Run{RunID: "RUN-0001", Skill: "specify"}
+	evaluation := func(summary string) *specEvaluation {
+		return &specEvaluation{
+			declared:    true,
+			enforcement: "warn",
+			findings: []specFinding{{
+				Kind:    "declared",
+				Spec:    "context/specs/api.md",
+				Summary: summary,
+			}},
+		}
+	}
+	for _, summary := range []string{"first", "second", "first"} {
+		journalSpecEvents(root, item, run, evaluation(summary))
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 3 {
+		t.Fatalf("spec events = %d, want 3", len(events))
 	}
 }
 

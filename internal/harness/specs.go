@@ -229,16 +229,20 @@ func journalSpecEvents(root string, item *state.WorkItem, run *Run, eval *specEv
 	}
 	data["run_id"] = run.RunID
 	data["skill"] = run.Skill
-	if journaled, _ := journalFindEvent(root, item.ID, eventType, run.RunID); journaled != nil {
-		// Same type + same findings = the retried collect replaying —
-		// skip the duplicate. Same type + different findings means
-		// output.json was edited between collects: append the new
-		// record so the journal shows the divergence rather than
-		// keeping a finding set that no longer matches the block.
-		if reflect.DeepEqual(journaled.Data["findings"], data["findings"]) &&
-			reflect.DeepEqual(journaled.Data["consulted"], data["consulted"]) {
+	events, _ := state.ReadEvents(root)
+	for i := len(events) - 1; i >= 0; i-- {
+		journaled := events[i]
+		if journaled.WorkItemID != item.ID || journaled.Data["run_id"] != run.RunID ||
+			(journaled.Type != "spec.checked" && journaled.Type != "spec.drift") {
+			continue
+		}
+		// Same type + same data = a retried collect replaying — skip it.
+		// Compare with the latest spec event for this run so a finding set
+		// that recurs after an intervening change is journaled again.
+		if journaled.Type == eventType && reflect.DeepEqual(journaled.Data, data) {
 			return
 		}
+		break
 	}
 	if err := state.Append(root, state.Event{
 		Type:       eventType,

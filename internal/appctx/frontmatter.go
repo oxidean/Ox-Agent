@@ -80,7 +80,7 @@ func coversInvalid(data []byte) bool {
 		return true
 	}
 	if len(values) == 0 {
-		return false
+		return true
 	}
 	valid := false
 	for _, value := range values {

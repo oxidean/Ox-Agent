@@ -279,8 +279,9 @@ drift or unacknowledged coverage touch as `spec.drift`.
 `policy.yaml` `specs.enforcement` controls the consequences: `warn` (the
 default) journals findings and prints warnings; `strict` files a durable
 decision request and keeps the run `retry` so the drifted outcome never
-applies. Strict collection also fails closed on unreadable or malformed
-coverage metadata; `off` disables evaluation entirely. The held run's
+applies. Strict collection also fails closed on a missing specs directory
+or unreadable or malformed coverage metadata; `off` disables evaluation
+entirely. The held run's
 outcome is dead like any parked run — its status stays `retry`, so do not
 re-collect it. Answering the request puts the answer in the next packet; then
 dispatch a fresh run. "Accept the drift and proceed" releases later runs whose drift
