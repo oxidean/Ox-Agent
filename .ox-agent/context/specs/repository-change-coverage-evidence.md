@@ -41,12 +41,13 @@ path set from:
 
 - `git diff --relative --name-status -z --find-renames <baseline> --`, covering
   committed, staged, unstaged, and deleted tracked paths;
-- `git ls-files --others --exclude-standard -z`, covering non-ignored untracked
-  files.
+- `git ls-files --others --exclude-standard -z -- .`, covering non-ignored
+  untracked files under the project root.
 
 The paths must be relative to the Ox-Agent project root so they match
 `covers:` globs and artifact paths, even when that root is nested inside a
 larger Git worktree.
+Ignore any absolute or parent-prefixed output paths defensively.
 
 Include both old and new paths for renames. Exclude `.ox-agent/work/`,
 `.ox-agent/state/`, and `.ox-agent/runtime/` as Ox-Agent work/journal/runtime

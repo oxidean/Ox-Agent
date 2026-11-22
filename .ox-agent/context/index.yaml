@@ -1,5 +1,5 @@
 schema_version: 1
-generated_at: "2026-11-22T22:38:34Z"
+generated_at: "2026-11-22T22:47:04Z"
 files:
     - path: context/project.yaml
       sha256: fcd2d293e2b935b286e3bf107a5795a25cd2c9294582bb37b4c86c6460c1c03e
@@ -20,8 +20,8 @@ files:
         - docs/cli.md
         - docs/site/cli.mdx
     - path: context/specs/repository-change-coverage-evidence.md
-      sha256: f26c4140b6ea90be152bd5b7aac453a49e8a62cd019b7aebb7cefca475a09979
-      bytes: 5610
+      sha256: bc64e06bb4920b738a238cda8c3c8e544eb846027b180fe78660cb6d964b4a8c
+      bytes: 5703
       kind: spec
       covers:
         - internal/repochange/**
