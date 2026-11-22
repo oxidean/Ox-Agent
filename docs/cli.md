@@ -281,8 +281,9 @@ default) journals findings and prints warnings; `strict` files a durable
 decision request and keeps the run `retry` so the drifted outcome never
 applies. Strict collection also fails closed on unreadable or malformed
 coverage metadata; `off` disables evaluation entirely. The held run's
-outcome is dead like any parked run — the answer lands in the next packet, and
-answering "Accept the drift and proceed" releases later runs whose drift
+outcome is dead like any parked run — its status stays `retry`, so do not
+re-collect it. Answering the request puts the answer in the next packet; then
+dispatch a fresh run. "Accept the drift and proceed" releases later runs whose drift
 matches the same finding set (anything else re-files the decision when
 identical drift recurs); a re-dispatched run that conforms or resolves
 the drift completes normally.

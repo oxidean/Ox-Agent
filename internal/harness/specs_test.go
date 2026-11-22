@@ -363,6 +363,30 @@ func TestCollectConformsOmittedPasses(t *testing.T) {
 	}
 }
 
+func TestCollectResolvedDriftRecordsConsultedSpec(t *testing.T) {
+	root, item := initProject(t)
+	output := validOutput("specify")
+	output["spec_impact"] = map[string]any{
+		"drift": []any{map[string]any{
+			"spec":       "context/specs/api.md",
+			"summary":    "updated the spec to match",
+			"resolution": "updated",
+		}},
+	}
+	run := dispatchSpecRun(t, root, item, output)
+	if _, _, err := Collect(root, run.RunID); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.checked" {
+		t.Fatalf("spec events = %v", events)
+	}
+	consulted := anyStrings(events[0].Data["consulted"])
+	if len(consulted) != 1 || consulted[0] != "context/specs/api.md" {
+		t.Fatalf("checked consulted = %v", consulted)
+	}
+}
+
 // TestCollectArtifactDotSlashMatches verifies a leading ./ on a declared
 // artifact still matches its spec's covers glob.
 func TestCollectArtifactDotSlashMatches(t *testing.T) {
@@ -537,6 +561,19 @@ func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
 	}}
 	if specDecisionQuestion(item, ordered) != specDecisionQuestion(item, reversed) {
 		t.Fatal("finding order changed the decision identity")
+	}
+}
+
+func TestNormalizeSpecRefCleansPathSegments(t *testing.T) {
+	for input, want := range map[string]string{
+		"context/specs/./api.md":                  "context/specs/api.md",
+		".ox-agent/context/specs/../specs/api.md": "context/specs/api.md",
+		`context\specs\api.md`:                    "context/specs/api.md",
+		"../../context/specs/api.md":              "",
+	} {
+		if got := normalizeSpecRef(input); got != want {
+			t.Errorf("normalizeSpecRef(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

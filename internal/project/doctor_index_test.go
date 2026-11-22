@@ -113,3 +113,19 @@ func TestDoctorIndexFreshSilent(t *testing.T) {
 		t.Fatalf("fresh index still warned: %v", warnings)
 	}
 }
+
+func TestDoctorIndexUnreadableFileWarns(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	link := filepath.Join(Base(root), "context", "standards", "unreadable.md")
+	if err := os.Symlink(filepath.Join(root, "missing.md"), link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	report := Doctor(root)
+	warnings := indexWarnings(report)
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "freshness scan incomplete") {
+		t.Fatalf("index warnings = %v", warnings)
+	}
+}

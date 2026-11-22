@@ -65,11 +65,12 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 		eval.declared = true
 		for _, c := range anyStrings(raw["consulted"]) {
 			if c = normalizeSpecRef(c); c != "" {
-				consulted[c] = true
-				eval.consulted = append(eval.consulted, c)
+				if !consulted[c] {
+					eval.consulted = append(eval.consulted, c)
+					consulted[c] = true
+				}
 			}
 		}
-		sort.Strings(eval.consulted)
 		// conforms is optional: only an explicit false declares
 		// nonconformance — an omitted key reads as "no claim", not
 		// "contradicts".
@@ -84,7 +85,10 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 			if spec != "" {
 				// A declared drift counts as consulting that spec — the
 				// skill clearly read it to know it drifts.
-				consulted[spec] = true
+				if !consulted[spec] {
+					eval.consulted = append(eval.consulted, spec)
+					consulted[spec] = true
+				}
 			}
 			if resolution != "updated" {
 				// "proposed" and "unresolved" leave the spec of record
@@ -97,6 +101,7 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 				})
 			}
 		}
+		sort.Strings(eval.consulted)
 		if hasConforms && !conforms && !driftDeclared {
 			eval.findings = append(eval.findings, specFinding{
 				Kind: "declared", Summary: "spec_impact declares conforms=false with no drift detail",
@@ -338,6 +343,10 @@ func normalizeSpecRef(ref string) string {
 	ref = strings.ReplaceAll(ref, "\\", "/")
 	ref = strings.TrimPrefix(ref, "./")
 	ref = strings.TrimPrefix(ref, ".ox-agent/")
+	ref = path.Clean(ref)
+	if ref == "." || ref == ".." || strings.HasPrefix(ref, "../") {
+		return ""
+	}
 	return strings.Trim(ref, "/")
 }
 

@@ -630,14 +630,23 @@ func (r *DoctorReport) checkIndexFreshness(root string) {
 	// context/ and discussions/, dot-prefixed segments excluded, and
 	// index.yaml itself never counts.
 	current := map[string]string{}
+	var scanIssues []string
 	for _, dir := range []string{"context", "discussions"} {
 		rootDir := filepath.Join(base, dir)
-		_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+		err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if path == rootDir && os.IsNotExist(err) {
+					return nil
+				}
+				scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", path, err))
+				return nil
+			}
+			if info.IsDir() {
 				return nil
 			}
 			rel, err := filepath.Rel(base, path)
 			if err != nil {
+				scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", path, err))
 				return nil
 			}
 			rel = filepath.ToSlash(rel)
@@ -646,12 +655,21 @@ func (r *DoctorReport) checkIndexFreshness(root string) {
 			}
 			file, err := os.ReadFile(path)
 			if err != nil {
+				scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", rel, err))
 				return nil
 			}
 			sum := sha256.Sum256(file)
 			current[rel] = hex.EncodeToString(sum[:])
 			return nil
 		})
+		if err != nil {
+			scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", rootDir, err))
+		}
+	}
+	if len(scanIssues) > 0 {
+		r.add("context index", nil, false)
+		r.Warnings = append(r.Warnings, fmt.Sprintf("context index freshness scan incomplete: %s — fix filesystem access and rerun `ox-agent doctor`", strings.Join(scanIssues, "; ")))
+		return
 	}
 	if indexed == nil {
 		// No stored index: worth nudging only when there is content that

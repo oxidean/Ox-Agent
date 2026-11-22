@@ -758,6 +758,21 @@ func TestCollectAwaitInputDedupes(t *testing.T) {
 	}
 }
 
+func TestFileInputRequestDoesNotReuseDifferentOptions(t *testing.T) {
+	root, item := initProject(t)
+	first, err := fileInputRequest(root, item.ID, "run-one", "choose a strategy", []string{"fast", "safe"})
+	if err != nil {
+		t.Fatalf("first fileInputRequest() error = %v", err)
+	}
+	second, err := fileInputRequest(root, item.ID, "run-two", "choose a strategy", []string{"fast", "balanced"})
+	if err != nil {
+		t.Fatalf("second fileInputRequest() error = %v", err)
+	}
+	if first.RequestID == second.RequestID {
+		t.Fatal("request with changed options reused the first request")
+	}
+}
+
 // TestCollectRetryAfterOutcomeFailure verifies a failed outcome filing
 // restores the run to pending so collection retries instead of stranding
 // the run non-collectable.
