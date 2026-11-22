@@ -48,6 +48,9 @@ func Append(root string, event Event) error {
 	if _, err := file.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("appending lifecycle event: %w", err)
 	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("syncing event journal: %w", err)
+	}
 	return nil
 }
 

@@ -15,7 +15,6 @@ import (
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
-	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -49,7 +48,12 @@ type Run struct {
 	// record and a later collect retries it — one run's broken
 	// bookkeeping must not block an unrelated run's collection (#53).
 	ReconcileWarnings []string `json:"-"`
-	Dir               string   `json:"-"`
+	// SpecWarnings carries non-fatal spec-reconciliation problems seen
+	// during this collect — unreadable coverage indexes, malformed
+	// covers globs, and journaled-finding failures ride here so the CLI
+	// can surface them without failing the collection.
+	SpecWarnings []string `json:"-"`
+	Dir          string   `json:"-"`
 }
 
 // DispatchRequest describes one skill invocation to dispatch.
@@ -352,9 +356,8 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	// same item could both replay a pending event or both apply an
 	// outcome. The kernel lock serializes the whole critical section
 	// (#53).
-	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "collect-"+run.WorkItemID+".lock")
 	var output map[string]any
-	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+	err = input.WithWorkItemLock(root, run.WorkItemID, func() error {
 		// Reload under the lock: the snapshot taken before queuing can be
 		// stale by the time the lock is granted — a sibling collector may
 		// have applied this run's outcome already. Acting on the stale
@@ -455,6 +458,15 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		// not silently reconcilable.
 		return run, output, fmt.Errorf("invalid artifact path for %s: %w (record failures: save=%v event=%v)", runID, err, saveErr, appendErr)
 	}
+	// Spec reconciliation evaluates before the outcome applies: the
+	// evaluation reads the declared spec_impact plus coverage analysis,
+	// and a strict policy can veto the advancement below. An evaluation
+	// failure keeps the run pending — the broken policy or index is the
+	// thing to fix, not something to collect past.
+	specEval, err := evaluateSpecImpact(root, item, output)
+	if err != nil {
+		return run, output, err
+	}
 	run.CollectedAt = time.Now().UTC().Format(time.RFC3339)
 	status, _ := output["status"].(string)
 	verdict, _ := output["verdict"].(string)
@@ -465,6 +477,13 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// as collected.
 	blocking := status == "blocked" || verdict == "blocked" || action == "escalate"
 	needsInput := action == "await_input"
+	// A strict policy parks a passing outcome behind a spec-drift decision
+	// — but only when nothing else already parks it: rework, questions,
+	// and escalations have their own durable resolution paths.
+	strictSpecBlock := specEval != nil && specEval.enforcement == "strict" &&
+		len(specEval.findings) > 0 && !specEval.released &&
+		status != "failed" && !blocking && !needsInput &&
+		verdict != "needs_rework" && action != "retry"
 	switch {
 	case status == "failed":
 		run.Status = "failed"
@@ -485,6 +504,11 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		// A rework/retry outcome is finished but not done: the run must not
 		// count for skill selection or pipeline progress so another pass
 		// stays dispatchable.
+		run.Status = "retry"
+	case strictSpecBlock:
+		// A passing outcome held for spec drift: retry keeps the skill
+		// dispatchable while the filed decision waits on a human — the
+		// outcome applies only after drift resolves.
 		run.Status = "retry"
 	default:
 		run.Status = "collected"
@@ -520,7 +544,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			Actor:      "ox-agent",
 			Data:       eventData,
 		}); err != nil {
-			if run.Status == "collected" || blocking || needsInput {
+			if run.Status == "collected" || blocking || needsInput || strictSpecBlock {
 				// The outcome still has to run — restoring pending keeps the
 				// whole tail (journal append + applyOutcome) retryable. An
 				// event-only replay would journal the result but never
@@ -554,6 +578,46 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 				runID, journaled.Type,
 				journaled.Data["verdict"], journaled.Data["next_action"], journaled.Data["status"],
 				verdict, action, status, saveErr)
+		}
+	}
+	// Spec reconciliation journals its findings under the same dedupe
+	// rules as the outcome event — per run, append-only — and a strict
+	// block files its decision through the durable-request machinery so
+	// the held outcome survives a restart.
+	journalSpecEvents(root, item, run, specEval)
+	if specEval != nil {
+		if specEval.released {
+			run.SpecWarnings = append(run.SpecWarnings, "spec drift released — a human already accepted this exact finding set")
+		}
+		for _, issue := range specEval.globIssues {
+			run.SpecWarnings = append(run.SpecWarnings, issue)
+		}
+		for _, finding := range specEval.findings {
+			switch {
+			case finding.Kind == "unacknowledged":
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s covers touched paths %v but was not consulted (declare it under spec_impact.consulted)", finding.Spec, finding.Paths))
+			case finding.Spec != "":
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec drift declared on %s: %s", finding.Spec, finding.Summary))
+			default:
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec drift declared: %s", finding.Summary))
+			}
+		}
+	}
+	if strictSpecBlock {
+		req, err := fileSpecDecision(root, item, run, specEval.findings)
+		if err != nil {
+			// Restore pending like a failed applyOutcome — the decision
+			// must outlive the turn, so a failed filing keeps the whole
+			// collect retryable.
+			run.Status = "pending"
+			if saveErr := run.save(root); saveErr != nil {
+				return run, output, fmt.Errorf("%w (also failed to restore pending status: %v)", err, saveErr)
+			}
+			return run, output, err
+		}
+		run.AwaitingInput = req.RequestID
+		if err := run.save(root); err != nil {
+			return run, output, err
 		}
 	}
 	if run.Status == "collected" || blocking || needsInput {
@@ -828,7 +892,13 @@ func fileInputRequest(root, workItemID, runID, question string, options []string
 			return r, nil
 		}
 		if r.WorkItemID == workItemID && r.Question == question {
-			return r, nil // already on file
+			want := input.KindClarification
+			if len(options) >= 2 {
+				want = input.KindDecision
+			}
+			if r.Kind == want && slices.Equal(r.Options, options) {
+				return r, nil // already on file
+			}
 		}
 	}
 	kind := input.KindClarification

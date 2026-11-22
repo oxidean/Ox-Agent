@@ -17,11 +17,16 @@ Turn a work-item intent into a detailed, testable specification with explicit sc
 
 ## Consumes
 
-- the chosen brainstorm direction and relevant standards/decisions.
+- the chosen brainstorm direction, relevant standards/decisions, and `context.specs` for any spec of record on this subject.
 
 ## Produces
 
-- a spec artifact (path in `artifacts`) with acceptance criteria a `verify` run can check.
+- a spec artifact (path in `artifacts`) with acceptance criteria a `verify` run can check — `covers:` globs on it, and `spec_impact` declaring whether it amends an existing spec of record.
+
+## Spec reconciliation
+
+- Check `context.specs` for an existing spec on this subject: your spec either amends it — declare that in `spec_impact` and edit the promoted file — or establishes a new spec of record.
+- Write `covers:` front-matter globs on the spec naming the repo paths it governs (e.g. `internal/harness/**`) — coverage is what lets collection catch later changes that never consulted it.
 
 ## Operating rules
 

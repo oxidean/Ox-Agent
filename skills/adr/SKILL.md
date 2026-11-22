@@ -17,11 +17,15 @@ Identify and record consequential technical decisions as durable, supersedable a
 
 ## Consumes
 
-- the work-item packet — especially `context.decisions` (prior ADRs) and `context.standards`, so new records supersede rather than contradict.
+- the work-item packet — especially `context.decisions` (prior ADRs), `context.standards`, and `context.specs` (specs of record), so new records supersede rather than contradict.
 
 ## Produces
 
 - ADR files under `context/decisions/<slug>.md` — durable, supersedable records. List each written path in `artifacts`; record superseded ADRs in `findings`.
+
+## Spec reconciliation
+
+- A decision that amends spec'd behavior must keep the spec of record honest — record the spec file change in `spec_impact.updates` so the decision and the spec never disagree silently.
 
 ## Operating rules
 

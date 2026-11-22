@@ -17,11 +17,15 @@ Independently review an implementation against its specification, security bound
 
 ## Consumes
 
-- the implementation run's output via `context.prior_outputs` — its `artifacts` list the changed paths to review — plus the standards the change must satisfy.
+- the implementation run's output via `context.prior_outputs` — its `artifacts` list the changed paths to review — plus the standards and `context.specs` specs of record the change must satisfy.
 
 ## Produces
 
 - severity-ranked review comments in `findings` and a `verdict` that gates the verification stage; cite `file:line` for every finding.
+
+## Spec reconciliation
+
+- Treat spec reconciliation as a review axis: drift against `context.specs` the implementation left undeclared, or covered paths it never consulted, is a finding like any other contract breach.
 
 ## Operating rules
 

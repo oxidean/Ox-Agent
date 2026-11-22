@@ -1,6 +1,8 @@
 package project
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,6 +101,7 @@ func Doctor(root string) *DoctorReport {
 	report.checkGlobMissingOK(base, "state/input", "input-request")
 	report.checkAssets(base)
 	report.checkAssetModes(base)
+	report.checkIndexFreshness(root)
 	report.checkIntegration(root)
 	report.checkSourceControl(root)
 	return report
@@ -589,6 +592,110 @@ func (r *DoctorReport) checkSourceControl(root string) {
 	r.add("source control", nil, false)
 	if len(strings.TrimSpace(string(tracked))) == 0 {
 		r.Warnings = append(r.Warnings, "no .ox-agent files are tracked by git — commit them so work artifacts, specs, and the event journal travel with the project")
+	}
+}
+
+// checkIndexFreshness compares the stored context/index.yaml against the
+// files it claims to describe. Packets read the stored index, not a
+// rescan — so a context entry written or edited since the last
+// `context index` silently never reaches a skill. The check stays
+// advisory: a stale or absent index is never fatal (Entries rebuilds a
+// missing one on demand), it is only invisible.
+func (r *DoctorReport) checkIndexFreshness(root string) {
+	base := Base(root)
+	data, err := os.ReadFile(filepath.Join(base, "context", "index.yaml"))
+	var indexed map[string]string
+	if err == nil {
+		var doc struct {
+			Files []struct {
+				Path   string `yaml:"path"`
+				SHA256 string `yaml:"sha256"`
+			} `yaml:"files"`
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			r.add("context index", nil, false)
+			r.Warnings = append(r.Warnings, fmt.Sprintf("context/index.yaml is unreadable (%v) — `ox-agent context index` rebuilds it", err))
+			return
+		}
+		indexed = make(map[string]string, len(doc.Files))
+		for _, f := range doc.Files {
+			indexed[f.Path] = f.SHA256
+		}
+	} else if !os.IsNotExist(err) {
+		r.add("context index", nil, false)
+		r.Warnings = append(r.Warnings, fmt.Sprintf("context/index.yaml cannot be read (%v) — `ox-agent context index` rebuilds it", err))
+		return
+	}
+	// Walk the same roots with the same skip rules as the index builder:
+	// context/ and discussions/, dot-prefixed segments excluded, and
+	// index.yaml itself never counts.
+	current := map[string]string{}
+	var scanIssues []string
+	for _, dir := range []string{"context", "discussions"} {
+		rootDir := filepath.Join(base, dir)
+		err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if path == rootDir && os.IsNotExist(err) {
+					return nil
+				}
+				scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", path, err))
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(base, path)
+			if err != nil {
+				scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", path, err))
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			if rel == "context/index.yaml" || strings.Contains("/"+rel, "/.") {
+				return nil
+			}
+			file, err := os.ReadFile(path)
+			if err != nil {
+				scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", rel, err))
+				return nil
+			}
+			sum := sha256.Sum256(file)
+			current[rel] = hex.EncodeToString(sum[:])
+			return nil
+		})
+		if err != nil {
+			scanIssues = append(scanIssues, fmt.Sprintf("%s: %v", rootDir, err))
+		}
+	}
+	if len(scanIssues) > 0 {
+		r.add("context index", nil, false)
+		r.Warnings = append(r.Warnings, fmt.Sprintf("context index freshness scan incomplete: %s — fix filesystem access and rerun `ox-agent doctor`", strings.Join(scanIssues, "; ")))
+		return
+	}
+	if indexed == nil {
+		// No stored index: worth nudging only when there is content that
+		// would index — an empty tree indexes to nothing either way.
+		r.add("context index", nil, false)
+		if len(current) > 0 {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("context/index.yaml is missing and %d indexable file(s) exist — run `ox-agent context index` so packets see them", len(current)))
+		}
+		return
+	}
+	var added, changed, removed int
+	for path, hash := range current {
+		if old, ok := indexed[path]; !ok {
+			added++
+		} else if old != hash {
+			changed++
+		}
+	}
+	for path := range indexed {
+		if _, ok := current[path]; !ok {
+			removed++
+		}
+	}
+	r.add("context index", nil, false)
+	if added+changed+removed > 0 {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("context/index.yaml is stale (+%d ~%d -%d) — packets read the stored index, so run `ox-agent context index`", added, changed, removed))
 	}
 }
 

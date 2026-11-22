@@ -2,8 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/oxidean/Ox-Agent/internal/state"
 	"github.com/spf13/cobra"
@@ -160,6 +163,14 @@ func newArchiveCmd() *cobra.Command {
 				return handleGateError(root, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: archived\n", item.ID)
+			// Nudge toward the spec trail: an item that wrote a spec but
+			// never promoted it leaves nothing for future packets to
+			// reconcile against.
+			if _, err := os.Stat(filepath.Join(item.Dir, "artifacts", "spec.md")); err == nil {
+				if promoted, err := appctx.HasPromotedSpec(root, item.ID); err == nil && !promoted {
+					fmt.Fprintf(cmd.OutOrStdout(), "hint: %s has a spec not yet promoted — `ox-agent context promote %s` adds it to context/specs\n", item.ID, item.ID)
+				}
+			}
 			return nil
 		},
 	}

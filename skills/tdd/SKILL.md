@@ -17,11 +17,16 @@ Guide red-green-refactor implementation and produce evidence that behavior is co
 
 ## Consumes
 
-- `context.project.test_command` and `constraints.allowed_paths`.
+- `context.project.test_command`, `constraints.allowed_paths`, and `context.specs` covering the stage's paths.
 
 ## Produces
 
 - failing-test-first then implementation artifacts as `{path, summary}` objects; test outcomes in `findings` (red-to-green evidence).
+
+## Spec reconciliation
+
+- Where a `context.specs` entry covers the stage's paths, its contracts drive the test list alongside the work item's spec — list the governing spec in `spec_impact.consulted` so coverage reads it as acknowledged.
+- If the test list or change departs from a governing spec's contract, declare that spec in `spec_impact.drift` with `resolution: proposed` or `unresolved`; use `updated` only when the spec file already matches the change.
 
 ## Operating rules
 

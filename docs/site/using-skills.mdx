@@ -49,7 +49,13 @@ What you see is the artifact the run leaves — e.g. `brainstorm.md`,
 `.ox-agent/work/active/WI-NNNN-<slug>/artifacts/`, all committed with
 the repo. Finished items archive under `work/archived/` —
 the permanent spec trail — and specs worth reusing promote into
-`context/specs/` where future packets pick them up.
+`context/specs/` via `ox-agent context promote <wi>`, where future
+packets pick them up under `context.specs`. Skills reconcile against
+those specs of record and declare the relationship in their output's
+`spec_impact`; `policy.yaml` `specs.enforcement` decides whether drift
+only warns (`warn`, the default) or files a decision request that keeps
+the drifted outcome from applying (`strict`) — answering with the exact
+option "Accept the drift and proceed" releases later runs whose drift matches.
 
 ## When a skill needs you
 

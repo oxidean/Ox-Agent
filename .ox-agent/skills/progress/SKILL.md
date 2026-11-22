@@ -17,11 +17,15 @@ Record compact, structured progress updates and derive resumable work-item statu
 
 ## Consumes
 
-- `state/events.ndjson` and work-item `index.json` files — read via `ox-agent events`/`status`/`state replay`, never invented.
+- `state/events.ndjson` — including the spec.* event trail — and work-item `index.json` files, read via `ox-agent events`/`status`/`state replay`, never invented.
 
 ## Produces
 
 - a progress summary (`summary` + `findings`) naming blockers, completed stages, and the next legal actions.
+
+## Spec reconciliation
+
+- Spec promotions (`spec.promoted`/`spec.updated` events) and declared drift are part of the item's record — include them in progress entries.
 
 ## Operating rules
 

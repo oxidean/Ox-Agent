@@ -23,6 +23,10 @@ Run structured divergent and convergent analysis for a work item while preservin
 
 - candidate directions as `artifacts` (one per option) with tradeoffs and open questions in `findings`; feeds `specify` once a direction is chosen.
 
+## Spec reconciliation
+
+- Where the problem touches spec-governed behavior, name the governing spec from `context.specs` in the option analysis — diverging from a spec of record is a declared decision, never a silent outcome.
+
 ## Operating rules
 
 - Load only the current work-item packet and referenced artifacts.

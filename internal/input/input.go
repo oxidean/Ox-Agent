@@ -6,6 +6,8 @@ package input
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -91,6 +93,18 @@ func withLock(root string, fn func() error) error {
 		return err
 	}
 	return filelock.With(filepath.Join(locksDir(root), "input-create.lock"), filelock.DefaultTimeout, fn)
+}
+
+// WithWorkItemLock serializes input responses with collection for one work
+// item. Collect holds this lock across spec-release checks and decision
+// filing, so a response cannot land between those operations.
+func WithWorkItemLock(root, workItemID string, fn func() error) error {
+	if workItemID == "" {
+		return fn()
+	}
+	sum := sha256.Sum256([]byte(workItemID))
+	lockPath := filepath.Join(locksDir(root), "work-item-"+hex.EncodeToString(sum[:])+".lock")
+	return filelock.With(lockPath, filelock.DefaultTimeout, fn)
 }
 
 // withRequestLock serializes read-modify-write of a single request so
@@ -501,16 +515,22 @@ func journaledEvent(root, id, eventType string, outcome ...string) (bool, error)
 // Respond records a free-text or option answer. Decision answers must
 // match a declared option.
 func Respond(root, id, actor, answer string) (*Request, error) {
+	initial, err := loadFile(root, id)
+	if err != nil {
+		return nil, err
+	}
 	var req *Request
-	err := withRequestLock(root, id, func() (err error) {
-		req, err = loadFile(root, id)
-		if err != nil {
-			return err
-		}
-		if err = req.refreshExpiry(root); err != nil {
-			return err
-		}
-		return respondLocked(root, req, actor, answer)
+	err = WithWorkItemLock(root, initial.WorkItemID, func() error {
+		return withRequestLock(root, id, func() (err error) {
+			req, err = loadFile(root, id)
+			if err != nil {
+				return err
+			}
+			if err = req.refreshExpiry(root); err != nil {
+				return err
+			}
+			return respondLocked(root, req, actor, answer)
+		})
 	})
 	if err != nil {
 		return nil, err

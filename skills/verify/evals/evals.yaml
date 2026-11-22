@@ -23,6 +23,14 @@ cases:
     expected:
       output_schema_valid: true
       preserves_scope: true
+  - id: spec-reconciliation
+    prompt: >-
+      The change touches paths a promoted spec covers. Verify conformance
+      against the specs of record as well as the work item's spec, declare
+      findings in spec_impact, and set spec_reconciled in eval.
+    expected:
+      output_schema_valid: true
+      spec_reconciled: true
 thresholds:
   schema_pass_rate: 1.0
   quality_pass_rate: 0.9

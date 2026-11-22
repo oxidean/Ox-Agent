@@ -232,17 +232,62 @@ Entries classify by path: `context/standards/` → `standard`,
 `context/decisions/` → `decision`, `context/specs/` → `spec`,
 `discussions/` → `discussion`, `context/project.yaml` → `project`, everything
 else `other`. Compiled packets hand standards, decisions, and specs to skills
-as named context lists; `other` lands under `context.references`.
+as named context lists; `other` lands under `context.references`. A file's
+`covers:` front-matter globs index with it — collection intersects a run's
+declared artifacts against a spec's globs and reports spec-governed changes
+whose `spec_impact.consulted` never named the spec.
 
 The index is a stored catalog: `context compile` reads it as written, so
 rerun `context index` after adding or changing files under `context/` and
-`discussions/` — otherwise new entries stay out of compiled packets.
+`discussions/` — otherwise new entries stay out of compiled packets. `init`
+seeds it; `doctor` warns when it drifts out of date.
+
+### `ox-agent context promote <work-item> [--name <slug>]`
+
+Copy the work item's `artifacts/spec.md` into `context/specs/<slug>.md`
+(default slug: the title; `--name` accepts 1–48 lowercase letters, digits, and
+dashes), refresh the index, and journal `spec.promoting` before the write so a
+failed promotion can be retried, then `spec.promoted` (first promotion) or
+`spec.updated` (re-promotion). The promoted file is the
+spec of record for its subject — future packets receive it under
+`context.specs` and must reconcile against it. Promotion always copies from
+the work item, so keep the amendment where it originates: update the item's
+`spec.md` and re-promote, or edit the spec of record directly (skills do
+this and record it in `spec_impact.updates`) — editing the promoted file
+and then re-promoting loses the edit to the item's older copy. Promotion
+refuses a slug another work item promoted, or a spec file no promotion
+produced — pass `--name` to pick a different one. `archive` prints this hint
+when it files an item whose spec was never promoted.
 
 ### `ox-agent context compile <work-item>`
 
 Compile a token-budgeted context packet for `--skill` at the work item's
 current stage. Prints to stdout, or writes to the `.ox-agent`-relative path
 given by `-o/--output`. Journals `context.compiled`.
+
+## Spec reconciliation
+
+Every bundled SDLC skill's output schema accepts an optional `spec_impact`
+object declaring the run's relationship to the specs of record:
+`consulted` (index paths read), `conforms` (false when the change
+contradicts a spec), `drift` entries (`{spec, summary, resolution}` —
+`updated` when the spec file already changed to match, `proposed` or
+`unresolved` otherwise), and `updates` (`{path, summary}` for spec files
+written). Collection journals a clean declaration as `spec.checked` and any
+drift or unacknowledged coverage touch as `spec.drift`.
+
+`policy.yaml` `specs.enforcement` controls the consequences: `warn` (the
+default) journals findings and prints warnings; `strict` files a durable
+decision request and keeps the run `retry` so the drifted outcome never
+applies. Strict collection also fails closed on a missing specs directory
+or unreadable or malformed coverage metadata; `off` disables evaluation
+entirely. The held run's
+outcome is dead like any parked run — its status stays `retry`, so do not
+re-collect it. Answering the request puts the answer in the next packet; then
+dispatch a fresh run. The exact option "Accept the drift and proceed" releases
+later runs with the same finding set. Other answers do not release the outcome;
+without an earlier acceptance, a fresh run with the same unresolved set asks
+again. A fresh run with no unresolved drift completes normally.
 
 ## Skills
 

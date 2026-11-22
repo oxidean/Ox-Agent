@@ -18,7 +18,7 @@ func newContextCmd() *cobra.Command {
 		Use:   "context",
 		Short: "Build the context index and compile work-item packets",
 	}
-	cmd.AddCommand(newContextIndexCmd(), newContextCompileCmd())
+	cmd.AddCommand(newContextIndexCmd(), newContextCompileCmd(), newContextPromoteCmd())
 	return cmd
 }
 
@@ -33,11 +33,11 @@ func newContextIndexCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			index, err := appctx.Build(root)
+			added, changed, removed, err := appctx.Rebuild(root)
 			if err != nil {
 				return err
 			}
-			added, changed, removed, err := appctx.Write(root, index)
+			index, err := appctx.Load(root)
 			if err != nil {
 				return err
 			}
@@ -97,5 +97,38 @@ func newContextCompileCmd() *cobra.Command {
 	cmd.Flags().IntVar(&budget, "budget", 0, "token budget for the packet context")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "write the packet to this .ox-agent-relative path instead of stdout")
 	_ = cmd.MarkFlagRequired("skill")
+	return cmd
+}
+
+// newContextPromoteCmd promotes a work item's spec into context/specs —
+// the curated spec trail future packets receive under context.specs.
+func newContextPromoteCmd() *cobra.Command {
+	var name string
+	cmd := &cobra.Command{
+		Use:   "promote <work-item>",
+		Short: "Promote a work item's spec into context/specs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := project.Find(".")
+			if err != nil {
+				return err
+			}
+			item, err := state.Resolve(root, args[0])
+			if err != nil {
+				return err
+			}
+			rel, updated, err := appctx.Promote(root, item, name)
+			if err != nil {
+				return err
+			}
+			verb := "promoted"
+			if updated {
+				verb = "updated"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s %s\n", item.ID, verb, rel)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "spec filename stem under context/specs (default: work-item title slug)")
 	return cmd
 }

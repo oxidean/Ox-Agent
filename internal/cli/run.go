@@ -97,6 +97,9 @@ func newRunCollectCmd() *cobra.Command {
 				for _, w := range run.ReconcileWarnings {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
 				}
+				for _, w := range run.SpecWarnings {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+				}
 			}
 			if err != nil {
 				if run != nil && run.Status == "failed" {

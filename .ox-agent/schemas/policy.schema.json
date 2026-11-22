@@ -7,7 +7,17 @@
     "schema_version": { "const": 1 },
     "autonomy": { "type": "object", "required": ["profile_changes", "allow_downgrade"], "properties": { "profile_changes": { "const": "managed" }, "allow_downgrade": { "const": false } } },
     "approvals": { "type": "object" },
-    "budgets": { "type": "object", "required": ["max_parallel_agents", "max_child_depth", "max_fix_cycles"], "properties": { "max_parallel_agents": { "type": "integer", "minimum": 1 }, "max_child_depth": { "type": "integer", "minimum": 0 }, "max_fix_cycles": { "type": "integer", "minimum": 0 } } }
+    "budgets": { "type": "object", "required": ["max_parallel_agents", "max_child_depth", "max_fix_cycles"], "properties": { "max_parallel_agents": { "type": "integer", "minimum": 1 }, "max_child_depth": { "type": "integer", "minimum": 0 }, "max_fix_cycles": { "type": "integer", "minimum": 0 } } },
+    "specs": {
+      "type": "object",
+      "properties": {
+        "enforcement": {
+          "enum": ["off", "warn", "strict"],
+          "description": "spec reconciliation at run collection: off disables it; warn journals spec findings; strict additionally files a decision request so a drifted outcome cannot apply until a human resolves it. Absent reads as warn."
+        }
+      },
+      "additionalProperties": true
+    }
   },
   "additionalProperties": true
 }

@@ -64,6 +64,26 @@ type Policy struct {
 		MaxChildDepth     int `yaml:"max_child_depth"`
 		MaxFixCycles      int `yaml:"max_fix_cycles"`
 	} `yaml:"budgets"`
+	Specs struct {
+		// Enforcement governs spec reconciliation at run collection:
+		// "off" disables it, "warn" journals spec findings, and "strict"
+		// additionally files a decision request that keeps the run
+		// dispatchable-but-unapplied until a human resolves the drift.
+		// Empty reads as "warn" — advisory is the safe upgrade default.
+		Enforcement string `yaml:"enforcement"`
+	} `yaml:"specs"`
+}
+
+// SpecEnforcement normalizes policy.specs.enforcement: absent or
+// unrecognized values resolve to "warn" so a typo can never silently
+// disable the trail — doctor's schema check flags the bad value itself.
+func (p *Policy) SpecEnforcement() string {
+	switch p.Specs.Enforcement {
+	case "off", "warn", "strict":
+		return p.Specs.Enforcement
+	default:
+		return "warn"
+	}
 }
 
 // LoadFramework parses .ox-agent/framework.yaml under root.
