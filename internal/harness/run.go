@@ -15,7 +15,6 @@ import (
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/contract"
-	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/pipeline"
 	"github.com/oxidean/Ox-Agent/internal/project"
@@ -357,9 +356,8 @@ func Collect(root, runID string) (*Run, map[string]any, error) {
 	// same item could both replay a pending event or both apply an
 	// outcome. The kernel lock serializes the whole critical section
 	// (#53).
-	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "collect-"+run.WorkItemID+".lock")
 	var output map[string]any
-	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+	err = input.WithWorkItemLock(root, run.WorkItemID, func() error {
 		// Reload under the lock: the snapshot taken before queuing can be
 		// stale by the time the lock is granted — a sibling collector may
 		// have applied this run's outcome already. Acting on the stale

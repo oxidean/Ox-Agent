@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/input"
@@ -528,6 +529,67 @@ func TestCollectStrictRejectsSlashWithinGlobCharacterClass(t *testing.T) {
 	}
 	if collected.Status != "pending" {
 		t.Fatalf("run status = %s, want pending", collected.Status)
+	}
+}
+
+func TestCollectStrictRejectsNonRepoRelativeCoverageGlobs(t *testing.T) {
+	for _, pattern := range []string{
+		"../internal/**",
+		"/internal/**",
+		"internal/../secrets/**",
+	} {
+		t.Run(pattern, func(t *testing.T) {
+			root, item := initProject(t)
+			setEnforcement(t, root, "strict")
+			writeCoveredSpec(t, root, "api.md", pattern)
+			output := validOutput("specify")
+			output["artifacts"] = []any{"internal/cli/context.go"}
+			run := dispatchSpecRun(t, root, item, output)
+			collected, _, err := Collect(root, run.RunID)
+			if err == nil || !strings.Contains(err.Error(), "invalid spec coverage") {
+				t.Fatalf("Collect() error = %v, want invalid coverage error for %q", err, pattern)
+			}
+			if collected.Status != "pending" {
+				t.Fatalf("run status = %s, want pending", collected.Status)
+			}
+		})
+	}
+}
+
+func TestCollectWaitsForWorkItemLock(t *testing.T) {
+	root, item := initProject(t)
+	run := dispatchSpecRun(t, root, item, validOutput("specify"))
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- input.WithWorkItemLock(root, item.ID, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+
+	collectDone := make(chan error, 1)
+	go func() {
+		_, _, err := Collect(root, run.RunID)
+		collectDone <- err
+	}()
+	select {
+	case err := <-collectDone:
+		close(release)
+		t.Fatalf("Collect() completed while work-item lock was held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-lockDone; err != nil {
+		t.Fatalf("WithWorkItemLock() error = %v", err)
+	}
+	if err := <-collectDone; err != nil {
+		t.Fatalf("Collect() error = %v", err)
 	}
 }
 

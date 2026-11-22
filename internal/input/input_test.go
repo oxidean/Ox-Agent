@@ -24,6 +24,50 @@ func setup(t *testing.T) string {
 	return root
 }
 
+func TestRespondWaitsForWorkItemLock(t *testing.T) {
+	root := setup(t)
+	req, err := Create(root, Request{
+		Kind:       KindDecision,
+		WorkItemID: "WI-0001",
+		Question:   "spec drift in WI-0001: test",
+		Options:    []string{"accept", "update"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- WithWorkItemLock(root, req.WorkItemID, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+
+	respondDone := make(chan error, 1)
+	go func() {
+		_, err := Respond(root, req.RequestID, "human", "accept")
+		respondDone <- err
+	}()
+	select {
+	case err := <-respondDone:
+		t.Fatalf("Respond() completed while work-item lock was held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-lockDone; err != nil {
+		t.Fatalf("WithWorkItemLock() error = %v", err)
+	}
+	if err := <-respondDone; err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+}
+
 // eventsOfType returns journal events of a given type.
 func eventsOfType(t *testing.T, root, typ string) []state.Event {
 	t.Helper()

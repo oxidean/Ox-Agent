@@ -393,17 +393,28 @@ func matchSpecGlob(pattern, name string) bool {
 }
 
 func normalizeSpecGlob(pattern string) (string, error) {
-	pattern = normalizeSpecPath(pattern)
-	for _, segment := range strings.Split(pattern, "/") {
+	pattern = strings.ReplaceAll(strings.TrimSpace(pattern), "\\", "/")
+	pattern = strings.TrimPrefix(pattern, "./")
+	if pattern == "" || path.IsAbs(pattern) || strings.HasPrefix(pattern, "/") {
+		return "", fmt.Errorf("must be a repository-relative path glob")
+	}
+	segments := strings.Split(pattern, "/")
+	if len(segments[0]) >= 2 && segments[0][1] == ':' {
+		return "", fmt.Errorf("must be a repository-relative path glob")
+	}
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", fmt.Errorf("must not contain empty or traversal path segments")
+		}
 		if _, err := path.Match(segment, ""); err != nil {
 			return "", err
 		}
 	}
-	return pattern, nil
+	return strings.Join(segments, "/"), nil
 }
 
-// Clean both sides so `./internal/x.go` and `a/../b.go` match the
-// same coverage as their canonical forms.
+// Clean declared artifact paths so `./internal/x.go` and `a/../b.go`
+// match the same coverage as their canonical forms.
 func normalizeSpecPath(value string) string {
 	return path.Clean(strings.ReplaceAll(value, "\\", "/"))
 }
