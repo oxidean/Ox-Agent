@@ -52,7 +52,7 @@ type specEvaluation struct {
 // evaluation entirely — no findings, no events. Errors here mean the
 // policy or coverage inputs are unreadable, which fails the collect so
 // the problem surfaces instead of silently bypassing the gate.
-func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any, runID string) (*specEvaluation, error) {
+func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any) (*specEvaluation, error) {
 	policy, err := project.LoadPolicy(root)
 	if err != nil {
 		return nil, fmt.Errorf("cannot evaluate spec impact — %w", err)
@@ -117,7 +117,7 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 	// decision a human already made stands for identical drift rather
 	// than stacking a duplicate request.
 	if eval.enforcement == "strict" && len(eval.findings) > 0 &&
-		releasedByDecision(root, item.ID, specDecisionQuestion(item, eval.findings, runID)) {
+		releasedByDecision(root, item.ID, specDecisionQuestion(item, eval.findings)) {
 		eval.released = true
 	}
 	return eval, nil
@@ -182,8 +182,10 @@ func (e *specEvaluation) coverageFindings(root string, item *state.WorkItem, out
 	}
 	var changedPaths []string
 	var changeErr error
+	unavailableSummary := "repository change evidence unavailable: Git query failed for the work-item-start baseline"
 	if item.GitBaseline == "" {
 		changeErr = fmt.Errorf("no clean Git baseline was recorded at work-item start")
+		unavailableSummary = "repository change evidence unavailable: no clean work-item-start Git baseline was recorded"
 	} else {
 		changedPaths, changeErr = repochange.ChangedPaths(root, item.GitBaseline)
 	}
@@ -195,7 +197,7 @@ func (e *specEvaluation) coverageFindings(root string, item *state.WorkItem, out
 			}
 			findings = append(findings, specFinding{
 				Kind: "evidence_unavailable", Spec: spec.Path,
-				Summary: "repository change evidence unavailable: cannot compare with the work-item-start Git baseline",
+				Summary: unavailableSummary,
 			})
 		}
 		return findings
@@ -324,9 +326,9 @@ var specDecisionOptions = []string{
 const specDecisionAccept = "Accept the drift and proceed"
 
 // specDecisionQuestion builds the durable decision's question text from
-// the finding set. Unavailable-evidence decisions are scoped to one run so
-// accepting one does not release future runs without repository evidence.
-func specDecisionQuestion(item *state.WorkItem, findings []specFinding, runID string) string {
+// the finding set. A stable question dedupes identical findings across runs
+// and lets an accepted decision release the same drift on a later run.
+func specDecisionQuestion(item *state.WorkItem, findings []specFinding) string {
 	canonical := append([]specFinding(nil), findings...)
 	for i := range canonical {
 		canonical[i].Paths = append([]string(nil), canonical[i].Paths...)
@@ -361,12 +363,6 @@ func specDecisionQuestion(item *state.WorkItem, findings []specFinding, runID st
 		fmt.Fprintf(&b, " %s;", p)
 	}
 	fmt.Fprintf(&b, " [finding-set:%s]", hex.EncodeToString(sum[:16]))
-	for _, finding := range canonical {
-		if finding.Kind == "evidence_unavailable" {
-			fmt.Fprintf(&b, " [run:%s]", runID)
-			break
-		}
-	}
 	b.WriteString(" resolve the spec of record before this outcome applies.")
 	return b.String()
 }
@@ -395,7 +391,7 @@ func releasedByDecision(root, workItemID, question string) bool {
 // changes" means in ox-agent idiom, the same durable-request pattern as
 // await_input and gate approvals.
 func fileSpecDecision(root string, item *state.WorkItem, run *Run, findings []specFinding) (*input.Request, error) {
-	req, err := fileInputRequest(root, item.ID, run.RunID, specDecisionQuestion(item, findings, run.RunID), specDecisionOptions)
+	req, err := fileInputRequest(root, item.ID, run.RunID, specDecisionQuestion(item, findings), specDecisionOptions)
 	if err != nil {
 		return nil, err
 	}

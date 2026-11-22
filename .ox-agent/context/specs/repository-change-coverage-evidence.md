@@ -67,11 +67,11 @@ because they are hidden/generated; a matching `covers:` glob governs them.
 - If no valid baseline or Git evidence is unavailable while covered specs
   exist, create an explicit `evidence_unavailable` finding for each such spec;
   do not silently fall back to the declared artifact list.
+- Distinguish a missing baseline from a Git query failure in evidence-unavailable
+  summaries so a durable decision identifies its cause.
 - Under `warn`, findings are journaled as `spec.drift` and surfaced as warnings.
   Under `strict`, they use the existing durable decision hold. Under `off`,
   spec evaluation remains disabled.
-- An accepted `evidence_unavailable` decision releases only that run; future
-  runs without repository evidence still require a decision.
 - Preserve deterministic finding/path ordering and use the existing event and
   input-request formats; no new policy setting is introduced.
 

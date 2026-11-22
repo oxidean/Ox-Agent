@@ -25,8 +25,8 @@ strict mode holds for a durable decision; it never silently falls back to the
 agent-declared artifact list. `.ox-agent/work/`, `.ox-agent/state/`, and
 `.ox-agent/runtime/` are excluded from this comparison.
 Changed paths are relative to the project root, even when it is nested inside
-a larger Git worktree. Accepting unavailable evidence releases only that run;
-future runs without repository evidence still require a decision.
+a larger Git worktree. Warnings and durable decisions name the affected spec
+and evidence problem.
 
 To obtain a baseline, start from a clean Git worktree. Commit project changes,
 including Ox-Agent's event journal, before starting a new work item. A dirty

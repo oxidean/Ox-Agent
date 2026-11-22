@@ -709,7 +709,7 @@ func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
 		Spec:  "context/specs/api.md",
 		Paths: []string{"src/a", "src/b"},
 	}}
-	if specDecisionQuestion(item, onePath, "run-1") == specDecisionQuestion(item, twoPaths, "run-1") {
+	if specDecisionQuestion(item, onePath) == specDecisionQuestion(item, twoPaths) {
 		t.Fatal("different finding paths produced the same decision identity")
 	}
 	ordered := []specFinding{{
@@ -722,24 +722,25 @@ func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
 		Spec:  "context/specs/api.md",
 		Paths: []string{"src/b", "src/a"},
 	}}
-	if specDecisionQuestion(item, ordered, "run-1") != specDecisionQuestion(item, reversed, "run-1") {
+	if specDecisionQuestion(item, ordered) != specDecisionQuestion(item, reversed) {
 		t.Fatal("finding order changed the decision identity")
 	}
 }
 
-func TestSpecDecisionQuestionScopesUnavailableEvidenceToRun(t *testing.T) {
+func TestSpecDecisionQuestionDistinguishesEvidenceFailureReasons(t *testing.T) {
 	item := &state.WorkItem{ID: "WI-0001"}
-	findings := []specFinding{{
+	noBaseline := []specFinding{{
 		Kind:    "evidence_unavailable",
 		Spec:    "context/specs/api.md",
-		Summary: "repository change evidence unavailable",
+		Summary: "no clean work-item-start Git baseline was recorded",
 	}}
-	first := specDecisionQuestion(item, findings, "run-1")
-	if first != specDecisionQuestion(item, findings, "run-1") {
-		t.Fatal("same run changed unavailable-evidence decision identity")
-	}
-	if first == specDecisionQuestion(item, findings, "run-2") {
-		t.Fatal("accepting unavailable evidence for one run released a later run")
+	gitFailure := []specFinding{{
+		Kind:    "evidence_unavailable",
+		Spec:    "context/specs/api.md",
+		Summary: "Git query failed for the work-item-start baseline",
+	}}
+	if specDecisionQuestion(item, noBaseline) == specDecisionQuestion(item, gitFailure) {
+		t.Fatal("different evidence failures produced the same decision identity")
 	}
 }
 
@@ -947,7 +948,7 @@ func TestCollectStrictReportsUnavailableRepositoryEvidence(t *testing.T) {
 	}
 }
 
-func TestCollectStrictUnavailableEvidenceAcceptanceIsRunScoped(t *testing.T) {
+func TestCollectStrictAcceptsUnavailableEvidenceForMatchingRuns(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "strict")
 	item.GitBaseline = ""
@@ -978,12 +979,21 @@ func TestCollectStrictUnavailableEvidenceAcceptanceIsRunScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect() run2 error = %v", err)
 	}
-	if run2.Status != "retry" || run2.AwaitingInput == "" || run2.AwaitingInput == run1.AwaitingInput {
-		t.Fatalf("run2 = status %s request %q, want a new strict decision hold", run2.Status, run2.AwaitingInput)
+	if run2.Status != "collected" || run2.AwaitingInput != "" {
+		t.Fatalf("run2 = status %s request %q, want acceptance of identical evidence finding", run2.Status, run2.AwaitingInput)
 	}
 	pending, errs := input.Pending(root)
-	if len(errs) != 0 || len(pending) != 1 || pending[0].RequestID != run2.AwaitingInput {
-		t.Fatalf("pending requests = %v, %v; want only run2's request", pending, errs)
+	if len(errs) != 0 || len(pending) != 0 {
+		t.Fatalf("pending requests = %v, %v; want no pending decision", pending, errs)
+	}
+	found := false
+	for _, warning := range run2.SpecWarnings {
+		if strings.Contains(warning, "released") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("run2 warnings %v do not show accepted release", run2.SpecWarnings)
 	}
 }
 

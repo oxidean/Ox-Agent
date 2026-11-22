@@ -53,7 +53,7 @@ a clean work-item-start Git baseline. Missing evidence is reported and never
 replaced with an artifact-only pass. Commit project changes, including
 Ox-Agent's event journal, before starting a work item to obtain a baseline.
 Changed paths are project-relative, even when the project is nested in a larger
-Git worktree; accepting unavailable evidence releases only that run.
+Git worktree; missing baselines and Git-query failures remain distinct findings.
 
 `run` dispatches the stage-mapped skill through a configured harness
 adapter. `manual` prints packet and output paths for any agent,

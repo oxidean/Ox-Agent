@@ -1,13 +1,13 @@
 schema_version: 1
-generated_at: "2026-11-22T22:33:37Z"
+generated_at: "2026-11-22T22:38:34Z"
 files:
     - path: context/project.yaml
       sha256: fcd2d293e2b935b286e3bf107a5795a25cd2c9294582bb37b4c86c6460c1c03e
       bytes: 47
       kind: project
     - path: context/specs/README.md
-      sha256: d4ca311d17547e448f283c5cb2a1a15a3037c07282dae50c8fbeffc467a4c00b
-      bytes: 2257
+      sha256: 8ca0caa948d3d256dc6bafe38c45bd9bda8377ea27f703de2d5393cb05af4a1c
+      bytes: 2212
       kind: spec
     - path: context/specs/expose-spec-enforcement-outcomes-in-work-item-st.md
       sha256: 2a63f79b63a43c074a91059ef953673b9e347938f5dc7f4ac057fdd199e00cb8
@@ -20,7 +20,7 @@ files:
         - docs/cli.md
         - docs/site/cli.mdx
     - path: context/specs/repository-change-coverage-evidence.md
-      sha256: 0c760a13d01dc4b993e206368ffe7b268e0248a12272f3cf23bb976746b4692d
+      sha256: f26c4140b6ea90be152bd5b7aac453a49e8a62cd019b7aebb7cefca475a09979
       bytes: 5610
       kind: spec
       covers:

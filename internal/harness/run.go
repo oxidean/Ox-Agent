@@ -463,7 +463,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// and a strict policy can veto the advancement below. An evaluation
 	// failure keeps the run pending — the broken policy or index is the
 	// thing to fix, not something to collect past.
-	specEval, err := evaluateSpecImpact(root, item, output, run.RunID)
+	specEval, err := evaluateSpecImpact(root, item, output)
 	if err != nil {
 		return run, output, err
 	}

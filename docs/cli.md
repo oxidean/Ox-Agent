@@ -303,11 +303,11 @@ entirely. The held run's
 outcome is dead like any parked run — its status stays `retry`, so do not
 re-collect it. Answering the request puts the answer in the next packet; then
 dispatch a fresh run. The exact option "Accept the drift and proceed" releases
-later runs with the same finding set. An `evidence_unavailable` acceptance is
-scoped to that run; later runs without repository evidence still ask again.
-Other answers do not release the outcome; without an earlier acceptance, a
-fresh run with the same unresolved set asks again. A fresh run with no
-unresolved drift completes normally.
+later runs with the same finding set. Missing baselines and Git-query failures
+have distinct summaries, so a decision identifies its evidence problem. Other
+answers do not release the outcome; without an earlier acceptance, a fresh run
+with the same unresolved set asks again. A fresh run with no unresolved drift
+completes normally.
 
 ## Skills
 
