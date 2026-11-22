@@ -33,7 +33,7 @@ func ChangedPaths(root, baseline string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading tracked changes since baseline: %w", err)
 	}
-	untracked, err := runGit(root, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := runGit(root, "ls-files", "--others", "--exclude-standard", "-z", "--", ".")
 	if err != nil {
 		return nil, fmt.Errorf("reading untracked changes: %w", err)
 	}
@@ -49,7 +49,7 @@ func ChangedPaths(root, baseline string) ([]string, error) {
 	unique := make(map[string]struct{}, len(paths))
 	result := make([]string, 0, len(paths))
 	for _, path := range paths {
-		if path == "" || excluded(path) {
+		if path == "" || path == ".." || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "/") || excluded(path) {
 			continue
 		}
 		if _, ok := unique[path]; ok {

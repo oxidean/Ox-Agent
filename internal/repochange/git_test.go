@@ -148,6 +148,13 @@ func TestChangedPathsUsesProjectRelativePathsInNestedWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "root.go"), []byte("changed outside project"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	sibling := filepath.Join(repo, "sibling")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "untracked.go"), []byte("outside project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := ChangedPaths(project, baseline)
 	if err != nil {
