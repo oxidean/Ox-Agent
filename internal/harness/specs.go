@@ -156,8 +156,8 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 	validGlobs := make(map[string][]string, len(specs))
 	for _, spec := range specs {
 		for _, glob := range spec.Covers {
-			normalized := normalizeSpecPath(glob)
-			if _, err := path.Match(normalized, ""); err != nil {
+			normalized, err := normalizeSpecGlob(glob)
+			if err != nil {
 				issue := fmt.Sprintf("%s declares invalid covers glob %q: %v", spec.Path, glob, err)
 				e.globIssues = append(e.globIssues, issue)
 				if e.enforcement == "strict" {
@@ -385,7 +385,21 @@ func artifactPaths(raw any) []string {
 // segment matches zero or more segments. Backslashes are normalized so a
 // Windows-produced artifact path still matches its forward-slash globs.
 func matchSpecGlob(pattern, name string) bool {
-	return matchGlobSegments(strings.Split(normalizeSpecPath(pattern), "/"), strings.Split(normalizeSpecPath(name), "/"))
+	pattern, err := normalizeSpecGlob(pattern)
+	if err != nil {
+		return false
+	}
+	return matchGlobSegments(strings.Split(pattern, "/"), strings.Split(normalizeSpecPath(name), "/"))
+}
+
+func normalizeSpecGlob(pattern string) (string, error) {
+	pattern = normalizeSpecPath(pattern)
+	for _, segment := range strings.Split(pattern, "/") {
+		if _, err := path.Match(segment, ""); err != nil {
+			return "", err
+		}
+	}
+	return pattern, nil
 }
 
 // Clean both sides so `./internal/x.go` and `a/../b.go` match the

@@ -82,6 +82,7 @@ func TestMatchSpecGlob(t *testing.T) {
 		{"docs/*.md", "docs/a/b.md", false},
 		{"internal/harness/*.go", "internal/harness/run.go", true},
 		{"internal/harness/*.go", "internal/harness/run_test.go", true},
+		{"internal/[ab].go", "internal/a.go", true},
 		{"internal/**", `internal\cli\x.go`, true},
 	} {
 		if got := matchSpecGlob(tc.pattern, tc.name); got != tc.want {
@@ -504,6 +505,22 @@ func TestCollectStrictRejectsMalformedNormalizedGlob(t *testing.T) {
 	writeCoveredSpec(t, root, "api.md", `internal\[`)
 	output := validOutput("specify")
 	output["artifacts"] = []any{}
+	run := dispatchSpecRun(t, root, item, output)
+	collected, _, err := Collect(root, run.RunID)
+	if err == nil || !strings.Contains(err.Error(), "invalid spec coverage") {
+		t.Fatalf("Collect() error = %v, want invalid coverage error", err)
+	}
+	if collected.Status != "pending" {
+		t.Fatalf("run status = %s, want pending", collected.Status)
+	}
+}
+
+func TestCollectStrictRejectsSlashWithinGlobCharacterClass(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	writeCoveredSpec(t, root, "api.md", "internal/[a/b].go")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/a.go"}
 	run := dispatchSpecRun(t, root, item, output)
 	collected, _, err := Collect(root, run.RunID)
 	if err == nil || !strings.Contains(err.Error(), "invalid spec coverage") {
