@@ -17,11 +17,15 @@ Prepare a verified work item for delivery with release notes, rollout evidence, 
 
 ## Consumes
 
-- verification results, open gates from `policy.yaml`, and the item's artifact set.
+- verification results, open gates from `policy.yaml` (including `specs.enforcement`), and the item's artifact set.
 
 ## Produces
 
 - a ship-readiness `verdict` plus `findings` listing outstanding gates; `escalate` when a human approval is required.
+
+## Spec reconciliation
+
+- When the item's `spec.md` should inform future work, promote it with `ox-agent context promote <wi>` before finishing — `archive` prints the same hint for an unpromoted spec.
 
 ## Operating rules
 

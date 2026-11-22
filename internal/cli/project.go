@@ -3,8 +3,10 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
+	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/buildinfo"
 	"github.com/oxidean/Ox-Agent/internal/project"
 	"github.com/spf13/cobra"
@@ -53,6 +55,9 @@ func newInitCmd() *cobra.Command {
 				if len(report.DirsCreated)+len(report.FilesRestored)+len(report.FilesSynced)+len(report.FilesRemoved)+len(report.FilesConflicted)+len(report.ModesFixed)+len(report.SeedsWritten) == 0 && report.PinUpdated == "" {
 					fmt.Fprintln(out, "Nothing to repair")
 				}
+				if err := seedContextIndex(cmd, path, true); err != nil {
+					return err
+				}
 				return nil
 			}
 			if err := project.Init(path); err != nil {
@@ -67,6 +72,9 @@ func newInitCmd() *cobra.Command {
 				return nil
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Initialized %s\n", filepath.Join(path, ".ox-agent"))
+			if err := seedContextIndex(cmd, path, false); err != nil {
+				return err
+			}
 			if !integrate {
 				fmt.Fprintln(cmd.OutOrStdout(), "Run 'ox-agent integrate' to wire agent discovery (AGENTS.md + .agents/skills).")
 			}
@@ -106,6 +114,9 @@ func newDoctorCmd() *cobra.Command {
 				if _, err := project.Repair(root, false); err != nil {
 					return err
 				}
+				if err := seedContextIndex(cmd, root, true); err != nil {
+					return err
+				}
 				fmt.Fprintln(out, "repair applied; re-checking")
 				report = project.Doctor(root)
 			}
@@ -132,6 +143,30 @@ func newDoctorCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&fix, "fix", false, "repair fixable findings, then re-check")
 	return cmd
+}
+
+// seedContextIndex writes context/index.yaml after init or repair so the
+// scaffold starts with packets able to see their context. onlyIfMissing
+// keeps repair from silently rewriting an existing index.
+func seedContextIndex(cmd *cobra.Command, root string, onlyIfMissing bool) error {
+	indexPath := filepath.Join(root, ".ox-agent", "context", "index.yaml")
+	if onlyIfMissing {
+		if _, err := os.Stat(indexPath); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	index, err := appctx.Build(root)
+	if err != nil {
+		return err
+	}
+	added, _, _, err := appctx.Write(root, index)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "context index: %d files\n", added)
+	return nil
 }
 
 // countFailures tallies failed checks in a doctor report.

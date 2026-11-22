@@ -10,3 +10,5 @@ budgets:
   max_parallel_agents: 4
   max_child_depth: 1
   max_fix_cycles: 3
+specs:
+  enforcement: strict

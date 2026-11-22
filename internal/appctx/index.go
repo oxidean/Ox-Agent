@@ -21,6 +21,11 @@ type IndexEntry struct {
 	SHA256 string `yaml:"sha256" json:"sha256"`
 	Bytes  int64  `yaml:"bytes" json:"bytes"`
 	Kind   string `yaml:"kind" json:"kind"`
+	// Covers carries the file's front-matter `covers:` globs — the repo
+	// paths the entry governs. Only specs declare them today; collection
+	// intersects a run's declared artifacts against them to detect
+	// spec-governed changes that never consulted the spec.
+	Covers []string `yaml:"covers,omitempty" json:"covers,omitempty"`
 }
 
 // Index mirrors context/index.yaml: the catalog of loadable project context.
@@ -98,6 +103,7 @@ func Build(root string) (*Index, error) {
 				SHA256: hex.EncodeToString(sum[:]),
 				Bytes:  info.Size(),
 				Kind:   kindOf(rel),
+				Covers: parseCovers(data),
 			})
 			return nil
 		})

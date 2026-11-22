@@ -17,11 +17,15 @@ Verify tests, traceability, policy compliance, rollback readiness, and operation
 
 ## Consumes
 
-- `context.project.test_command`, the spec's acceptance criteria, and the implementation run's `artifacts` entries via `context.prior_outputs` — each entry's `path` points at that run's output.json; its `artifacts` list records changed files as bare path strings or `{path, ...}` objects (any `summary` is an optional annotation, not guaranteed). Read the files at those paths; never verify from a summary.
+- `context.project.test_command`, the spec's acceptance criteria, the `context.specs` specs of record, and the implementation run's `artifacts` entries via `context.prior_outputs` — each entry's `path` points at that run's output.json; its `artifacts` list records changed files as bare path strings or `{path, ...}` objects (any `summary` is an optional annotation, not guaranteed). Read the files at those paths; never verify from a summary.
 
 ## Produces
 
 - verification results in `findings` (command, outcome, evidence) and a `pass`/`needs_rework` `verdict`.
+
+## Spec reconciliation
+
+- Verify against the promoted specs in `context.specs` as well as the item's own spec — a change can satisfy its work item and still contradict the spec of record; declare that drift in `spec_impact`.
 
 ## Operating rules
 
@@ -34,5 +38,6 @@ Verify tests, traceability, policy compliance, rollback readiness, and operation
 ## Evaluation
 
 Self-report quality flags in `eval` (booleans — set each true only when
-genuinely satisfied): `command_run`, `evidence_in_findings`, `criteria_checked`. `preserves_scope` reports that you stayed
+genuinely satisfied): `command_run`, `evidence_in_findings`, `criteria_checked`, `spec_reconciled` — conformance was checked
+against the specs of record too, and drift declared. `preserves_scope` reports that you stayed
 inside the supplied context and constraints.

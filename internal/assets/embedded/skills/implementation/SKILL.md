@@ -17,11 +17,16 @@ Implement one bounded, approved work-item stage while respecting scope, standard
 
 ## Consumes
 
-- the spec/plan artifacts in `context.references` and `constraints.allowed_paths` bounding edits.
+- the spec/plan artifacts in `context.references`, `context.specs` for specs of record governing the change, and `constraints.allowed_paths` bounding edits.
 
 ## Produces
 
-- code changes listed in `artifacts` as `{path, summary}` objects — the one-line change note goes in `summary`, never glued onto the path; failure edges in `findings`.
+- code changes listed in `artifacts` as `{path, summary}` objects — the one-line change note goes in `summary`, never glued onto the path; failure edges in `findings`; and `spec_impact` recording every spec consulted plus any drift declared or resolved.
+
+## Spec reconciliation
+
+- Before editing behavior a `context.specs` entry governs, read the spec and list it in `spec_impact.consulted`. When the change must contradict it, either update the spec file (`drift` with `resolution: updated`, plus the file in `updates`) or declare the drift (`proposed`/`unresolved`) — never silently.
+- Spec `covers:` globs intersect your declared `artifacts` at collection: an unacknowledged covered touch is reported as spec drift, and `specs.enforcement: strict` parks the outcome behind a human decision.
 
 ## Operating rules
 
@@ -34,5 +39,6 @@ Implement one bounded, approved work-item stage while respecting scope, standard
 ## Evaluation
 
 Self-report quality flags in `eval` (booleans — set each true only when
-genuinely satisfied): `within_allowed_paths`, `changes_listed`, `edge_cases_noted`. `preserves_scope` reports that you stayed
+genuinely satisfied): `within_allowed_paths`, `changes_listed`, `edge_cases_noted`, `spec_reconciled` — every governing spec
+was consulted and any drift declared. `preserves_scope` reports that you stayed
 inside the supplied context and constraints.

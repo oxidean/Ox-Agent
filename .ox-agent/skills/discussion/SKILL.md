@@ -17,11 +17,15 @@ Record asynchronous agent discussions, summarize relevant conclusions, and promo
 
 ## Consumes
 
-- the open thread under `discussions/` named by the packet context.
+- the open thread under `discussions/` named by the packet context, plus `context.specs` when the thread questions spec-governed behavior.
 
 ## Produces
 
 - a summarized position suitable for `ox-agent discuss add`/`summarize`; key points in `findings`, no state writes outside the thread.
+
+## Spec reconciliation
+
+- When a thread concludes against a spec of record, capture it in `spec_impact.drift` so the disagreement is durable, not lost in a thread nobody reopens.
 
 ## Operating rules
 

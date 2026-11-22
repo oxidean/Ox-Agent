@@ -46,6 +46,13 @@
               "discussion",
               "other"
             ]
+          },
+          "covers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "front-matter `covers:` globs — the repo paths this entry governs; collection reports spec-governed changes whose runs never consulted the entry"
           }
         },
         "additionalProperties": true

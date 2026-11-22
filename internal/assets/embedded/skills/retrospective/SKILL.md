@@ -17,11 +17,15 @@ Analyze a completed work item for quality, cost, rework, and process improvement
 
 ## Consumes
 
-- the completed item's journal and produced artifacts.
+- the completed item's journal — including the spec.* event trail — and produced artifacts.
 
 ## Produces
 
 - a retro summary in `summary`/`findings`; durable learnings promoted into `context/standards/` or `context/decisions/` so later packets inherit them.
+
+## Spec reconciliation
+
+- Check whether the item's spec was promoted (`spec.promoted` events in the journal); an unpromoted spec, or drift the item repeated, belongs in findings so the next item inherits the lesson.
 
 ## Operating rules
 

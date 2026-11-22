@@ -39,6 +39,14 @@ runtime. Project state, skills, and contracts live under `.ox-agent/`.
   and are schema-validated on collection.
 - Materialized skills also resolve under `.agents/skills/` for harnesses
   that scan that path.
+- `context/specs/` is the promoted spec trail — the specs of record every
+  packet receives under `context.specs`. Skills declare consulted specs and
+  drift in `spec_impact`; collection intersects declared artifacts with spec
+  `covers:` globs and reports unacknowledged touches, and
+  `policy.yaml` `specs.enforcement: strict` parks a drifted outcome
+  behind a human decision. Promote a work item's spec with
+  `ox-agent context promote <wi>` and keep promoted specs current — never
+  silently contradict one.
 
 Do not edit `.ox-agent/skills`, `schemas`, `workflows`, `pipelines`,
 `lifecycle`, or `integrations` in place — they are materialized assets

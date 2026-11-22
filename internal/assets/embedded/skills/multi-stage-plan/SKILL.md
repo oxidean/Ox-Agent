@@ -17,11 +17,15 @@ Decompose an approved specification into small, dependency-aware, testable imple
 
 ## Consumes
 
-- the spec artifact and `context.standards`/`context.decisions` constraining the approach.
+- the spec artifact plus `context.standards`, `context.decisions`, and `context.specs` constraining the approach.
 
 ## Produces
 
 - a staged plan artifact (stages, gates, dependencies) in `artifacts`; risks and assumptions in `findings`.
+
+## Spec reconciliation
+
+- Read `context.specs` for specs governing the spec's scope and decompose so each stage's spec reconciliation is explicit; declare drift against them in `spec_impact`.
 
 ## Operating rules
 

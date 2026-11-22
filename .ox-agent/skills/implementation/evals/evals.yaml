@@ -22,6 +22,14 @@ cases:
     expected:
       output_schema_valid: true
       preserves_scope: true
+  - id: spec-reconciliation
+    prompt: >-
+      The change touches paths a promoted spec covers. List each spec you
+      consulted in spec_impact.consulted, declare any drift with a
+      resolution, and set spec_reconciled in eval.
+    expected:
+      output_schema_valid: true
+      spec_reconciled: true
 thresholds:
   schema_pass_rate: 1.0
   quality_pass_rate: 0.9

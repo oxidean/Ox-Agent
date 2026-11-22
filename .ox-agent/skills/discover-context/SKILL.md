@@ -17,11 +17,15 @@ Discover relevant project standards, architecture, ADRs, code patterns, tests, a
 
 ## Consumes
 
-- the repository around the project plus seeded `context/` files.
+- the repository around the project plus seeded `context/` files, including `context.specs` when the item touches spec-governed behavior.
 
 ## Produces
 
-- context entries under `context/` (standards, decisions, references) and a `findings` summary; entries enrich every later packet via `context index`.
+- context entries under `context/` (standards, decisions, references) and a `findings` summary naming related specs of record; entries enrich every later packet via `context index`.
+
+## Spec reconciliation
+
+- `context.specs` lists the specs of record — surface the ones governing this work item's scope in your findings so later stages reconcile against them instead of rediscovering intent.
 
 ## Operating rules
 

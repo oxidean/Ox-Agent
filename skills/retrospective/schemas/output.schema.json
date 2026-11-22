@@ -68,6 +68,51 @@
     "findings": {
       "type": "array"
     },
+    "spec_impact": {
+      "type": "object",
+      "properties": {
+        "consulted": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "index paths of specs of record this run read and reconciled against"
+        },
+        "conforms": {
+          "type": "boolean",
+          "description": "false declares that the change contradicts a spec of record"
+        },
+        "drift": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["spec", "summary", "resolution"],
+            "properties": {
+              "spec": { "type": "string" },
+              "summary": { "type": "string" },
+              "resolution": {
+                "enum": ["updated", "proposed", "unresolved"],
+                "description": "updated = the spec file already changed to match; proposed/unresolved = drift a human must resolve"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "updates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string" },
+              "summary": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "description": "context/specs files this run wrote or amended"
+        }
+      },
+      "additionalProperties": true,
+      "description": "Spec reconciliation: which specs of record this run consulted, whether the change conforms, and any drift it declares or resolves. Collection journals this as spec.checked/spec.drift and, under strict policy, parks unresolved drift behind a human decision."
+    },
     "next_action": {
       "type": "object",
       "required": [
