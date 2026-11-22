@@ -60,7 +60,7 @@ work and minor-release summaries.
   recoverable; `clean_text.py --in-place` reports `Path.resolve()`
   failures (e.g. symlink loops) as status 2 instead of a traceback; the
   watermarks service gains authenticated health checks
-  (`Authorization: Bearer $WATER...Y`), per-lease holds
+  (`Authorization: Bearer *** per-lease holds
   under `tmp/watermarks-service.leases/<token>/` so workflows sharing a
   parent no longer cancel each other, `run` leases owned by the helper
   PID, atomic lease writes that fail `ensure` on error, conservative
@@ -106,7 +106,7 @@ work and minor-release summaries.
   surface as `ReconcileWarnings` on stderr instead of aborting. Failure
   outcomes now save the failed run *before* journaling `skill.failed`,
   and a successful run whose outcome application fails is restored to
-  `pending` so the next collect retries it safely. `ox-agent workitem
+  `pending` so the next collect retries it safely. `ox-agent
   unblock` files a durable approval request on a human-gated blocked
   edge like the other lifecycle commands instead of returning the bare
   gate error. The watermarks helper kills a spawned server and drops
