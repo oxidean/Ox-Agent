@@ -1,13 +1,13 @@
 schema_version: 1
-generated_at: "2026-11-22T21:49:43Z"
+generated_at: "2026-11-22T22:16:21Z"
 files:
     - path: context/project.yaml
       sha256: fcd2d293e2b935b286e3bf107a5795a25cd2c9294582bb37b4c86c6460c1c03e
       bytes: 47
       kind: project
     - path: context/specs/README.md
-      sha256: 2f1581f7bf448c7c4a54e47332a56ed1cda15b1d2719c2a4f8d3ebfa74e9acd1
-      bytes: 1760
+      sha256: 610ce16d51fbc47ba7f5ae8335f1b878164c9158f17f3b0fb86d9bcb756a7556
+      bytes: 2035
       kind: spec
     - path: context/specs/expose-spec-enforcement-outcomes-in-work-item-st.md
       sha256: 2a63f79b63a43c074a91059ef953673b9e347938f5dc7f4ac057fdd199e00cb8
@@ -20,11 +20,12 @@ files:
         - docs/cli.md
         - docs/site/cli.mdx
     - path: context/specs/repository-change-coverage-evidence.md
-      sha256: c7b8ab321d87cf1c6ec57e3cf644c2af1b7e3d14560cde515ce139c25dd57dd2
-      bytes: 4902
+      sha256: 930f663f5f79e296b9d816096b956b2985cc1ed341cfcf27a9a2a948e650e3d7
+      bytes: 5199
       kind: spec
       covers:
         - internal/repochange/**
+        - internal/project/**
         - internal/state/**
         - internal/harness/**
         - schemas/work-item.schema.json

@@ -40,6 +40,7 @@ func TestInitDoctor(t *testing.T) {
 	if report := Doctor(root); !report.Healthy() {
 		t.Fatalf("Doctor() unhealthy: %+v", report.Checks)
 	}
+	assertSpecReadme(t, root)
 }
 
 // TestInitSeedsGitkeep verifies every required-but-initially-empty scaffold
@@ -248,6 +249,25 @@ func TestRepairRestoresMissingPieces(t *testing.T) {
 	for _, rel := range []string{"skills/adr/SKILL.md", "config.yaml", "assets.lock", "discussions", "discussions/.gitkeep", "README.md", "context/specs/README.md"} {
 		if _, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s not restored: %v", rel, err)
+		}
+	}
+	assertSpecReadme(t, root)
+}
+
+func assertSpecReadme(t *testing.T, root string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(Base(root), "context", "specs", "README.md"))
+	if err != nil {
+		t.Fatalf("reading seeded specs README: %v", err)
+	}
+	for _, phrase := range []string{
+		"work-item-start Git",
+		"underreported or unacknowledged",
+		"including Ox-Agent's event journal",
+		"covered outcomes for a decision",
+	} {
+		if !strings.Contains(string(data), phrase) {
+			t.Errorf("seeded specs README does not mention %q", phrase)
 		}
 	}
 }

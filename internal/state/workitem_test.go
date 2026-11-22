@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,104 @@ func TestStartAppendsCreatedEvent(t *testing.T) {
 	}
 	if event["type"] != "work_item.created" || event["work_item_id"] != "WI-0001" || event["actor"] != "cli" {
 		t.Fatalf("unexpected event: %v", event)
+	}
+}
+
+func TestStartCapturesCleanGitBaseline(t *testing.T) {
+	root := initProject(t)
+	gitTest(t, root, "init", "--quiet")
+	gitTest(t, root, "add", "-A")
+	gitTest(t, root, "-c", "user.name=Ox-Agent Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "initial")
+
+	item, err := Start(root, "Baseline item")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if item.GitBaseline == "" {
+		t.Fatal("Start() recorded no baseline for clean Git worktree")
+	}
+	cmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = root
+	head, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.GitBaseline != strings.TrimSpace(string(head)) {
+		t.Fatalf("GitBaseline = %q, want start HEAD %q", item.GitBaseline, strings.TrimSpace(string(head)))
+	}
+	loaded, err := Resolve(root, item.ID)
+	if err != nil || loaded.GitBaseline != item.GitBaseline {
+		t.Fatalf("Resolve() baseline = %q, %v; want %q", loaded.GitBaseline, err, item.GitBaseline)
+	}
+	events, err := ReadEvents(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := events[len(events)-1].Data["git_baseline"]; got != item.GitBaseline {
+		t.Fatalf("created event baseline = %v, want %s", got, item.GitBaseline)
+	}
+}
+
+func TestStartLeavesBaselineUnavailableForDirtyOrNonGitProject(t *testing.T) {
+	for _, dirty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dirty_%t", dirty), func(t *testing.T) {
+			root := initProject(t)
+			if dirty {
+				gitTest(t, root, "init", "--quiet")
+				gitTest(t, root, "add", "-A")
+				gitTest(t, root, "-c", "user.name=Ox-Agent Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "initial")
+				if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("dirty"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			item, err := Start(root, "No baseline")
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			if item.GitBaseline != "" {
+				t.Fatalf("GitBaseline = %q, want unavailable", item.GitBaseline)
+			}
+		})
+	}
+}
+
+func TestResolveReadsLegacyWorkItemWithoutGitBaseline(t *testing.T) {
+	root := initProject(t)
+	item, err := Start(root, "Legacy item")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(item.Dir, "index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	delete(record, "git_baseline")
+	data, err = json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Resolve(root, item.ID)
+	if err != nil {
+		t.Fatalf("Resolve() legacy item error = %v", err)
+	}
+	if loaded.GitBaseline != "" {
+		t.Fatalf("legacy GitBaseline = %q, want unavailable", loaded.GitBaseline)
+	}
+}
+
+func gitTest(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
 	}
 }
 

@@ -25,6 +25,11 @@ strict mode holds for a durable decision; it never silently falls back to the
 agent-declared artifact list. `.ox-agent/work/`, `.ox-agent/state/`, and
 `.ox-agent/runtime/` are excluded from this comparison.
 
+To obtain a baseline, start from a clean Git worktree. Commit project changes,
+including Ox-Agent's event journal, before starting a new work item. A dirty
+tree leaves evidence unavailable: warn mode reports that fact, and strict
+mode holds covered outcomes for a decision.
+
 `ox-agent context index` classifies files here as `spec`, and packet
 compilation hands them to skills under `context.specs`. Everything here is
 meant to be committed.

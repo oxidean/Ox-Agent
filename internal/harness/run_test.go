@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -21,6 +22,9 @@ func initProject(t *testing.T) (string, *state.WorkItem) {
 	if err := project.Init(root); err != nil {
 		t.Fatalf("project.Init() error = %v", err)
 	}
+	gitTest(t, root, "init", "--quiet")
+	gitTest(t, root, "add", "-A")
+	gitTest(t, root, "-c", "user.name=Ox-Agent Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "initial")
 	item, err := state.Start(root, "harness target")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -1486,5 +1490,14 @@ func TestRetriedCollectRejectsChangedInputRequest(t *testing.T) {
 	}
 	if len(pending) != 1 {
 		t.Fatalf("pending requests = %d, want 1 (no stacked request)", len(pending))
+	}
+}
+
+func gitTest(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
 	}
 }

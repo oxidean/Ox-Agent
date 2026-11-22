@@ -1,6 +1,7 @@
 ---
 covers:
   - internal/repochange/**
+  - internal/project/**
   - internal/state/**
   - internal/harness/**
   - schemas/work-item.schema.json
@@ -28,6 +29,8 @@ silently bypass reconciliation.
 - If the project is not Git, has no commit, has staged/unstaged changes or
   non-ignored untracked files, or Git inspection fails, leave the baseline
   unavailable. Starting a work item still succeeds.
+- Document that users need a clean worktree, including a committed Ox-Agent
+  event journal, to obtain a baseline; dirty starts cannot provide evidence.
 - Existing work items without this field remain unavailable; do not infer or
   backfill a historical baseline.
 
@@ -98,6 +101,8 @@ because they are hidden/generated; a matching `covers:` glob governs them.
    untracked changes, deleted/renamed files, exclusions, warning/strict behavior,
    deterministic results, and legacy item compatibility.
 9. CLI/architecture docs explain the baseline and unavailable-evidence policy.
+10. Init and repair seed a specs README that describes baseline-backed
+    coverage and the clean-worktree requirement.
 
 ## Verification
 

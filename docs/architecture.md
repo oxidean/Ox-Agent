@@ -151,6 +151,18 @@ identifiers the pipeline counts on. The new packet carries the answer in
 fold and later replays resume from it when the journal prefix is verifiably
 intact (`--full` forces a from-scratch fold). `events` is the read surface.
 
+## Spec coverage evidence
+
+A work item records the repository `HEAD` at start only when its Git worktree
+is clean. Collection compares tracked changes since that baseline plus
+non-ignored untracked paths against each spec's `covers:` globs and the
+agent-declared artifact list. Missing baseline or Git evidence is reported;
+strict enforcement does not silently fall back to declared artifacts. Ox-Agent
+work-item, state, and runtime paths are excluded, while tracked generated
+source remains covered when a spec matches it. Commit existing project changes,
+including Ox-Agent's event journal, before starting a work item to obtain a
+baseline; a dirty start has unavailable evidence.
+
 ## Harness model
 
 `integrations/<name>.yaml` declares an adapter:

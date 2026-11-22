@@ -130,6 +130,18 @@ files are the interface; transport is pluggable.
 - Merges to `main` auto-tag the next patch release (`tag-release.yml`)
   and dispatch `release.yml` (GoReleaser + cosign keyless signing).
 
+## Spec coverage evidence
+
+A work item records the repository `HEAD` at start only when its Git worktree
+is clean. Collection compares tracked changes since that baseline plus
+non-ignored untracked paths against each spec's `covers:` globs and the
+agent-declared artifact list. Missing baseline or Git evidence is reported;
+strict enforcement does not silently fall back to declared artifacts. Ox-Agent
+work-item, state, and runtime paths are excluded, while tracked generated
+source remains covered when a spec matches it. Commit existing project changes,
+including Ox-Agent's event journal, before starting a work item to obtain a
+baseline; a dirty start has unavailable evidence.
+
 ## Provenance and confinement
 
 - `assets.lock`: embedded-asset hashes; only ox-owned files are repaired.
