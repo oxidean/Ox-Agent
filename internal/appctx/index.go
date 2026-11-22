@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -176,7 +177,26 @@ func writeFileAtomically(target string, data []byte, pattern string) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, target)
+	if err := os.Rename(name, target); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(target))
+}
+
+func syncDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 
 // Load reads context/index.yaml under root.
@@ -241,10 +261,10 @@ func CoveredSpecs(root string) (specs []IndexEntry, issues []string, err error) 
 		}
 		covers := parseCovers(data)
 		switch {
-		case len(covers) > 0:
-			specs = append(specs, IndexEntry{Path: rel, Kind: "spec", Covers: covers})
 		case coversInvalid(data):
 			issues = append(issues, fmt.Sprintf("%s has invalid covers front matter — coverage for it is off until it is fixed", rel))
+		case len(covers) > 0:
+			specs = append(specs, IndexEntry{Path: rel, Kind: "spec", Covers: covers})
 		}
 		return nil
 	})

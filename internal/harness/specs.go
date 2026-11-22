@@ -156,7 +156,8 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 	validGlobs := make(map[string][]string, len(specs))
 	for _, spec := range specs {
 		for _, glob := range spec.Covers {
-			if _, err := path.Match(glob, ""); err != nil {
+			normalized := normalizeSpecPath(glob)
+			if _, err := path.Match(normalized, ""); err != nil {
 				issue := fmt.Sprintf("%s declares invalid covers glob %q: %v", spec.Path, glob, err)
 				e.globIssues = append(e.globIssues, issue)
 				if e.enforcement == "strict" {
@@ -165,7 +166,7 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 				}
 				continue
 			}
-			validGlobs[spec.Path] = append(validGlobs[spec.Path], glob)
+			validGlobs[spec.Path] = append(validGlobs[spec.Path], normalized)
 		}
 	}
 	artifactPaths := artifactPaths(output["artifacts"])
@@ -384,11 +385,13 @@ func artifactPaths(raw any) []string {
 // segment matches zero or more segments. Backslashes are normalized so a
 // Windows-produced artifact path still matches its forward-slash globs.
 func matchSpecGlob(pattern, name string) bool {
-	pattern = strings.ReplaceAll(pattern, "\\", "/")
-	name = strings.ReplaceAll(name, "\\", "/")
-	// Clean both sides so `./internal/x.go` and `a/../b.go` match the
-	// same coverage as their canonical forms.
-	return matchGlobSegments(strings.Split(path.Clean(pattern), "/"), strings.Split(path.Clean(name), "/"))
+	return matchGlobSegments(strings.Split(normalizeSpecPath(pattern), "/"), strings.Split(normalizeSpecPath(name), "/"))
+}
+
+// Clean both sides so `./internal/x.go` and `a/../b.go` match the
+// same coverage as their canonical forms.
+func normalizeSpecPath(value string) string {
+	return path.Clean(strings.ReplaceAll(value, "\\", "/"))
 }
 
 // matchGlobSegments matches pattern segments against name segments,

@@ -46,6 +46,8 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 		}
 		return "", false, err
 	}
+	sum := sha256.Sum256(data)
+	sourceHash := hex.EncodeToString(sum[:])
 	slug := name
 	if slug == "" {
 		slug = specSlug(item.Title)
@@ -75,8 +77,11 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 				return "", false, err
 			}
 			sum := sha256.Sum256(existing)
-			if hex.EncodeToString(sum[:]) != promotion.sourceHash {
-				return "", false, fmt.Errorf("%s already exists and does not match the pending promotion intent", rel)
+			existingHash := hex.EncodeToString(sum[:])
+			if existingHash != sourceHash {
+				if _, ok := promotion.sourceHashes[existingHash]; !ok {
+					return "", false, fmt.Errorf("%s already exists and does not match the pending promotion intent", rel)
+				}
 			}
 		}
 		exists = promotion.promoted || (promotion.pending && promotion.updated)
@@ -93,7 +98,6 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 		return "", false, err
 	}
 	relSource = filepath.ToSlash(relSource)
-	sum := sha256.Sum256(data)
 	if err := state.Append(root, state.Event{
 		Type:       "spec.promoting",
 		WorkItemID: item.ID,
@@ -101,7 +105,7 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 		Data: map[string]any{
 			"spec":          rel,
 			"source":        relSource,
-			"source_sha256": hex.EncodeToString(sum[:]),
+			"source_sha256": sourceHash,
 			"updated":       exists,
 		},
 	}); err != nil {
@@ -124,7 +128,7 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 		Type:       eventType,
 		WorkItemID: item.ID,
 		Actor:      "ox-agent",
-		Data:       map[string]any{"spec": rel, "source": relSource, "source_sha256": hex.EncodeToString(sum[:])},
+		Data:       map[string]any{"spec": rel, "source": relSource, "source_sha256": sourceHash},
 	}); err != nil {
 		return "", false, fmt.Errorf("spec promoted to %s but journaling %s failed: %w", rel, eventType, err)
 	}
@@ -151,11 +155,11 @@ func HasPromotedSpec(root, workItemID string) (bool, error) {
 }
 
 type promotionStatus struct {
-	owner      string
-	pending    bool
-	promoted   bool
-	updated    bool
-	sourceHash string
+	owner        string
+	pending      bool
+	promoted     bool
+	updated      bool
+	sourceHashes map[string]struct{}
 }
 
 func promotionState(root, spec string) (promotionStatus, error) {
@@ -171,16 +175,22 @@ func promotionState(root, spec string) (promotionStatus, error) {
 		switch e.Type {
 		case "spec.promoting":
 			if status.owner == "" || status.owner == e.WorkItemID {
+				if !status.pending {
+					status.sourceHashes = make(map[string]struct{})
+				}
 				status.owner = e.WorkItemID
 				status.pending = true
 				status.updated, _ = e.Data["updated"].(bool)
-				status.sourceHash, _ = e.Data["source_sha256"].(string)
+				if sourceHash, _ := e.Data["source_sha256"].(string); sourceHash != "" {
+					status.sourceHashes[sourceHash] = struct{}{}
+				}
 			}
 		case "spec.promoted":
 			status.owner = e.WorkItemID
 			status.pending = false
 			status.promoted = true
 			status.updated = false
+			status.sourceHashes = nil
 		case "spec.updated":
 			if status.owner != "" && status.owner != e.WorkItemID {
 				continue
@@ -189,6 +199,7 @@ func promotionState(root, spec string) (promotionStatus, error) {
 			status.pending = false
 			status.promoted = true
 			status.updated = true
+			status.sourceHashes = nil
 		}
 	}
 	return status, nil

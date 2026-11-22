@@ -498,6 +498,22 @@ func TestCollectStrictRejectsInvalidGlobWithoutArtifacts(t *testing.T) {
 	}
 }
 
+func TestCollectStrictRejectsMalformedNormalizedGlob(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	writeCoveredSpec(t, root, "api.md", `internal\[`)
+	output := validOutput("specify")
+	output["artifacts"] = []any{}
+	run := dispatchSpecRun(t, root, item, output)
+	collected, _, err := Collect(root, run.RunID)
+	if err == nil || !strings.Contains(err.Error(), "invalid spec coverage") {
+		t.Fatalf("Collect() error = %v, want invalid coverage error", err)
+	}
+	if collected.Status != "pending" {
+		t.Fatalf("run status = %s, want pending", collected.Status)
+	}
+}
+
 // TestCollectStrictReleasesAfterAcceptance verifies the strict release
 // path: a human answering the decision with "accept" releases later runs
 // whose drift matches the same finding set — drift still journals, but

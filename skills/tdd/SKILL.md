@@ -26,6 +26,7 @@ Guide red-green-refactor implementation and produce evidence that behavior is co
 ## Spec reconciliation
 
 - Where a `context.specs` entry covers the stage's paths, its contracts drive the test list alongside the work item's spec — list the governing spec in `spec_impact.consulted` so coverage reads it as acknowledged.
+- If the test list or change departs from a governing spec's contract, declare that spec in `spec_impact.drift` with `resolution: proposed` or `unresolved`; use `updated` only when the spec file already matches the change.
 
 ## Operating rules
 

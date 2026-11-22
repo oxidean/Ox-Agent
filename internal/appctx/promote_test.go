@@ -1,6 +1,8 @@
 package appctx
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -264,6 +266,21 @@ func TestParseCovers(t *testing.T) {
 	}
 }
 
+func TestCoveredSpecsRejectsNumericGlob(t *testing.T) {
+	root := initProject(t)
+	specPath := filepath.Join(root, ".ox-agent", "context", "specs", "api.md")
+	if err := os.WriteFile(specPath, []byte("---\ncovers: [123]\n---\n# spec\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specs, issues, err := CoveredSpecs(root)
+	if err != nil {
+		t.Fatalf("CoveredSpecs() error = %v", err)
+	}
+	if len(specs) != 0 || len(issues) != 1 {
+		t.Fatalf("CoveredSpecs() = specs %v, issues %v; want invalid covers issue", specs, issues)
+	}
+}
+
 // TestPromoteRecoversFailedIndexWrite verifies a durable promotion intent
 // lets the same work item finish after the context index becomes writable.
 func TestPromoteRecoversFailedIndexWrite(t *testing.T) {
@@ -302,6 +319,42 @@ func TestPromoteRecoversFailedIndexWrite(t *testing.T) {
 	events := specEvents(t, root, item.ID)
 	if len(events) != 3 || events[2].Type != "spec.promoted" {
 		t.Fatalf("recovered events = %v", events)
+	}
+}
+
+func TestPromoteRecoversEarlierPendingHashAfterChangedSource(t *testing.T) {
+	root := initProject(t)
+	item := startWithSpec(t, root, "the spec", "v3\n")
+	specPath := "context/specs/the-spec.md"
+	target := filepath.Join(root, ".ox-agent", filepath.FromSlash(specPath))
+	if err := os.WriteFile(target, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, ".ox-agent", "context", "index.yaml")
+	if err := os.Mkdir(indexPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{"v1\n", "v2\n"} {
+		sum := sha256.Sum256([]byte(content))
+		if err := state.Append(root, state.Event{
+			Type:       "spec.promoting",
+			WorkItemID: item.ID,
+			Actor:      "test",
+			Data: map[string]any{
+				"spec":          specPath,
+				"source_sha256": hex.EncodeToString(sum[:]),
+				"updated":       false,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, _, err := Promote(root, item, ""); err == nil || !strings.Contains(err.Error(), "writing context index") {
+		t.Fatalf("Promote() error = %v, want interrupted index write", err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "v3\n" {
+		t.Fatalf("recovered spec = %q, %v", data, err)
 	}
 }
 
