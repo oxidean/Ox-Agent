@@ -56,6 +56,13 @@ Create a work item in lifecycle state `intake`. Returns an id like `WI-0001`.
 Without arguments, list active work items. With an id, show the full record:
 state, profile, current stage, blocked_from, and the last few journal events.
 
+### `ox-agent spec status [work-item]`
+
+Show the latest spec check, open findings, and pending strict spec-decision
+IDs. With no work-item argument, show active items with spec activity. The
+command replays the event journal; it does not rerun coverage checks or mutate
+state. A clean check clears findings only for specs it lists as consulted.
+
 ### `ox-agent transition <work-item> <state>`
 
 Move a work item along a legal lifecycle edge. Illegal transitions are

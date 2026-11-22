@@ -1,0 +1,16 @@
+schema_version: 1
+request_id: IN-0001
+work_item_id: WI-0008
+run_id: run_1795382062282_db6535
+kind: decision
+question: Which next direction should become the scoped follow-up? If you choose A, should status show only the latest spec check or unresolved findings since the latest check?
+options:
+    - A — concise read-only spec summary in status, backed by journal and open input requests
+    - B — focused spec status command; keep generic status unchanged
+    - C — strengthen coverage using repository change evidence instead of only declared artifacts
+status: answered
+answer: B — focused spec status command; keep generic status unchanged
+created_by: ox-agent
+answered_by: Jesse
+created_at: "2026-11-22T21:14:51Z"
+answered_at: "2026-11-22T21:19:37Z"
