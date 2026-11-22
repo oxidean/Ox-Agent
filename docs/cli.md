@@ -247,6 +247,8 @@ are reported.
 Start from a clean Git worktree to obtain a baseline; commit project changes,
 including Ox-Agent's event journal, before starting a new work item. Otherwise
 evidence is unavailable, and strict mode holds covered outcomes for a decision.
+Changed paths are relative to the Ox-Agent project root, including when it is
+nested inside a larger Git worktree.
 
 The index is a stored catalog: `context compile` reads it as written, so
 rerun `context index` after adding or changing files under `context/` and
@@ -301,9 +303,11 @@ entirely. The held run's
 outcome is dead like any parked run — its status stays `retry`, so do not
 re-collect it. Answering the request puts the answer in the next packet; then
 dispatch a fresh run. The exact option "Accept the drift and proceed" releases
-later runs with the same finding set. Other answers do not release the outcome;
-without an earlier acceptance, a fresh run with the same unresolved set asks
-again. A fresh run with no unresolved drift completes normally.
+later runs with the same finding set. An `evidence_unavailable` acceptance is
+scoped to that run; later runs without repository evidence still ask again.
+Other answers do not release the outcome; without an earlier acceptance, a
+fresh run with the same unresolved set asks again. A fresh run with no
+unresolved drift completes normally.
 
 ## Skills
 

@@ -120,6 +120,45 @@ func TestChangedPathsIncludesTrackedUntrackedDeletesAndRenames(t *testing.T) {
 	}
 }
 
+func TestChangedPathsUsesProjectRelativePathsInNestedWorktree(t *testing.T) {
+	repo := initRepo(t, map[string]string{
+		"root.go":                        "initial",
+		"project/internal/tracked.go":    "initial",
+		"project/.ox-agent/work/item.md": "work",
+	})
+	project := filepath.Join(repo, "project")
+	baseline := CleanBaseline(project)
+	if baseline == "" {
+		t.Fatal("baseline unavailable for clean nested project")
+	}
+	write := func(name, content string) {
+		t.Helper()
+		path := filepath.Join(project, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/tracked.go", "changed")
+	write("internal/new.go", "untracked")
+	write(".ox-agent/work/item.md", "changed work")
+	write(".ox-agent/work/new.md", "untracked work")
+	if err := os.WriteFile(filepath.Join(repo, "root.go"), []byte("changed outside project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ChangedPaths(project, baseline)
+	if err != nil {
+		t.Fatalf("ChangedPaths() error = %v", err)
+	}
+	want := []string{"internal/new.go", "internal/tracked.go"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ChangedPaths() = %v, want project-relative %v", got, want)
+	}
+}
+
 func TestChangedPathsRejectsInvalidOrMissingBaseline(t *testing.T) {
 	root := initRepo(t, map[string]string{"tracked.txt": "initial"})
 	for _, baseline := range []string{"--help", strings.Repeat("0", 40)} {

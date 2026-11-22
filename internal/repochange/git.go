@@ -29,7 +29,7 @@ func ChangedPaths(root, baseline string) ([]string, error) {
 	if !validBaseline(baseline) {
 		return nil, fmt.Errorf("invalid Git baseline")
 	}
-	diff, err := runGit(root, "diff", "--no-ext-diff", "--name-status", "-z", "--find-renames", baseline, "--")
+	diff, err := runGit(root, "diff", "--no-ext-diff", "--relative", "--name-status", "-z", "--find-renames", baseline, "--")
 	if err != nil {
 		return nil, fmt.Errorf("reading tracked changes since baseline: %w", err)
 	}

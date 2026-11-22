@@ -36,13 +36,17 @@ silently bypass reconciliation.
 
 ## Repository change set
 
-For a work item with a valid baseline, derive a deterministic repo-relative
+For a work item with a valid baseline, derive a deterministic project-relative
 path set from:
 
-- `git diff --name-status -z --find-renames <baseline> --`, covering committed,
-  staged, unstaged, and deleted tracked paths;
+- `git diff --relative --name-status -z --find-renames <baseline> --`, covering
+  committed, staged, unstaged, and deleted tracked paths;
 - `git ls-files --others --exclude-standard -z`, covering non-ignored untracked
   files.
+
+The paths must be relative to the Ox-Agent project root so they match
+`covers:` globs and artifact paths, even when that root is nested inside a
+larger Git worktree.
 
 Include both old and new paths for renames. Exclude `.ox-agent/work/`,
 `.ox-agent/state/`, and `.ox-agent/runtime/` as Ox-Agent work/journal/runtime
@@ -66,6 +70,8 @@ because they are hidden/generated; a matching `covers:` glob governs them.
 - Under `warn`, findings are journaled as `spec.drift` and surfaced as warnings.
   Under `strict`, they use the existing durable decision hold. Under `off`,
   spec evaluation remains disabled.
+- An accepted `evidence_unavailable` decision releases only that run; future
+  runs without repository evidence still require a decision.
 - Preserve deterministic finding/path ordering and use the existing event and
   input-request formats; no new policy setting is introduced.
 
@@ -85,9 +91,10 @@ because they are hidden/generated; a matching `covers:` glob governs them.
    baseline before work-item state is written.
 2. Non-Git, uncommitted, untracked, or no-commit start conditions leave the
    baseline unavailable without failing `start`.
-3. Coverage detects tracked staged/unstaged/committed changes and non-ignored
-   untracked files made after the baseline; deleted paths and both rename sides
-   are included.
+3. Coverage detects project-relative tracked staged/unstaged/committed changes
+   and non-ignored untracked files made after the baseline; deleted paths and
+   both rename sides are included. This also works when the project is nested
+   below the Git worktree root.
 4. A covered changed file omitted from declared artifacts is journaled as an
    `underreported` finding; matching actual paths omitted from `consulted`
    remain unacknowledged.

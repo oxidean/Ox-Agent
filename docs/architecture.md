@@ -161,7 +161,9 @@ strict enforcement does not silently fall back to declared artifacts. Ox-Agent
 work-item, state, and runtime paths are excluded, while tracked generated
 source remains covered when a spec matches it. Commit existing project changes,
 including Ox-Agent's event journal, before starting a work item to obtain a
-baseline; a dirty start has unavailable evidence.
+baseline; a dirty start has unavailable evidence. Changed paths are relative to
+the Ox-Agent project root, including when it is nested in a larger Git
+worktree. Accepting unavailable evidence releases only that run.
 
 ## Harness model
 

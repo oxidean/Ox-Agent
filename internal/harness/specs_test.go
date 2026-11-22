@@ -709,7 +709,7 @@ func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
 		Spec:  "context/specs/api.md",
 		Paths: []string{"src/a", "src/b"},
 	}}
-	if specDecisionQuestion(item, onePath) == specDecisionQuestion(item, twoPaths) {
+	if specDecisionQuestion(item, onePath, "run-1") == specDecisionQuestion(item, twoPaths, "run-1") {
 		t.Fatal("different finding paths produced the same decision identity")
 	}
 	ordered := []specFinding{{
@@ -722,8 +722,24 @@ func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
 		Spec:  "context/specs/api.md",
 		Paths: []string{"src/b", "src/a"},
 	}}
-	if specDecisionQuestion(item, ordered) != specDecisionQuestion(item, reversed) {
+	if specDecisionQuestion(item, ordered, "run-1") != specDecisionQuestion(item, reversed, "run-1") {
 		t.Fatal("finding order changed the decision identity")
+	}
+}
+
+func TestSpecDecisionQuestionScopesUnavailableEvidenceToRun(t *testing.T) {
+	item := &state.WorkItem{ID: "WI-0001"}
+	findings := []specFinding{{
+		Kind:    "evidence_unavailable",
+		Spec:    "context/specs/api.md",
+		Summary: "repository change evidence unavailable",
+	}}
+	first := specDecisionQuestion(item, findings, "run-1")
+	if first != specDecisionQuestion(item, findings, "run-1") {
+		t.Fatal("same run changed unavailable-evidence decision identity")
+	}
+	if first == specDecisionQuestion(item, findings, "run-2") {
+		t.Fatal("accepting unavailable evidence for one run released a later run")
 	}
 }
 
@@ -890,7 +906,7 @@ func TestCollectWarnReportsUnavailableRepositoryEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
-	if run.Status != "collected" || len(run.SpecWarnings) != 1 || !strings.Contains(run.SpecWarnings[0], "evidence unavailable") {
+	if run.Status != "collected" || len(run.SpecWarnings) != 1 || !strings.Contains(run.SpecWarnings[0], "spec context/specs/api.md") || !strings.Contains(run.SpecWarnings[0], "evidence unavailable") {
 		t.Fatalf("run = status %s warnings %v", run.Status, run.SpecWarnings)
 	}
 	pending, errs := input.Pending(root)
@@ -928,6 +944,46 @@ func TestCollectStrictReportsUnavailableRepositoryEvidence(t *testing.T) {
 	findings, _ := events[0].Data["findings"].([]any)
 	if len(findings) != 1 || findings[0].(map[string]any)["kind"] != "evidence_unavailable" {
 		t.Fatalf("findings = %v, want evidence_unavailable", findings)
+	}
+}
+
+func TestCollectStrictUnavailableEvidenceAcceptanceIsRunScoped(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	item.GitBaseline = ""
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+
+	run1 := dispatchSpecRun(t, root, item, output)
+	run1, _, err = Collect(root, run1.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run1 error = %v", err)
+	}
+	if run1.AwaitingInput == "" {
+		t.Fatal("run1 filed no evidence-unavailable decision")
+	}
+	if _, err := input.Respond(root, run1.AwaitingInput, "human", specDecisionAccept); err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+
+	run2 := dispatchSpecRun(t, root, item, output)
+	run2, _, err = Collect(root, run2.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run2 error = %v", err)
+	}
+	if run2.Status != "retry" || run2.AwaitingInput == "" || run2.AwaitingInput == run1.AwaitingInput {
+		t.Fatalf("run2 = status %s request %q, want a new strict decision hold", run2.Status, run2.AwaitingInput)
+	}
+	pending, errs := input.Pending(root)
+	if len(errs) != 0 || len(pending) != 1 || pending[0].RequestID != run2.AwaitingInput {
+		t.Fatalf("pending requests = %v, %v; want only run2's request", pending, errs)
 	}
 }
 

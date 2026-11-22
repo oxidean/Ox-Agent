@@ -265,6 +265,8 @@ func assertSpecReadme(t *testing.T, root string) {
 		"underreported or unacknowledged",
 		"including Ox-Agent's event journal",
 		"covered outcomes for a decision",
+		"Changed paths are relative to the project root",
+		"future runs without repository evidence still require a decision.",
 	} {
 		if !strings.Contains(string(data), phrase) {
 			t.Errorf("seeded specs README does not mention %q", phrase)

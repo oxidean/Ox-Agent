@@ -463,7 +463,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 	// and a strict policy can veto the advancement below. An evaluation
 	// failure keeps the run pending — the broken policy or index is the
 	// thing to fix, not something to collect past.
-	specEval, err := evaluateSpecImpact(root, item, output)
+	specEval, err := evaluateSpecImpact(root, item, output, run.RunID)
 	if err != nil {
 		return run, output, err
 	}
@@ -599,7 +599,7 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			case finding.Kind == "underreported":
 				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s covers changed paths %v omitted from output.artifacts", finding.Spec, finding.Paths))
 			case finding.Kind == "evidence_unavailable":
-				run.SpecWarnings = append(run.SpecWarnings, finding.Summary)
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s: %s", finding.Spec, finding.Summary))
 			case finding.Spec != "":
 				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec drift declared on %s: %s", finding.Spec, finding.Summary))
 			default:
