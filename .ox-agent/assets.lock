@@ -20,7 +20,7 @@
     "schemas/pipeline.schema.json": "sha256:5b98acf1cc21485a267e03d22e891772ee030daa3a6f6bdbfbdb6660cb3a7d08",
     "schemas/policy.schema.json": "sha256:854c4d556b6a0ff75835dbf6bad227e875121fbc7e1b1df4b1e4a36525033e8d",
     "schemas/remote-skills-lock.schema.json": "sha256:9e2dec80a34a6d86fc1e4058729ba9d989c570fc2f72f22c79c971f247f0d3c6",
-    "schemas/run.schema.json": "sha256:32e53891a1164e39c2db22a16021389895bbeee3627c40eb22775a8978b97cda",
+    "schemas/run.schema.json": "sha256:63fa25850ef78f3d826d0efcdf1651a0e78c3dc992ab4c2971e48aa46281670c",
     "schemas/skill-manifest.schema.json": "sha256:05bd62b25aab1e6d37ef9a1e778529ecf8b43320e6c1fc639ed3bbea58dec173",
     "schemas/snapshot.schema.json": "sha256:d04c2a649496b6684cea6bd8b97c2dd9458ed534907791c75b7e1df03f084c94",
     "schemas/work-item.schema.json": "sha256:163a84e770d71f1955080e84a2fb79189a0f594fb665ce18af4added161cd225",

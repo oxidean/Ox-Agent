@@ -498,6 +498,9 @@ func TestCollectStrictReleasesAfterAcceptance(t *testing.T) {
 	if _, err := input.Respond(root, run1.AwaitingInput, "human", specDecisionAccept); err != nil {
 		t.Fatalf("Respond() error = %v", err)
 	}
+	if _, _, err := Collect(root, run1.RunID); err == nil || !strings.Contains(err.Error(), "not pending") {
+		t.Fatalf("Collect() held run error = %v, want not-pending error", err)
+	}
 
 	run2 := dispatchSpecRun(t, root, item, output)
 	run2, _, err = Collect(root, run2.RunID)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/oxidean/Ox-Agent/internal/state"
@@ -125,6 +126,55 @@ func TestPromoteRefusesForeignSlug(t *testing.T) {
 	}
 	if _, _, err := Promote(root, b, ""); err == nil {
 		t.Fatal("second work item promoted onto the first's spec path")
+	}
+}
+
+func TestPromoteSerializesForeignOwners(t *testing.T) {
+	root := initProject(t)
+	items := []*state.WorkItem{
+		startWithSpec(t, root, "Shared title", "a\n"),
+		startWithSpec(t, root, "Shared title", "b\n"),
+	}
+	type result struct {
+		item *state.WorkItem
+		err  error
+	}
+	results := make(chan result, len(items))
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		go func(item *state.WorkItem) {
+			defer wg.Done()
+			_, _, err := Promote(root, item, "")
+			results <- result{item: item, err: err}
+		}(item)
+	}
+	wg.Wait()
+	close(results)
+
+	var winner *state.WorkItem
+	failures := 0
+	for result := range results {
+		if result.err == nil {
+			winner = result.item
+		} else {
+			failures++
+		}
+	}
+	if winner == nil || failures != 1 {
+		t.Fatalf("promotion results: winner=%v failures=%d, want one winner and one refusal", winner, failures)
+	}
+	target := filepath.Join(root, ".ox-agent", "context", "specs", "shared-title.md")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read promoted spec: %v", err)
+	}
+	source, err := os.ReadFile(filepath.Join(winner.Dir, "artifacts", "spec.md"))
+	if err != nil {
+		t.Fatalf("read winning source: %v", err)
+	}
+	if string(data) != string(source) {
+		t.Fatalf("promoted content = %q, want winner's %q", data, source)
 	}
 }
 
