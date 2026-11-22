@@ -284,10 +284,10 @@ or unreadable or malformed coverage metadata; `off` disables evaluation
 entirely. The held run's
 outcome is dead like any parked run — its status stays `retry`, so do not
 re-collect it. Answering the request puts the answer in the next packet; then
-dispatch a fresh run. "Accept the drift and proceed" releases later runs whose drift
-matches the same finding set (anything else re-files the decision when
-identical drift recurs); a re-dispatched run that conforms or resolves
-the drift completes normally.
+dispatch a fresh run. The exact option "Accept the drift and proceed" releases
+later runs with the same finding set. Other answers do not release the outcome;
+without an earlier acceptance, a fresh run with the same unresolved set asks
+again. A fresh run with no unresolved drift completes normally.
 
 ## Skills
 

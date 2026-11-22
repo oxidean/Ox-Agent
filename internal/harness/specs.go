@@ -153,6 +153,21 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 	if len(specs) == 0 {
 		return nil
 	}
+	validGlobs := make(map[string][]string, len(specs))
+	for _, spec := range specs {
+		for _, glob := range spec.Covers {
+			if _, err := path.Match(glob, ""); err != nil {
+				issue := fmt.Sprintf("%s declares invalid covers glob %q: %v", spec.Path, glob, err)
+				e.globIssues = append(e.globIssues, issue)
+				if e.enforcement == "strict" {
+					e.coverageErr = fmt.Errorf("invalid spec coverage under strict enforcement: %s", issue)
+					return nil
+				}
+				continue
+			}
+			validGlobs[spec.Path] = append(validGlobs[spec.Path], glob)
+		}
+	}
 	artifactPaths := artifactPaths(output["artifacts"])
 	if len(artifactPaths) == 0 {
 		return nil
@@ -160,16 +175,7 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 	var findings []specFinding
 	for _, spec := range specs {
 		var matched []string
-		for _, glob := range spec.Covers {
-			if _, err := path.Match(glob, ""); err != nil {
-				issue := fmt.Sprintf("%s declares invalid covers glob %q: %v", spec.Path, glob, err)
-				e.globIssues = append(e.globIssues, issue)
-				if e.enforcement == "strict" {
-					e.coverageErr = fmt.Errorf("invalid spec coverage under strict enforcement: %s", issue)
-					return findings
-				}
-				continue
-			}
+		for _, glob := range validGlobs[spec.Path] {
 			for _, artifact := range artifactPaths {
 				if matchSpecGlob(glob, artifact) {
 					matched = append(matched, artifact)

@@ -127,7 +127,7 @@ func Write(root string, index *Index) (added, changed, removed int, err error) {
 	if err := os.MkdirAll(filepath.Dir(indexPath(root)), 0o755); err != nil {
 		return 0, 0, 0, err
 	}
-	if err := os.WriteFile(indexPath(root), data, 0o644); err != nil {
+	if err := writeFileAtomically(indexPath(root), data, ".index-*.tmp"); err != nil {
 		return 0, 0, 0, fmt.Errorf("writing context index: %w", err)
 	}
 	if loadErr != nil {
@@ -152,6 +152,31 @@ func Write(root string, index *Index) (added, changed, removed int, err error) {
 		}
 	}
 	return added, changed, removed, nil
+}
+
+func writeFileAtomically(target string, data []byte, pattern string) error {
+	file, err := os.CreateTemp(filepath.Dir(target), pattern)
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if err := file.Chmod(0o644); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, target)
 }
 
 // Load reads context/index.yaml under root.

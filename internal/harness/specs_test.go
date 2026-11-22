@@ -457,6 +457,25 @@ func TestCollectStrictRejectsMissingSpecDirectory(t *testing.T) {
 	}
 }
 
+func TestCollectStrictRejectsInvalidGlobWithoutArtifacts(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	specPath := filepath.Join(root, ".ox-agent", "context", "specs", "api.md")
+	if err := os.WriteFile(specPath, []byte("---\ncovers:\n  - internal/[unclosed\n---\n# spec\n"), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	output := validOutput("specify")
+	output["artifacts"] = []any{}
+	run := dispatchSpecRun(t, root, item, output)
+	collected, _, err := Collect(root, run.RunID)
+	if err == nil || !strings.Contains(err.Error(), "invalid spec coverage") {
+		t.Fatalf("Collect() error = %v, want invalid coverage error", err)
+	}
+	if collected.Status != "pending" {
+		t.Fatalf("run status = %s, want pending", collected.Status)
+	}
+}
+
 // TestCollectStrictReleasesAfterAcceptance verifies the strict release
 // path: a human answering the decision with "accept" releases later runs
 // whose drift matches the same finding set — drift still journals, but
