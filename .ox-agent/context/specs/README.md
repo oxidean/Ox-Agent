@@ -17,8 +17,13 @@ the item's older copy. Never let the record go stale behind the
 implementation's back.
 
 Specs may declare `covers:` front-matter globs naming the repo paths they
-govern — collection intersects a run's declared artifacts against them and
-reports spec-governed changes that never consulted the spec.
+govern. Collection compares repository changes since the work-item-start Git
+baseline against those globs and the run's declared artifacts, and reports
+underreported or unacknowledged spec-governed changes. If no clean Git
+baseline or repository evidence is available, warn mode reports that fact and
+strict mode holds for a durable decision; it never silently falls back to the
+agent-declared artifact list. `.ox-agent/work/`, `.ox-agent/state/`, and
+`.ox-agent/runtime/` are excluded from this comparison.
 
 `ox-agent context index` classifies files here as `spec`, and packet
 compilation hands them to skills under `context.specs`. Everything here is

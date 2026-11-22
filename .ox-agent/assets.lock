@@ -23,7 +23,7 @@
     "schemas/run.schema.json": "sha256:63fa25850ef78f3d826d0efcdf1651a0e78c3dc992ab4c2971e48aa46281670c",
     "schemas/skill-manifest.schema.json": "sha256:05bd62b25aab1e6d37ef9a1e778529ecf8b43320e6c1fc639ed3bbea58dec173",
     "schemas/snapshot.schema.json": "sha256:d04c2a649496b6684cea6bd8b97c2dd9458ed534907791c75b7e1df03f084c94",
-    "schemas/work-item.schema.json": "sha256:163a84e770d71f1955080e84a2fb79189a0f594fb665ce18af4added161cd225",
+    "schemas/work-item.schema.json": "sha256:d3c26ae2e8dd8908ab98a66a2c93c25500c55486bd717745c29daeb222284e30",
     "schemas/workflow.schema.json": "sha256:32684750f17e34f87794f7592f485ba953fb9675bfd11b2bbc984d3320601a8b",
     "skills/README.md": "sha256:0563e20c5fe88050ee6e9c286fda2e19710577e3a26fc91792db6a973960cf82",
     "skills/adr/SKILL.md": "sha256:2dc89dc88e13f76164620a1c731c8acfeb0f96496776a8187ea32a127eab87ec",
