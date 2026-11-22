@@ -75,13 +75,12 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 		// nonconformance — an omitted key reads as "no claim", not
 		// "contradicts".
 		conforms, hasConforms := raw["conforms"].(bool)
-		driftDeclared := false
+		driftFinding := false
 		for _, entry := range anyMaps(raw["drift"]) {
 			spec, _ := entry["spec"].(string)
 			spec = normalizeSpecRef(spec)
 			summary, _ := entry["summary"].(string)
 			resolution, _ := entry["resolution"].(string)
-			driftDeclared = true
 			if spec != "" {
 				// A declared drift counts as consulting that spec — the
 				// skill clearly read it to know it drifts.
@@ -91,6 +90,7 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 				}
 			}
 			if resolution != "updated" {
+				driftFinding = true
 				// "proposed" and "unresolved" leave the spec of record
 				// disagreeing with the change — a finding. Unknown
 				// resolutions land here too: the contract enumerates the
@@ -102,9 +102,9 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 			}
 		}
 		sort.Strings(eval.consulted)
-		if hasConforms && !conforms && !driftDeclared {
+		if hasConforms && !conforms && !driftFinding {
 			eval.findings = append(eval.findings, specFinding{
-				Kind: "declared", Summary: "spec_impact declares conforms=false with no drift detail",
+				Kind: "declared", Summary: "spec_impact declares conforms=false without an unresolved drift entry",
 			})
 		}
 	}
@@ -394,25 +394,24 @@ func matchSpecGlob(pattern, name string) bool {
 // matchGlobSegments matches pattern segments against name segments,
 // expanding `**` to zero or more whole segments.
 func matchGlobSegments(pattern, name []string) bool {
-	for len(pattern) > 0 {
-		if pattern[0] == "**" {
-			for i := 0; i <= len(name); i++ {
-				if matchGlobSegments(pattern[1:], name[i:]) {
-					return true
-				}
+	matched := make([]bool, len(name)+1)
+	matched[0] = true
+	for _, segment := range pattern {
+		next := make([]bool, len(name)+1)
+		if segment == "**" {
+			next[0] = matched[0]
+			for j := 1; j <= len(name); j++ {
+				next[j] = matched[j] || next[j-1]
 			}
-			return false
+		} else {
+			for j := 1; j <= len(name); j++ {
+				ok, err := path.Match(segment, name[j-1])
+				next[j] = matched[j-1] && err == nil && ok
+			}
 		}
-		if len(name) == 0 {
-			return false
-		}
-		ok, err := path.Match(pattern[0], name[0])
-		if err != nil || !ok {
-			return false
-		}
-		pattern, name = pattern[1:], name[1:]
+		matched = next
 	}
-	return len(name) == 0
+	return matched[len(name)]
 }
 
 // anyStrings reads a JSON-decoded []any of strings (or a []string) into

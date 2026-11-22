@@ -174,6 +174,28 @@ func TestCollectDeclaredDriftIsFinding(t *testing.T) {
 	}
 }
 
+func TestCollectConformsFalseWithUpdatedDriftStillBlocksStrict(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	output := validOutput("specify")
+	output["spec_impact"] = map[string]any{
+		"conforms": false,
+		"drift": []any{map[string]any{
+			"spec":       "context/specs/api.md",
+			"summary":    "spec was updated",
+			"resolution": "updated",
+		}},
+	}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" || run.AwaitingInput == "" {
+		t.Fatalf("run status=%s awaiting_input=%q, want strict decision hold", run.Status, run.AwaitingInput)
+	}
+}
+
 // TestCollectStrictBlocksAndFilesDecision verifies strict enforcement
 // parks a passing outcome: the run goes retry, a durable decision request
 // is filed, and the outcome does not apply.
@@ -597,6 +619,14 @@ func TestNormalizeSpecRefCleansPathSegments(t *testing.T) {
 		if got := normalizeSpecRef(input); got != want {
 			t.Errorf("normalizeSpecRef(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestMatchSpecGlobManyRecursiveSegments(t *testing.T) {
+	pattern := strings.TrimSuffix(strings.Repeat("**/", 32), "/") + "/target.go"
+	name := strings.TrimSuffix(strings.Repeat("pkg/", 32), "/") + "/target.go"
+	if !matchSpecGlob(pattern, name) {
+		t.Fatal("recursive wildcard pattern did not match path")
 	}
 }
 

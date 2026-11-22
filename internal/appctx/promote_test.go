@@ -305,6 +305,35 @@ func TestPromoteRecoversFailedIndexWrite(t *testing.T) {
 	}
 }
 
+func TestPromoteDoesNotOverwriteForeignFileAfterInterruptedPromotion(t *testing.T) {
+	root := initProject(t)
+	item := startWithSpec(t, root, "the spec", "# the spec\n")
+	indexPath := filepath.Join(root, ".ox-agent", "context", "index.yaml")
+	if err := os.Mkdir(indexPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Promote(root, item, ""); err == nil {
+		t.Fatal("Promote() succeeded while the index path was a directory")
+	}
+	target := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
+	if err := os.WriteFile(target, []byte("foreign\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Promote(root, item, ""); err == nil {
+		t.Fatal("retry overwrote a spec that no longer matches the promotion intent")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read foreign spec: %v", err)
+	}
+	if string(data) != "foreign\n" {
+		t.Fatalf("foreign spec was changed to %q", data)
+	}
+}
+
 func TestPromoteRecoversChangedSourceAfterUpdateFailure(t *testing.T) {
 	root := initProject(t)
 	item := startWithSpec(t, root, "the spec", "v1\n")

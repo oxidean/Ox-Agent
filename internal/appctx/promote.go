@@ -69,6 +69,16 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 	}
 	switch {
 	case promotion.owner == item.ID:
+		if promotion.pending && !promotion.updated && exists {
+			existing, err := os.ReadFile(target)
+			if err != nil {
+				return "", false, err
+			}
+			sum := sha256.Sum256(existing)
+			if hex.EncodeToString(sum[:]) != promotion.sourceHash {
+				return "", false, fmt.Errorf("%s already exists and does not match the pending promotion intent", rel)
+			}
+		}
 		exists = promotion.promoted || (promotion.pending && promotion.updated)
 	case promotion.owner != "":
 		return "", false, fmt.Errorf("%s is already promoted from %s — pass --name to pick a different spec name", rel, promotion.owner)
@@ -141,10 +151,11 @@ func HasPromotedSpec(root, workItemID string) (bool, error) {
 }
 
 type promotionStatus struct {
-	owner    string
-	pending  bool
-	promoted bool
-	updated  bool
+	owner      string
+	pending    bool
+	promoted   bool
+	updated    bool
+	sourceHash string
 }
 
 func promotionState(root, spec string) (promotionStatus, error) {
@@ -163,6 +174,7 @@ func promotionState(root, spec string) (promotionStatus, error) {
 				status.owner = e.WorkItemID
 				status.pending = true
 				status.updated, _ = e.Data["updated"].(bool)
+				status.sourceHash, _ = e.Data["source_sha256"].(string)
 			}
 		case "spec.promoted":
 			status.owner = e.WorkItemID

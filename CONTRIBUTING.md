@@ -15,7 +15,8 @@ go build ./cmd/ox-agent
 ```
 
 The CLI embeds the asset tree under `internal/assets/embedded/`, mirrored from
-the canonical `skills/`, `schemas/`, `workflows/`, and `pipelines/` trees. Run
+the canonical `skills/`, `schemas/`, `workflows/`, `pipelines/`, `lifecycle/`,
+and `integrations/` trees. Run
 `./scripts/check-assets.sh` after touching either side — CI rejects drift. When
 changing skills, schemas, workflows, or pipelines, update the embedded assets
 and test a
