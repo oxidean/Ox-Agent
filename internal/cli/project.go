@@ -157,11 +157,7 @@ func seedContextIndex(cmd *cobra.Command, root string, onlyIfMissing bool) error
 			return err
 		}
 	}
-	index, err := appctx.Build(root)
-	if err != nil {
-		return err
-	}
-	added, _, _, err := appctx.Write(root, index)
+	added, _, _, err := appctx.Rebuild(root)
 	if err != nil {
 		return err
 	}

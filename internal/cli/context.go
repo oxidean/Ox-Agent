@@ -33,11 +33,11 @@ func newContextIndexCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			index, err := appctx.Build(root)
+			added, changed, removed, err := appctx.Rebuild(root)
 			if err != nil {
 				return err
 			}
-			added, changed, removed, err := appctx.Write(root, index)
+			index, err := appctx.Load(root)
 			if err != nil {
 				return err
 			}

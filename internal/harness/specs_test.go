@@ -366,22 +366,69 @@ func TestCollectConformsOmittedPasses(t *testing.T) {
 // TestCollectArtifactDotSlashMatches verifies a leading ./ on a declared
 // artifact still matches its spec's covers glob.
 func TestCollectArtifactDotSlashMatches(t *testing.T) {
+	for _, artifact := range []string{"internal/cli/context.go", "./internal/cli/context.go"} {
+		t.Run(artifact, func(t *testing.T) {
+			root, item := initProject(t)
+			writeCoveredSpec(t, root, "api.md", "internal/**")
+			output := validOutput("specify")
+			output["artifacts"] = []any{artifact}
+			run := dispatchSpecRun(t, root, item, output)
+			run, _, err := Collect(root, run.RunID)
+			if err != nil {
+				t.Fatalf("Collect() error = %v", err)
+			}
+			if len(run.SpecWarnings) == 0 {
+				t.Fatalf("%q artifact produced no coverage finding", artifact)
+			}
+			events := specEvents(t, root, item.ID)
+			if len(events) != 1 || events[0].Type != "spec.drift" {
+				t.Fatalf("%q artifact missed coverage: spec events = %v", artifact, events)
+			}
+		})
+	}
+}
+
+func TestCollectStrictRejectsInvalidCoverage(t *testing.T) {
+	for name, content := range map[string]string{
+		"scalar": "---\ncovers: internal/**\n---\n# spec\n",
+		"glob":   "---\ncovers:\n  - internal/[unclosed\n---\n# spec\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, item := initProject(t)
+			setEnforcement(t, root, "strict")
+			specPath := filepath.Join(root, ".ox-agent", "context", "specs", "api.md")
+			if err := os.WriteFile(specPath, []byte(content), 0o644); err != nil {
+				t.Fatalf("write spec: %v", err)
+			}
+			output := validOutput("specify")
+			output["artifacts"] = []any{"internal/cli/context.go"}
+			run := dispatchSpecRun(t, root, item, output)
+			collected, _, err := Collect(root, run.RunID)
+			if err == nil || !strings.Contains(err.Error(), "strict enforcement") {
+				t.Fatalf("Collect() error = %v, want strict coverage error", err)
+			}
+			if collected.Status != "pending" {
+				t.Fatalf("run status = %s, want pending", collected.Status)
+			}
+		})
+	}
+}
+
+func TestCollectStrictRejectsMissingSpecDirectory(t *testing.T) {
 	root, item := initProject(t)
-	writeCoveredSpec(t, root, "api.md", "internal/**")
+	setEnforcement(t, root, "strict")
+	if err := os.RemoveAll(filepath.Join(root, ".ox-agent", "context", "specs")); err != nil {
+		t.Fatalf("remove specs directory: %v", err)
+	}
 	output := validOutput("specify")
-	output["artifacts"] = []any{"./internal/cli/context.go"}
-	output["spec_impact"] = map[string]any{
-		"consulted": []any{"context/specs/api.md"},
-		"conforms":  true,
-	}
+	output["artifacts"] = []any{"internal/cli/context.go"}
 	run := dispatchSpecRun(t, root, item, output)
-	run, _, err := Collect(root, run.RunID)
-	if err != nil {
-		t.Fatalf("Collect() error = %v", err)
+	collected, _, err := Collect(root, run.RunID)
+	if err == nil || !strings.Contains(err.Error(), "spec coverage unreadable") {
+		t.Fatalf("Collect() error = %v, want strict missing-coverage error", err)
 	}
-	events := specEvents(t, root, item.ID)
-	if len(events) != 1 || events[0].Type != "spec.checked" {
-		t.Fatalf("./ artifact missed coverage: spec events = %v", events)
+	if collected.Status != "pending" {
+		t.Fatalf("run status = %s, want pending", collected.Status)
 	}
 }
 
@@ -460,6 +507,36 @@ func TestCollectStrictDedupesPendingDecision(t *testing.T) {
 	pending, _ := input.Pending(root)
 	if len(pending) != 1 {
 		t.Fatalf("pending = %v — identical drift must share one request", pending)
+	}
+}
+
+func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
+	item := &state.WorkItem{ID: "WI-0001"}
+	onePath := []specFinding{{
+		Kind:  "unacknowledged",
+		Spec:  "context/specs/api.md",
+		Paths: []string{"src/a src/b"},
+	}}
+	twoPaths := []specFinding{{
+		Kind:  "unacknowledged",
+		Spec:  "context/specs/api.md",
+		Paths: []string{"src/a", "src/b"},
+	}}
+	if specDecisionQuestion(item, onePath) == specDecisionQuestion(item, twoPaths) {
+		t.Fatal("different finding paths produced the same decision identity")
+	}
+	ordered := []specFinding{{
+		Kind:  "unacknowledged",
+		Spec:  "context/specs/api.md",
+		Paths: []string{"src/a", "src/b"},
+	}}
+	reversed := []specFinding{{
+		Kind:  "unacknowledged",
+		Spec:  "context/specs/api.md",
+		Paths: []string{"src/b", "src/a"},
+	}}
+	if specDecisionQuestion(item, ordered) != specDecisionQuestion(item, reversed) {
+		t.Fatal("finding order changed the decision identity")
 	}
 }
 

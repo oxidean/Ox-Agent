@@ -1,8 +1,12 @@
 package harness
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -36,13 +40,17 @@ type specEvaluation struct {
 	// spec.drift, but strict enforcement steps down to warn rather than
 	// parking another identical decision behind the same question.
 	released bool
+	// coverageErr fails the collect when strict can't even read its
+	// gate — an unreadable spec tree under strict is a blocked input,
+	// not a pass.
+	coverageErr error
 }
 
 // evaluateSpecImpact reads the run's spec_impact declaration and checks
-// the declared artifacts against indexed spec coverage. An "off" policy
-// skips evaluation entirely — no findings, no events. Errors here mean the
-// policy or index is unreadable, which fails the collect so the problem
-// surfaces instead of silently bypassing the gate.
+// the declared artifacts against spec coverage. An "off" policy skips
+// evaluation entirely — no findings, no events. Errors here mean the
+// policy or coverage inputs are unreadable, which fails the collect so
+// the problem surfaces instead of silently bypassing the gate.
 func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any) (*specEvaluation, error) {
 	policy, err := project.LoadPolicy(root)
 	if err != nil {
@@ -96,6 +104,9 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 		}
 	}
 	eval.findings = append(eval.findings, eval.coverageFindings(root, output, consulted)...)
+	if eval.coverageErr != nil {
+		return nil, eval.coverageErr
+	}
 	// A previously accepted finding set releases under strict: the
 	// decision a human already made stands for identical drift rather
 	// than stacking a duplicate request.
@@ -115,12 +126,23 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 	// stored index — an index entry only refreshes on `context index`,
 	// so index-driven enforcement could miss a glob added (or retain one
 	// removed) since the last build. The spec files are the truth.
-	specs, err := appctx.CoveredSpecs(root)
+	specs, specIssues, err := appctx.CoveredSpecs(root)
 	if err != nil {
-		// A read failure degrades to no coverage rather than failing the
-		// collect — warn-level by design, since enforcement must never
+		if e.enforcement == "strict" {
+			// Strict fails closed: "can't read the gate's inputs" is not
+			// "no covered specs" — the collect fails and stays retryable
+			// rather than applying an unchecked outcome.
+			e.coverageErr = fmt.Errorf("spec coverage unreadable under strict enforcement: %w", err)
+			return nil
+		}
+		// Warn mode degrades to no coverage: enforcement must never
 		// hinge on filesystem health alone.
 		e.globIssues = append(e.globIssues, fmt.Sprintf("spec coverage skipped — specs unreadable: %v", err))
+		return nil
+	}
+	e.globIssues = append(e.globIssues, specIssues...)
+	if e.enforcement == "strict" && len(specIssues) > 0 {
+		e.coverageErr = fmt.Errorf("invalid spec coverage under strict enforcement: %s", strings.Join(specIssues, "; "))
 		return nil
 	}
 	if len(specs) == 0 {
@@ -135,7 +157,12 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 		var matched []string
 		for _, glob := range spec.Covers {
 			if _, err := path.Match(glob, ""); err != nil {
-				e.globIssues = append(e.globIssues, fmt.Sprintf("%s declares invalid covers glob %q: %v", spec.Path, glob, err))
+				issue := fmt.Sprintf("%s declares invalid covers glob %q: %v", spec.Path, glob, err)
+				e.globIssues = append(e.globIssues, issue)
+				if e.enforcement == "strict" {
+					e.coverageErr = fmt.Errorf("invalid spec coverage under strict enforcement: %s", issue)
+					return findings
+				}
 				continue
 			}
 			for _, artifact := range artifactPaths {
@@ -191,13 +218,22 @@ func journalSpecEvents(root string, item *state.WorkItem, run *Run, eval *specEv
 	case eval.declared:
 		eventType = "spec.checked"
 		data["consulted"] = anySlice(eval.consulted)
+		data["enforcement"] = eval.enforcement
 	default:
 		return
 	}
 	data["run_id"] = run.RunID
 	data["skill"] = run.Skill
 	if journaled, _ := journalFindEvent(root, item.ID, eventType, run.RunID); journaled != nil {
-		return
+		// Same type + same findings = the retried collect replaying —
+		// skip the duplicate. Same type + different findings means
+		// output.json was edited between collects: append the new
+		// record so the journal shows the divergence rather than
+		// keeping a finding set that no longer matches the block.
+		if reflect.DeepEqual(journaled.Data["findings"], data["findings"]) &&
+			reflect.DeepEqual(journaled.Data["consulted"], data["consulted"]) {
+			return
+		}
 	}
 	if err := state.Append(root, state.Event{
 		Type:       eventType,
@@ -217,6 +253,7 @@ var specDecisionOptions = []string{
 	"Update the spec(s) to match the change",
 	"Accept the drift and proceed",
 	"Rework the change to conform",
+	"Consult the spec and re-run",
 }
 
 const specDecisionAccept = "Accept the drift and proceed"
@@ -227,10 +264,24 @@ const specDecisionAccept = "Accept the drift and proceed"
 // work-item + question, and an answered "accept" request releases every
 // later run whose drift hashes to the same text.
 func specDecisionQuestion(item *state.WorkItem, findings []specFinding) string {
+	canonical := append([]specFinding(nil), findings...)
+	for i := range canonical {
+		canonical[i].Paths = append([]string(nil), canonical[i].Paths...)
+		sort.Strings(canonical[i].Paths)
+		canonical[i].Paths = dedupeStrings(canonical[i].Paths)
+	}
+	sort.Slice(canonical, func(i, j int) bool {
+		left, _ := json.Marshal(canonical[i])
+		right, _ := json.Marshal(canonical[j])
+		return string(left) < string(right)
+	})
+	encoded, _ := json.Marshal(canonical)
+	sum := sha256.Sum256(encoded)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "spec drift in %s:", item.ID)
 	parts := make([]string, 0, len(findings))
-	for _, f := range findings {
+	for _, f := range canonical {
 		switch {
 		case f.Kind == "unacknowledged":
 			parts = append(parts, fmt.Sprintf("%s touched covered paths %v without consultation", f.Spec, f.Paths))
@@ -244,6 +295,7 @@ func specDecisionQuestion(item *state.WorkItem, findings []specFinding) string {
 	for _, p := range parts {
 		fmt.Fprintf(&b, " %s;", p)
 	}
+	fmt.Fprintf(&b, " [finding-set:%s]", hex.EncodeToString(sum[:16]))
 	b.WriteString(" resolve the spec of record before this outcome applies.")
 	return b.String()
 }
@@ -283,6 +335,7 @@ func fileSpecDecision(root string, item *state.WorkItem, run *Run, findings []sp
 // comparison with index paths: slashes, no leading ./ or .ox-agent/.
 func normalizeSpecRef(ref string) string {
 	ref = strings.TrimSpace(ref)
+	ref = strings.ReplaceAll(ref, "\\", "/")
 	ref = strings.TrimPrefix(ref, "./")
 	ref = strings.TrimPrefix(ref, ".ox-agent/")
 	return strings.Trim(ref, "/")

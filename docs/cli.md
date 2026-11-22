@@ -245,8 +245,10 @@ seeds it; `doctor` warns when it drifts out of date.
 ### `ox-agent context promote <work-item> [--name <slug>]`
 
 Copy the work item's `artifacts/spec.md` into `context/specs/<slug>.md`
-(default slug: the title), refresh the index, and journal `spec.promoted`
-(first promotion) or `spec.updated` (re-promotion). The promoted file is the
+(default slug: the title; `--name` accepts 1–48 lowercase letters, digits, and
+dashes), refresh the index, and journal `spec.promoting` before the write so a
+failed promotion can be retried, then `spec.promoted` (first promotion) or
+`spec.updated` (re-promotion). The promoted file is the
 spec of record for its subject — future packets receive it under
 `context.specs` and must reconcile against it. Promotion always copies from
 the work item, so keep the amendment where it originates: update the item's
@@ -277,8 +279,9 @@ drift or unacknowledged coverage touch as `spec.drift`.
 `policy.yaml` `specs.enforcement` controls the consequences: `warn` (the
 default) journals findings and prints warnings; `strict` files a durable
 decision request and keeps the run `retry` so the drifted outcome never
-applies; `off` disables evaluation entirely. The held run's outcome is
-dead like any parked run — the answer lands in the next packet, and
+applies. Strict collection also fails closed on unreadable or malformed
+coverage metadata; `off` disables evaluation entirely. The held run's
+outcome is dead like any parked run — the answer lands in the next packet, and
 answering "Accept the drift and proceed" releases later runs whose drift
 matches the same finding set (anything else re-files the decision when
 identical drift recurs); a re-dispatched run that conforms or resolves

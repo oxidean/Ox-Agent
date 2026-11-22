@@ -143,7 +143,7 @@ identifiers the pipeline counts on. The new packet carries the answer in
 `work_item.created | transitioned | stage_advanced | archived`,
 `skill.invoked | completed | failed`, `pipeline.completed`,
 `input.requested | scoped | answered | expired | cancelled`,
-`spec.promoted | updated | checked | drift`,
+`spec.promoting | promoted | updated | checked | drift`,
 `discussion.*`, `context.compiled`, `eval.completed`,
 `skills.installed | uninstalled`.
 

@@ -1,7 +1,8 @@
 package appctx
 
 import (
-	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,61 +50,61 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 	if slug == "" {
 		slug = specSlug(item.Title)
 	}
-	if !specSlugPattern.MatchString(slug) {
-		return "", false, fmt.Errorf("invalid spec name %q — use lowercase letters, digits, and dashes (a-z0-9-)", slug)
+	if len(slug) > 48 || !specSlugPattern.MatchString(slug) || dosDeviceStems[slug] {
+		return "", false, fmt.Errorf("invalid spec name %q — use 1–48 lowercase letters, digits, and dashes (a-z0-9-), and not a Windows device name", slug)
 	}
 	rel := "context/specs/" + slug + ".md"
 	target := filepath.Join(root, ".ox-agent", filepath.FromSlash(rel))
-	exists := true
+	exists := false
 	if _, err := os.Stat(target); err != nil {
 		if !os.IsNotExist(err) {
 			return "", false, err
 		}
-		exists = false
+	} else {
+		exists = true
 	}
-	// Provenance lives in the journal: a promoted spec is owned by the
-	// work item that promoted it. An existing file with different or no
-	// provenance must not be re-owned silently.
-	owner, err := promotedOwner(root, rel)
+	promotion, err := promotionState(root, rel)
 	if err != nil {
 		return "", false, err
 	}
 	switch {
-	case owner == item.ID:
-		exists = true // journal wins over a missing file: re-promote restores it
-	case owner != "":
-		return "", false, fmt.Errorf("%s is already promoted from %s — pass --name to pick a different spec name", rel, owner)
+	case promotion.owner == item.ID:
+		exists = promotion.promoted || (promotion.pending && promotion.updated)
+	case promotion.owner != "":
+		return "", false, fmt.Errorf("%s is already promoted from %s — pass --name to pick a different spec name", rel, promotion.owner)
 	case exists:
-		// A file with no provenance normally refuses — except the orphan a
-		// crashed promotion leaves: identical content means the earlier
-		// attempt wrote it, so finishing it restores the journaled state
-		// rather than stranding the promote forever.
-		if existing, rerr := os.ReadFile(target); rerr == nil && bytes.Equal(existing, data) {
-			// Journal spec.promoted, not spec.updated: ownership only
-			// comes from promoted events, and without one this file
-			// stays ownerless — a later re-promote with real changes
-			// would refuse as foreign again.
-			exists = false
-			break
-		}
 		return "", false, fmt.Errorf("%s already exists and was not promoted from a work item — pass --name to pick a different spec name", rel)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return "", false, err
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
-		return "", false, err
-	}
-	index, err := Build(root)
+	relSource, err := filepath.Rel(root, source)
 	if err != nil {
 		return "", false, err
 	}
-	if _, _, _, err := Write(root, index); err != nil {
+	relSource = filepath.ToSlash(relSource)
+	sum := sha256.Sum256(data)
+	if err := state.Append(root, state.Event{
+		Type:       "spec.promoting",
+		WorkItemID: item.ID,
+		Actor:      "ox-agent",
+		Data: map[string]any{
+			"spec":          rel,
+			"source":        relSource,
+			"source_sha256": hex.EncodeToString(sum[:]),
+			"updated":       exists,
+		},
+	}); err != nil {
+		return "", false, fmt.Errorf("recording spec promotion intent: %w", err)
+	}
+	if err := writeSpecAtomically(target, data); err != nil {
 		return "", false, err
 	}
-	relSource, rerr := filepath.Rel(root, source)
-	if rerr != nil {
-		relSource = source
+	// Rebuild under the shared index lock — promote.lock serializes
+	// promotions, but `context index` must not overwrite this write
+	// with a Build taken before the spec landed.
+	if _, _, _, err := Rebuild(root); err != nil {
+		return "", false, err
 	}
 	eventType := "spec.promoted"
 	if exists {
@@ -113,11 +114,36 @@ func promote(root string, item *state.WorkItem, name string) (specPath string, u
 		Type:       eventType,
 		WorkItemID: item.ID,
 		Actor:      "ox-agent",
-		Data:       map[string]any{"spec": rel, "source": filepath.ToSlash(relSource)},
+		Data:       map[string]any{"spec": rel, "source": relSource, "source_sha256": hex.EncodeToString(sum[:])},
 	}); err != nil {
 		return "", false, fmt.Errorf("spec promoted to %s but journaling %s failed: %w", rel, eventType, err)
 	}
 	return rel, exists, nil
+}
+
+func writeSpecAtomically(target string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(target), ".spec-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if err := file.Chmod(0o644); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, target)
 }
 
 // HasPromotedSpec reports whether the journal ties any spec promotion to
@@ -135,32 +161,62 @@ func HasPromotedSpec(root, workItemID string) (bool, error) {
 	return false, nil
 }
 
-// promotedOwner returns the work-item ID that created spec via
-// spec.promoted, or "" when no promotion event names it. Only promotion
-// carries ownership — spec.updated events from later work edits and
-// re-promotions must not re-own the file, or a spec of record would
-// become unpromotable by any item but its last editor. An unreadable
-// journal refuses the promotion rather than guessing provenance.
-func promotedOwner(root, spec string) (string, error) {
+type promotionStatus struct {
+	owner    string
+	pending  bool
+	promoted bool
+	updated  bool
+}
+
+func promotionState(root, spec string) (promotionStatus, error) {
 	events, err := state.ReadEvents(root)
 	if err != nil {
-		return "", err
+		return promotionStatus{}, err
 	}
-	owner := ""
+	var status promotionStatus
 	for _, e := range events {
-		if e.Type != "spec.promoted" {
+		if e.Data["spec"] != spec {
 			continue
 		}
-		if e.Data["spec"] == spec {
-			owner = e.WorkItemID
+		switch e.Type {
+		case "spec.promoting":
+			if status.owner == "" || status.owner == e.WorkItemID {
+				status.owner = e.WorkItemID
+				status.pending = true
+				status.updated, _ = e.Data["updated"].(bool)
+			}
+		case "spec.promoted":
+			status.owner = e.WorkItemID
+			status.pending = false
+			status.promoted = true
+			status.updated = false
+		case "spec.updated":
+			if status.owner != "" && status.owner != e.WorkItemID {
+				continue
+			}
+			status.owner = e.WorkItemID
+			status.pending = false
+			status.promoted = true
+			status.updated = true
 		}
 	}
-	return owner, nil
+	return status, nil
 }
 
 // specSlugPattern constrains promoted spec filenames so --name can never
 // write outside context/specs or produce checkout-hostile names.
 var specSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// dosDeviceStems are Windows device names a spec file must never claim —
+// context/specs/con.md writes fine on POSIX and breaks git checkout on
+// Windows.
+var dosDeviceStems = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
 
 var specNonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
 

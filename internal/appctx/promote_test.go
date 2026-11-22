@@ -78,11 +78,11 @@ func TestPromoteCreatesSpec(t *testing.T) {
 		t.Fatal("promoted spec not in the index")
 	}
 	events := specEvents(t, root, item.ID)
-	if len(events) != 1 || events[0].Type != "spec.promoted" {
+	if len(events) != 2 || events[0].Type != "spec.promoting" || events[1].Type != "spec.promoted" {
 		t.Fatalf("spec events = %v", events)
 	}
-	if events[0].Data["spec"] != rel {
-		t.Fatalf("promoted event spec = %v", events[0].Data["spec"])
+	if events[1].Data["spec"] != rel {
+		t.Fatalf("promoted event spec = %v", events[1].Data["spec"])
 	}
 }
 
@@ -109,7 +109,7 @@ func TestPromoteUpdatesInPlace(t *testing.T) {
 		t.Fatalf("updated spec = %q", data)
 	}
 	events := specEvents(t, root, item.ID)
-	if len(events) != 2 || events[1].Type != "spec.updated" {
+	if len(events) != 4 || events[2].Type != "spec.promoting" || events[3].Type != "spec.updated" {
 		t.Fatalf("spec events = %v", events)
 	}
 }
@@ -159,7 +159,7 @@ func TestPromoteMissingSpec(t *testing.T) {
 func TestPromoteRejectsBadName(t *testing.T) {
 	root := initProject(t)
 	item := startWithSpec(t, root, "t", "spec\n")
-	for _, name := range []string{"../escape", "a/b", "UPPER", "a_b", ".hidden"} {
+	for _, name := range []string{"../escape", "a/b", "UPPER", "a_b", ".hidden", "con", "nul", strings.Repeat("a", 49)} {
 		if _, _, err := Promote(root, item, name); err == nil {
 			t.Fatalf("promote accepted name %q", name)
 		}
@@ -203,6 +203,7 @@ func TestParseCovers(t *testing.T) {
 		{"ellipsis close", "---\ncovers: [a/**]\n...\nbody\n", 1},
 		{"non-fence close", "---\ncovers: [a/**]\n--- trailing prose\n", 0},
 		{"malformed yaml", "---\ncovers: [unclosed\n---\n", 0},
+		{"unclosed front matter", "---\ncovers:\n  - a/**\n", 0},
 		{"no covers key", "---\ntitle: x\n---\n", 0},
 		{"empty entries dropped", "---\ncovers:\n  - ''\n  - a/**\n---\n", 1},
 	} {
@@ -213,35 +214,102 @@ func TestParseCovers(t *testing.T) {
 	}
 }
 
-// TestPromoteCompletesOrphanedSpec verifies a file identical to the
-// work item's spec — the orphan a crashed first promotion leaves —
-// completes on retry instead of refusing as foreign.
-func TestPromoteCompletesOrphanedSpec(t *testing.T) {
+// TestPromoteRecoversFailedIndexWrite verifies a durable promotion intent
+// lets the same work item finish after the context index becomes writable.
+func TestPromoteRecoversFailedIndexWrite(t *testing.T) {
 	root := initProject(t)
 	item := startWithSpec(t, root, "the spec", "# the spec\n")
-	target := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	indexPath := filepath.Join(root, ".ox-agent", "context", "index.yaml")
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(target, []byte("# the spec\n"), 0o644); err != nil {
+	if err := os.Mkdir(indexPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Promote(root, item, ""); err == nil {
+		t.Fatal("Promote() succeeded while the index path was a directory")
+	}
+	target := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
+	if data, err := os.ReadFile(target); err != nil || string(data) != "# the spec\n" {
+		t.Fatalf("prepared spec = %q, %v", data, err)
+	}
+	if events := specEvents(t, root, item.ID); len(events) != 1 || events[0].Type != "spec.promoting" {
+		t.Fatalf("events after failed index write = %v", events)
+	}
+	if err := os.Remove(indexPath); err != nil {
 		t.Fatal(err)
 	}
 	rel, updated, err := Promote(root, item, "")
 	if err != nil {
-		t.Fatalf("Promote() error = %v", err)
+		t.Fatalf("retry Promote() error = %v", err)
 	}
 	if rel != "context/specs/the-spec.md" {
 		t.Fatalf("rel = %s", rel)
 	}
-	// Completing an orphaned write is still the first promotion.
 	if updated {
-		t.Fatal("orphan completion reported updated, want promoted")
+		t.Fatal("recovery reported updated, want promoted")
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 3 || events[2].Type != "spec.promoted" {
+		t.Fatalf("recovered events = %v", events)
 	}
 }
 
-// TestPromoteStillRefusesForeignContent verifies the orphan escape hatch
-// only opens for identical content — a different unpromoted file keeps
-// refusing.
+func TestPromoteRecoversChangedSourceAfterUpdateFailure(t *testing.T) {
+	root := initProject(t)
+	item := startWithSpec(t, root, "the spec", "v1\n")
+	if _, _, err := Promote(root, item, ""); err != nil {
+		t.Fatalf("initial Promote() error = %v", err)
+	}
+	indexPath := filepath.Join(root, ".ox-agent", "context", "index.yaml")
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(indexPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(item.Dir, "artifacts", "spec.md")
+	if err := os.WriteFile(specPath, []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Promote(root, item, ""); err == nil {
+		t.Fatal("update succeeded while the index path was a directory")
+	}
+	if err := os.WriteFile(specPath, []byte("v3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	_, updated, err := Promote(root, item, "")
+	if err != nil {
+		t.Fatalf("recovery Promote() error = %v", err)
+	}
+	if !updated {
+		t.Fatal("recovery reported updated=false")
+	}
+	promotedPath := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
+	if data, err := os.ReadFile(promotedPath); err != nil || string(data) != "v3\n" {
+		t.Fatalf("recovered spec = %q, %v", data, err)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 5 || events[4].Type != "spec.updated" {
+		t.Fatalf("recovered events = %v", events)
+	}
+}
+
+func TestPromoteRefusesIdenticalUnpromotedFile(t *testing.T) {
+	root := initProject(t)
+	item := startWithSpec(t, root, "the spec", "# the spec\n")
+	target := filepath.Join(root, ".ox-agent", "context", "specs", "the-spec.md")
+	if err := os.WriteFile(target, []byte("# the spec\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Promote(root, item, ""); err == nil {
+		t.Fatal("Promote() claimed an identical file without a promotion intent")
+	}
+}
+
 func TestPromoteStillRefusesForeignContent(t *testing.T) {
 	root := initProject(t)
 	item := startWithSpec(t, root, "the spec", "# the spec\n")

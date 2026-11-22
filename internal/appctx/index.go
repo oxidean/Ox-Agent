@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oxidean/Ox-Agent/internal/filelock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -166,21 +167,44 @@ func Load(root string) (*Index, error) {
 	return &index, nil
 }
 
+// Rebuild atomically rebuilds and writes context/index.yaml under a
+// project lock. Every index writer — `context index`, init seeding,
+// promote — must route through it: an unlocked Build+Write interleaves
+// with promote's spec-file write and can overwrite a fresher index with
+// one missing the new entry.
+func Rebuild(root string) (added, changed, removed int, err error) {
+	lockPath := filepath.Join(root, ".ox-agent", "runtime", "locks", "context-index.lock")
+	err = filelock.With(lockPath, filelock.DefaultTimeout, func() error {
+		index, berr := Build(root)
+		if berr != nil {
+			return berr
+		}
+		var werr error
+		added, changed, removed, werr = Write(root, index)
+		return werr
+	})
+	return added, changed, removed, err
+}
+
 // CoveredSpecs walks context/specs and returns each file's `covers:`
-// globs parsed fresh from front matter. Collection uses this instead of
-// the stored index: the index only refreshes on `context index`, so
-// index-driven coverage could miss a glob added (or retain one removed)
-// since the last build. Entries without covers are skipped.
-func CoveredSpecs(root string) ([]IndexEntry, error) {
+// globs parsed fresh from front matter, plus one diagnostic line per
+// file that declares a covers key but produces no globs. Collection
+// uses this instead of the stored index: the index only refreshes on
+// `context index`, so index-driven coverage could miss a glob added (or
+// retain one removed) since the last build. Entries without covers are
+// skipped.
+func CoveredSpecs(root string) (specs []IndexEntry, issues []string, err error) {
 	specsDir := filepath.Join(root, ".ox-agent", "context", "specs")
-	var out []IndexEntry
-	err := filepath.Walk(specsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	err = filepath.Walk(specsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
 			return nil
 		}
 		rel, err := filepath.Rel(filepath.Join(root, ".ox-agent"), path)
 		if err != nil {
-			return nil
+			return err
 		}
 		rel = filepath.ToSlash(rel)
 		if strings.Contains("/"+rel, "/.") {
@@ -188,17 +212,18 @@ func CoveredSpecs(root string) ([]IndexEntry, error) {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil
+			return fmt.Errorf("reading spec %s: %w", rel, err)
 		}
-		if covers := parseCovers(data); len(covers) > 0 {
-			out = append(out, IndexEntry{Path: rel, Kind: "spec", Covers: covers})
+		covers := parseCovers(data)
+		switch {
+		case len(covers) > 0:
+			specs = append(specs, IndexEntry{Path: rel, Kind: "spec", Covers: covers})
+		case coversInvalid(data):
+			issues = append(issues, fmt.Sprintf("%s has invalid covers front matter — coverage for it is off until it is fixed", rel))
 		}
 		return nil
 	})
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	return out, err
+	return specs, issues, err
 }
 
 // Entries returns the index entries of one kind; loading the index fresh

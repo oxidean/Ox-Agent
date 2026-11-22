@@ -622,6 +622,11 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 			return run, output, err
 		}
 	}
+	if run.Status == "collected" {
+		// A released or resolved re-collect lands here with a stale
+		// decision id still on the record — the run is done waiting.
+		run.AwaitingInput = ""
+	}
 	if run.Status == "collected" || blocking || needsInput {
 		if err := applyOutcome(root, item, run, output); err != nil {
 			// Restore the run to pending so collect stays retryable: a
@@ -894,7 +899,13 @@ func fileInputRequest(root, workItemID, runID, question string, options []string
 			return r, nil
 		}
 		if r.WorkItemID == workItemID && r.Question == question {
-			return r, nil // already on file
+			want := input.KindClarification
+			if len(options) >= 2 {
+				want = input.KindDecision
+			}
+			if r.Kind == want {
+				return r, nil // already on file
+			}
 		}
 	}
 	kind := input.KindClarification
