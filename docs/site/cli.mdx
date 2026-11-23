@@ -7,8 +7,8 @@ import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="note">
 	This is the full command surface. You type the setup and steering
-	commands — `init`, `doctor`, `start`, `status`, `input respond`,
-	`update` — while your agent drives `run`, `run collect`,
+	commands — `init`, `doctor`, `start`, `status`, `spec status`,
+	`input respond`, `update` — while your agent drives `run`, `run collect`,
 	`context compile`, and the pipelines when you invoke a skill. See
 	[Using skills](./using-skills/) for that side of the surface.
 </Aside>
@@ -21,6 +21,7 @@ ox-agent integrate                        Wire AGENTS.md + .agents/.claude links
 ox-agent doctor [--fix]                   Validate the local Ox-Agent setup
 ox-agent start <title>                    Create a work item
 ox-agent status [work-item]               List or inspect work items
+ox-agent spec status [work-item]           Show spec checks, findings, decisions
 ox-agent transition <wi> <state>          Move along a legal lifecycle edge
 ox-agent advance <wi>                     Advance to the next profile stage
 ox-agent archive|unblock <wi>             Terminal archive / clear a blocker
@@ -43,6 +44,11 @@ ox-agent update [--check|--version v|--binary-only]
 ox-agent completion <shell>               Shell completion script
 ox-agent uninstall --yes                  Remove the binary
 ```
+
+`spec status` reads the journal to show the latest check, still-open findings,
+and pending strict spec-decision IDs. Without a work-item argument it shows
+active items with spec activity. It does not rerun coverage checks or mutate
+project state.
 
 `run` dispatches the stage-mapped skill through a configured harness
 adapter. `manual` prints packet and output paths for any agent,

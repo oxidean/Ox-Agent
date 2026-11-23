@@ -1,5 +1,5 @@
 schema_version: 1
-generated_at: "2026-11-22T15:55:09Z"
+generated_at: "2026-11-22T21:30:05Z"
 files:
     - path: context/project.yaml
       sha256: fcd2d293e2b935b286e3bf107a5795a25cd2c9294582bb37b4c86c6460c1c03e
@@ -9,3 +9,13 @@ files:
       sha256: 322519b9fc969a835c9a3f3814d45ff92be0181acce726abdb932f663f2d8a01
       bytes: 1390
       kind: spec
+    - path: context/specs/expose-spec-enforcement-outcomes-in-work-item-st.md
+      sha256: 2a63f79b63a43c074a91059ef953673b9e347938f5dc7f4ac057fdd199e00cb8
+      bytes: 3624
+      kind: spec
+      covers:
+        - internal/cli/spec.go
+        - internal/cli/root.go
+        - internal/cli/cli_test.go
+        - docs/cli.md
+        - docs/site/cli.mdx
