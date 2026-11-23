@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,12 +55,12 @@ func Append(root string, event Event) error {
 	return nil
 }
 
-// ReadEvents parses every entry in the project event journal in timestamp
+// ReadEvents parses unique entries in the project event journal in timestamp
 // order. The journal merges with the union driver across branches, which can
-// interleave cross-branch appends out of chronological order; readers sort by
-// the recorded timestamp so replay, snapshots, and LastEventID stay correct
-// regardless of file position. A missing journal reads as empty; malformed
-// lines report their line number.
+// interleave appends and repeat identical event IDs; readers sort by recorded
+// timestamp and ignore identical repeats. Conflicting events with the same ID
+// are malformed. A missing journal reads as empty; malformed lines report
+// their line number.
 func ReadEvents(root string) ([]Event, error) {
 	data, err := os.ReadFile(journalPath(root))
 	if err != nil {
@@ -69,6 +70,8 @@ func ReadEvents(root string) ([]Event, error) {
 		return nil, fmt.Errorf("reading event journal: %w", err)
 	}
 	var events []Event
+	seen := make(map[string]Event)
+	seenLines := make(map[string]int)
 	for i, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -76,6 +79,16 @@ func ReadEvents(root string) ([]Event, error) {
 		var event Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return nil, fmt.Errorf("event journal line %d: %w", i+1, err)
+		}
+		if event.EventID != "" {
+			if previous, ok := seen[event.EventID]; ok {
+				if !reflect.DeepEqual(previous, event) {
+					return nil, fmt.Errorf("event journal line %d: duplicate event id %q differs from line %d", i+1, event.EventID, seenLines[event.EventID])
+				}
+				continue
+			}
+			seen[event.EventID] = event
+			seenLines[event.EventID] = i + 1
 		}
 		events = append(events, event)
 	}

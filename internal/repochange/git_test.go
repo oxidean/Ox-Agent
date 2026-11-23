@@ -175,6 +175,15 @@ func TestChangedPathsRejectsInvalidOrMissingBaseline(t *testing.T) {
 	}
 }
 
+func TestValidBaselineRequiresLowercaseHex(t *testing.T) {
+	if validBaseline(strings.Repeat("A", 40)) {
+		t.Fatal("validBaseline accepted uppercase hexadecimal")
+	}
+	if !validBaseline(strings.Repeat("a", 40)) {
+		t.Fatal("validBaseline rejected lowercase hexadecimal")
+	}
+}
+
 func initRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()

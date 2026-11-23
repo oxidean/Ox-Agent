@@ -94,6 +94,9 @@ func validBaseline(value string) bool {
 	if len(value) != 40 && len(value) != 64 {
 		return false
 	}
+	if value != strings.ToLower(value) {
+		return false
+	}
 	_, err := hex.DecodeString(value)
 	return err == nil
 }
