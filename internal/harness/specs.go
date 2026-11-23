@@ -13,14 +13,15 @@ import (
 	"github.com/oxidean/Ox-Agent/internal/appctx"
 	"github.com/oxidean/Ox-Agent/internal/input"
 	"github.com/oxidean/Ox-Agent/internal/project"
+	"github.com/oxidean/Ox-Agent/internal/repochange"
 	"github.com/oxidean/Ox-Agent/internal/state"
 )
 
 // specFinding is one spec-reconciliation problem found while collecting a
-// run: either drift the skill declared but left unresolved, or a spec the
-// run's declared artifacts touched without the skill ever consulting it.
+// run: declared drift, unacknowledged coverage, underreported changes, or
+// unavailable repository evidence.
 type specFinding struct {
-	Kind    string   `json:"kind"` // "declared" | "unacknowledged"
+	Kind    string   `json:"kind"` // "declared" | "unacknowledged" | "underreported" | "evidence_unavailable"
 	Spec    string   `json:"spec"`
 	Summary string   `json:"summary,omitempty"`
 	Paths   []string `json:"paths,omitempty"`
@@ -108,7 +109,7 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 			})
 		}
 	}
-	eval.findings = append(eval.findings, eval.coverageFindings(root, output, consulted)...)
+	eval.findings = append(eval.findings, eval.coverageFindings(root, item, output, consulted)...)
 	if eval.coverageErr != nil {
 		return nil, eval.coverageErr
 	}
@@ -126,7 +127,7 @@ func evaluateSpecImpact(root string, item *state.WorkItem, output map[string]any
 // `covers:` globs of indexed specs. A spec whose globs match changed paths
 // but that appears in neither consulted nor drift is an unacknowledged
 // spec touch — the mechanical part of "keep specs in mind".
-func (e *specEvaluation) coverageFindings(root string, output map[string]any, consulted map[string]bool) []specFinding {
+func (e *specEvaluation) coverageFindings(root string, item *state.WorkItem, output map[string]any, consulted map[string]bool) []specFinding {
 	// Coverage reads covers: straight from the spec files, not the
 	// stored index — an index entry only refreshes on `context index`,
 	// so index-driven enforcement could miss a glob added (or retain one
@@ -169,27 +170,77 @@ func (e *specEvaluation) coverageFindings(root string, output map[string]any, co
 			validGlobs[spec.Path] = append(validGlobs[spec.Path], normalized)
 		}
 	}
-	artifactPaths := artifactPaths(output["artifacts"])
-	if len(artifactPaths) == 0 {
+	var hasValidCoverage bool
+	for _, globs := range validGlobs {
+		if len(globs) > 0 {
+			hasValidCoverage = true
+			break
+		}
+	}
+	if !hasValidCoverage {
 		return nil
+	}
+	var changedPaths []string
+	var changeErr error
+	unavailableSummary := "repository change evidence unavailable: Git query failed for the work-item-start baseline"
+	if item.GitBaseline == "" {
+		changeErr = fmt.Errorf("no clean Git baseline was recorded at work-item start")
+		unavailableSummary = "repository change evidence unavailable: no clean work-item-start Git baseline was recorded"
+	} else {
+		changedPaths, changeErr = repochange.ChangedPaths(root, item.GitBaseline)
+	}
+	if changeErr != nil {
+		var findings []specFinding
+		for _, spec := range specs {
+			if len(validGlobs[spec.Path]) == 0 {
+				continue
+			}
+			findings = append(findings, specFinding{
+				Kind: "evidence_unavailable", Spec: spec.Path,
+				Summary: unavailableSummary,
+			})
+		}
+		return findings
+	}
+	declared := make(map[string]bool)
+	for _, artifact := range artifactPaths(output["artifacts"]) {
+		if normalized := normalizeArtifactPath(artifact); normalized != "" {
+			declared[normalized] = true
+		}
 	}
 	var findings []specFinding
 	for _, spec := range specs {
 		var matched []string
 		for _, glob := range validGlobs[spec.Path] {
-			for _, artifact := range artifactPaths {
-				if matchSpecGlob(glob, artifact) {
-					matched = append(matched, artifact)
+			for _, changed := range changedPaths {
+				if matchSpecGlob(glob, changed) {
+					matched = append(matched, changed)
 				}
 			}
 		}
-		if len(matched) > 0 && !consulted[spec.Path] {
-			sort.Strings(matched)
+		matched = dedupeStrings(matched)
+		sort.Strings(matched)
+		if len(matched) == 0 {
+			continue
+		}
+		if !consulted[spec.Path] {
 			findings = append(findings, specFinding{
-				Kind:    "unacknowledged",
-				Spec:    spec.Path,
-				Summary: "artifacts touch covered paths but the spec was never consulted",
-				Paths:   dedupeStrings(matched),
+				Kind: "unacknowledged", Spec: spec.Path,
+				Summary: "repository changes touch covered paths but the spec was never consulted",
+				Paths:   matched,
+			})
+		}
+		var missing []string
+		for _, changed := range matched {
+			if !declared[changed] {
+				missing = append(missing, changed)
+			}
+		}
+		if len(missing) > 0 {
+			findings = append(findings, specFinding{
+				Kind: "underreported", Spec: spec.Path,
+				Summary: "repository changes touch covered paths omitted from output.artifacts",
+				Paths:   missing,
 			})
 		}
 	}
@@ -275,10 +326,8 @@ var specDecisionOptions = []string{
 const specDecisionAccept = "Accept the drift and proceed"
 
 // specDecisionQuestion builds the durable decision's question text from
-// the finding set alone — never the run ID. A stable question is what
-// makes the durable machinery work: filing dedupes across re-runs on
-// work-item + question, and an answered "accept" request releases every
-// later run whose drift hashes to the same text.
+// the finding set. A stable question dedupes identical findings across runs
+// and lets an accepted decision release the same drift on a later run.
 func specDecisionQuestion(item *state.WorkItem, findings []specFinding) string {
 	canonical := append([]specFinding(nil), findings...)
 	for i := range canonical {
@@ -301,6 +350,8 @@ func specDecisionQuestion(item *state.WorkItem, findings []specFinding) string {
 		switch {
 		case f.Kind == "unacknowledged":
 			parts = append(parts, fmt.Sprintf("%s touched covered paths %v without consultation", f.Spec, f.Paths))
+		case f.Kind == "underreported":
+			parts = append(parts, fmt.Sprintf("%s covers changed paths %v omitted from output.artifacts", f.Spec, f.Paths))
 		case f.Spec != "":
 			parts = append(parts, fmt.Sprintf("%s: %s", f.Spec, f.Summary))
 		default:
@@ -363,6 +414,16 @@ func normalizeSpecRef(ref string) string {
 
 // artifactPaths extracts the path strings from a declared artifacts list
 // (bare strings or {path: ...} objects), for coverage matching.
+func normalizeArtifactPath(value string) string {
+	value = strings.ReplaceAll(value, "\\", "/")
+	value = strings.TrimPrefix(value, "./")
+	value = path.Clean(value)
+	if value == "." || value == ".." || strings.HasPrefix(value, "../") || strings.HasPrefix(value, "/") {
+		return ""
+	}
+	return value
+}
+
 func artifactPaths(raw any) []string {
 	var out []string
 	for _, entry := range toAnySlice(raw) {

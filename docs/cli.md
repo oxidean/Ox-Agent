@@ -240,9 +240,15 @@ Entries classify by path: `context/standards/` → `standard`,
 `discussions/` → `discussion`, `context/project.yaml` → `project`, everything
 else `other`. Compiled packets hand standards, decisions, and specs to skills
 as named context lists; `other` lands under `context.references`. A file's
-`covers:` front-matter globs index with it — collection intersects a run's
-declared artifacts against a spec's globs and reports spec-governed changes
-whose `spec_impact.consulted` never named the spec.
+`covers:` front-matter globs index with it — collection compares actual Git
+changes since the work-item-start baseline with those globs and the run's
+declared artifacts. Covered changes omitted from artifacts or consultation
+are reported.
+Start from a clean Git worktree to obtain a baseline; commit project changes,
+including Ox-Agent's event journal, before starting a new work item. Otherwise
+evidence is unavailable, and strict mode holds covered outcomes for a decision.
+Changed paths are relative to the Ox-Agent project root, including when it is
+nested inside a larger Git worktree.
 
 The index is a stored catalog: `context compile` reads it as written, so
 rerun `context index` after adding or changing files under `context/` and
@@ -281,20 +287,27 @@ contradicts a spec), `drift` entries (`{spec, summary, resolution}` —
 `updated` when the spec file already changed to match, `proposed` or
 `unresolved` otherwise), and `updates` (`{path, summary}` for spec files
 written). Collection journals a clean declaration as `spec.checked` and any
-drift or unacknowledged coverage touch as `spec.drift`.
+drift, unacknowledged, underreported, or evidence-unavailable finding as
+`spec.drift`.
 
 `policy.yaml` `specs.enforcement` controls the consequences: `warn` (the
 default) journals findings and prints warnings; `strict` files a durable
 decision request and keeps the run `retry` so the drifted outcome never
-applies. Strict collection also fails closed on a missing specs directory
-or unreadable or malformed coverage metadata; `off` disables evaluation
+applies. Strict collection also fails closed on a missing specs directory or
+unreadable or malformed coverage metadata. Missing or unreadable repository
+evidence is an explicit finding, never an artifact-only fallback; strict mode
+holds for a decision. New work items record a baseline only when started in a
+clean Git worktree; commit existing project changes, including the event
+journal, before starting to enable evidence checks. `off` disables evaluation
 entirely. The held run's
 outcome is dead like any parked run — its status stays `retry`, so do not
 re-collect it. Answering the request puts the answer in the next packet; then
 dispatch a fresh run. The exact option "Accept the drift and proceed" releases
-later runs with the same finding set. Other answers do not release the outcome;
-without an earlier acceptance, a fresh run with the same unresolved set asks
-again. A fresh run with no unresolved drift completes normally.
+later runs with the same finding set. Missing baselines and Git-query failures
+have distinct summaries, so a decision identifies its evidence problem. Other
+answers do not release the outcome; without an earlier acceptance, a fresh run
+with the same unresolved set asks again. A fresh run with no unresolved drift
+completes normally.
 
 ## Skills
 

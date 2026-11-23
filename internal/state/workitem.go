@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oxidean/Ox-Agent/internal/filelock"
+	"github.com/oxidean/Ox-Agent/internal/repochange"
 )
 
 // WorkItem is a work item index record under .ox-agent/work.
@@ -25,6 +26,7 @@ type WorkItem struct {
 	BlockedFrom   string `json:"blocked_from,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
+	GitBaseline   string `json:"git_baseline,omitempty"`
 	Dir           string `json:"-"`
 }
 
@@ -42,9 +44,10 @@ func Start(root, title string) (_ *WorkItem, err error) {
 		return nil, errors.New("start requires a work-item title")
 	}
 	work := workRoot(root)
-	var id, dir string
+	var id, dir, baseline string
 	created := false
 	err = withWorkItemLock(root, func() error {
+		baseline = repochange.CleanBaseline(root)
 		next, err := nextWorkItemNumber(work)
 		if err != nil {
 			return err
@@ -59,7 +62,7 @@ func Start(root, title string) (_ *WorkItem, err error) {
 		}
 		created = true
 		now := time.Now().UTC().Format(time.RFC3339)
-		index := WorkItem{SchemaVersion: 1, ID: id, Title: title, State: "intake", Profile: "normal", CurrentStage: "intake", CreatedAt: now}
+		index := WorkItem{SchemaVersion: 1, ID: id, Title: title, State: "intake", Profile: "normal", CurrentStage: "intake", CreatedAt: now, GitBaseline: baseline}
 		data, err := json.MarshalIndent(index, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encoding work item: %w", err)
@@ -81,18 +84,22 @@ func Start(root, title string) (_ *WorkItem, err error) {
 	if err != nil {
 		rel = dir
 	}
+	eventData := map[string]any{"title": title, "directory": filepath.ToSlash(rel)}
+	if baseline != "" {
+		eventData["git_baseline"] = baseline
+	}
 	if err := Append(root, Event{
 		Type:       "work_item.created",
 		WorkItemID: id,
 		Actor:      "cli",
-		Data:       map[string]any{"title": title, "directory": filepath.ToSlash(rel)},
+		Data:       eventData,
 	}); err != nil {
 		if removeErr := os.RemoveAll(dir); removeErr != nil {
 			return nil, fmt.Errorf("%w (rolling back %s also failed: %v)", err, dir, removeErr)
 		}
 		return nil, err
 	}
-	return &WorkItem{ID: id, Title: title, State: "intake", Profile: "normal", CurrentStage: "intake", Dir: dir}, nil
+	return &WorkItem{ID: id, Title: title, State: "intake", Profile: "normal", CurrentStage: "intake", GitBaseline: baseline, Dir: dir}, nil
 }
 
 // ListActive returns the directory names of active work items.

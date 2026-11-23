@@ -1,0 +1,12 @@
+schema_version: 1
+request_id: IN-0002
+work_item_id: WI-0009
+run_id: run_1795384194955_2c67ab
+kind: clarification
+question: A later implementation pass must start from a work item with a valid baseline; this historical item is not backfilled.
+status: answered
+answer: Continue with a new baseline-backed work item; do not backfill WI-0009.
+created_by: ox-agent
+answered_by: Jesse
+created_at: "2026-11-22T21:53:55Z"
+answered_at: "2026-11-22T21:58:19Z"

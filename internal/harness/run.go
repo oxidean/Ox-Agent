@@ -595,7 +595,11 @@ func collectLocked(root string, run *Run) (*Run, map[string]any, error) {
 		for _, finding := range specEval.findings {
 			switch {
 			case finding.Kind == "unacknowledged":
-				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s covers touched paths %v but was not consulted (declare it under spec_impact.consulted)", finding.Spec, finding.Paths))
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s covers changed paths %v but was not consulted (declare it under spec_impact.consulted)", finding.Spec, finding.Paths))
+			case finding.Kind == "underreported":
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s covers changed paths %v omitted from output.artifacts", finding.Spec, finding.Paths))
+			case finding.Kind == "evidence_unavailable":
+				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec %s: %s", finding.Spec, finding.Summary))
 			case finding.Spec != "":
 				run.SpecWarnings = append(run.SpecWarnings, fmt.Sprintf("spec drift declared on %s: %s", finding.Spec, finding.Summary))
 			default:

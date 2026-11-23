@@ -43,6 +43,10 @@
     },
     "updated_at": {
       "type": "string"
+    },
+    "git_baseline": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
     }
   },
   "additionalProperties": true

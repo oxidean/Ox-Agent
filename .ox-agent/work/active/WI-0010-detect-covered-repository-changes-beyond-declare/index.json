@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "WI-0010",
+  "title": "Detect covered repository changes beyond declared artifacts",
+  "state": "shipping",
+  "profile": "normal",
+  "current_stage": "shipping",
+  "created_at": "2026-11-22T22:01:38Z",
+  "updated_at": "2026-11-22T22:19:18Z",
+  "git_baseline": "4624be042f7bf012ede1c2231d16410108756ccb"
+}

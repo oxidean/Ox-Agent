@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,18 @@ func writeCoveredSpec(t *testing.T, root, name string, covers ...string) {
 
 // setEnforcement rewrites the project's policy.yaml with the given
 // specs.enforcement value.
+
+func writeChangedPath(t *testing.T, root, name string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func setEnforcement(t *testing.T, root, enforcement string) {
 	t.Helper()
 	policy := "schema_version: 1\nautonomy: {profile_changes: managed, allow_downgrade: false}\napprovals: {production_deploy: human, destructive_change: human, policy_change: human}\nbudgets: {max_parallel_agents: 4, max_child_depth: 1, max_fix_cycles: 3}\nspecs: {enforcement: " + enforcement + "}\n"
@@ -98,6 +111,7 @@ func TestMatchSpecGlob(t *testing.T) {
 func TestCollectWarnJournalsSpecDrift(t *testing.T) {
 	root, item := initProject(t)
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	run := dispatchSpecRun(t, root, item, output)
@@ -125,6 +139,7 @@ func TestCollectWarnJournalsSpecDrift(t *testing.T) {
 func TestCollectConsultedSpecPasses(t *testing.T) {
 	root, item := initProject(t)
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	output["spec_impact"] = map[string]any{
@@ -205,6 +220,7 @@ func TestCollectStrictBlocksAndFilesDecision(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "strict")
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	run := dispatchSpecRun(t, root, item, output)
@@ -246,6 +262,7 @@ func TestCollectStrictKeepsAwaitInput(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "strict")
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	output["next_action"] = map[string]any{"type": "await_input", "reason": "which quota?"}
@@ -277,6 +294,7 @@ func TestCollectStrictReworkSkipsDecision(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "strict")
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["verdict"] = "needs_rework"
 	output["artifacts"] = []any{"internal/cli/context.go"}
@@ -300,6 +318,7 @@ func TestCollectOffSkipsEvaluation(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "off")
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	run := dispatchSpecRun(t, root, item, output)
@@ -368,6 +387,7 @@ func TestEntriesExposeCovers(t *testing.T) {
 func TestCollectConformsOmittedPasses(t *testing.T) {
 	root, item := initProject(t)
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	output["spec_impact"] = map[string]any{
@@ -418,6 +438,7 @@ func TestCollectArtifactDotSlashMatches(t *testing.T) {
 		t.Run(artifact, func(t *testing.T) {
 			root, item := initProject(t)
 			writeCoveredSpec(t, root, "api.md", "internal/**")
+			writeChangedPath(t, root, "internal/cli/context.go")
 			output := validOutput("specify")
 			output["artifacts"] = []any{artifact}
 			run := dispatchSpecRun(t, root, item, output)
@@ -601,6 +622,7 @@ func TestCollectStrictReleasesAfterAcceptance(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "strict")
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 
@@ -652,6 +674,7 @@ func TestCollectStrictDedupesPendingDecision(t *testing.T) {
 	root, item := initProject(t)
 	setEnforcement(t, root, "strict")
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 
@@ -701,6 +724,23 @@ func TestSpecDecisionQuestionDistinguishesPathBoundaries(t *testing.T) {
 	}}
 	if specDecisionQuestion(item, ordered) != specDecisionQuestion(item, reversed) {
 		t.Fatal("finding order changed the decision identity")
+	}
+}
+
+func TestSpecDecisionQuestionDistinguishesEvidenceFailureReasons(t *testing.T) {
+	item := &state.WorkItem{ID: "WI-0001"}
+	noBaseline := []specFinding{{
+		Kind:    "evidence_unavailable",
+		Spec:    "context/specs/api.md",
+		Summary: "no clean work-item-start Git baseline was recorded",
+	}}
+	gitFailure := []specFinding{{
+		Kind:    "evidence_unavailable",
+		Spec:    "context/specs/api.md",
+		Summary: "Git query failed for the work-item-start baseline",
+	}}
+	if specDecisionQuestion(item, noBaseline) == specDecisionQuestion(item, gitFailure) {
+		t.Fatal("different evidence failures produced the same decision identity")
 	}
 }
 
@@ -764,6 +804,7 @@ func TestCoverageReadsCoversFresh(t *testing.T) {
 	// Edit covers after the index was built — the stored index still
 	// says docs/** but the file now governs internal/**.
 	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/context.go")
 	output := validOutput("specify")
 	output["artifacts"] = []any{"internal/cli/context.go"}
 	run := dispatchSpecRun(t, root, item, output)
@@ -774,5 +815,211 @@ func TestCoverageReadsCoversFresh(t *testing.T) {
 	events := specEvents(t, root, item.ID)
 	if len(events) != 1 || events[0].Type != "spec.drift" {
 		t.Fatalf("stale-index covers missed the touch: spec events = %v", events)
+	}
+}
+
+func TestCollectDetectsUnderreportedRepositoryChange(t *testing.T) {
+	root, item := initProject(t)
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/missed.go")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/claimed.go"}
+	output["spec_impact"] = map[string]any{"consulted": []any{"context/specs/api.md"}}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "collected" || len(run.SpecWarnings) == 0 {
+		t.Fatalf("run = status %s warnings %v", run.Status, run.SpecWarnings)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.drift" {
+		t.Fatalf("spec events = %v", events)
+	}
+	findings, _ := events[0].Data["findings"].([]any)
+	if len(findings) != 1 || findings[0].(map[string]any)["kind"] != "underreported" {
+		t.Fatalf("findings = %v, want underreported", findings)
+	}
+}
+
+func TestCollectSortsUnderreportedRepositoryPaths(t *testing.T) {
+	root, item := initProject(t)
+	writeCoveredSpec(t, root, "api.md", "internal/z/**", "internal/a/**")
+	writeChangedPath(t, root, "internal/z/z.go")
+	writeChangedPath(t, root, "internal/a/a.go")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/claimed.go"}
+	output["spec_impact"] = map[string]any{"consulted": []any{"context/specs/api.md"}}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	events := specEvents(t, root, item.ID)
+	findings, _ := events[0].Data["findings"].([]any)
+	paths, _ := findings[0].(map[string]any)["paths"].([]any)
+	if len(paths) != 2 || paths[0] != "internal/a/a.go" || paths[1] != "internal/z/z.go" {
+		t.Fatalf("underreported paths = %v, want sorted [internal/a/a.go internal/z/z.go]", paths)
+	}
+}
+
+func TestCollectStrictBlocksUnderreportedRepositoryChange(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	writeChangedPath(t, root, "internal/cli/missed.go")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/claimed.go"}
+	output["spec_impact"] = map[string]any{"consulted": []any{"context/specs/api.md"}}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err := Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" || run.AwaitingInput == "" {
+		t.Fatalf("run = status %s awaiting_input %q, want strict decision hold", run.Status, run.AwaitingInput)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.drift" {
+		t.Fatalf("spec events = %v", events)
+	}
+	findings, _ := events[0].Data["findings"].([]any)
+	if len(findings) != 1 || findings[0].(map[string]any)["kind"] != "underreported" {
+		t.Fatalf("findings = %v, want underreported", findings)
+	}
+}
+
+func TestCollectWarnReportsUnavailableRepositoryEvidence(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "warn")
+	item.GitBaseline = ""
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	run := dispatchSpecRun(t, root, item, validOutput("specify"))
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "collected" || len(run.SpecWarnings) != 1 || !strings.Contains(run.SpecWarnings[0], "spec context/specs/api.md") || !strings.Contains(run.SpecWarnings[0], "evidence unavailable") {
+		t.Fatalf("run = status %s warnings %v", run.Status, run.SpecWarnings)
+	}
+	pending, errs := input.Pending(root)
+	if len(errs) != 0 || len(pending) != 0 {
+		t.Fatalf("pending input = %v, %v; warn mode should not block", pending, errs)
+	}
+}
+
+func TestCollectStrictReportsUnavailableRepositoryEvidence(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	item.GitBaseline = ""
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+	output["artifacts"] = []any{"internal/cli/claimed.go"}
+	run := dispatchSpecRun(t, root, item, output)
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" || run.AwaitingInput == "" {
+		t.Fatalf("run = status %s awaiting_input %q, want strict evidence hold", run.Status, run.AwaitingInput)
+	}
+	events := specEvents(t, root, item.ID)
+	if len(events) != 1 || events[0].Type != "spec.drift" {
+		t.Fatalf("spec events = %v", events)
+	}
+	findings, _ := events[0].Data["findings"].([]any)
+	if len(findings) != 1 || findings[0].(map[string]any)["kind"] != "evidence_unavailable" {
+		t.Fatalf("findings = %v, want evidence_unavailable", findings)
+	}
+}
+
+func TestCollectStrictAcceptsUnavailableEvidenceForMatchingRuns(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	item.GitBaseline = ""
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	output := validOutput("specify")
+
+	run1 := dispatchSpecRun(t, root, item, output)
+	run1, _, err = Collect(root, run1.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run1 error = %v", err)
+	}
+	if run1.AwaitingInput == "" {
+		t.Fatal("run1 filed no evidence-unavailable decision")
+	}
+	if _, err := input.Respond(root, run1.AwaitingInput, "human", specDecisionAccept); err != nil {
+		t.Fatalf("Respond() error = %v", err)
+	}
+
+	run2 := dispatchSpecRun(t, root, item, output)
+	run2, _, err = Collect(root, run2.RunID)
+	if err != nil {
+		t.Fatalf("Collect() run2 error = %v", err)
+	}
+	if run2.Status != "collected" || run2.AwaitingInput != "" {
+		t.Fatalf("run2 = status %s request %q, want acceptance of identical evidence finding", run2.Status, run2.AwaitingInput)
+	}
+	pending, errs := input.Pending(root)
+	if len(errs) != 0 || len(pending) != 0 {
+		t.Fatalf("pending requests = %v, %v; want no pending decision", pending, errs)
+	}
+	found := false
+	for _, warning := range run2.SpecWarnings {
+		if strings.Contains(warning, "released") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("run2 warnings %v do not show accepted release", run2.SpecWarnings)
+	}
+}
+
+func TestCollectStrictReportsGitQueryFailure(t *testing.T) {
+	root, item := initProject(t)
+	setEnforcement(t, root, "strict")
+	item.GitBaseline = strings.Repeat("0", 40)
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Dir, "index.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCoveredSpec(t, root, "api.md", "internal/**")
+	run := dispatchSpecRun(t, root, item, validOutput("specify"))
+	run, _, err = Collect(root, run.RunID)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if run.Status != "retry" || run.AwaitingInput == "" {
+		t.Fatalf("run = status %s awaiting_input %q, want strict evidence hold", run.Status, run.AwaitingInput)
+	}
+	events := specEvents(t, root, item.ID)
+	findings, _ := events[0].Data["findings"].([]any)
+	if len(findings) != 1 || findings[0].(map[string]any)["kind"] != "evidence_unavailable" {
+		t.Fatalf("findings = %v, want evidence_unavailable", findings)
 	}
 }

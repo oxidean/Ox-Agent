@@ -48,7 +48,12 @@ ox-agent uninstall --yes                  Remove the binary
 `spec status` reads the journal to show the latest check, still-open findings,
 and pending strict spec-decision IDs. Without a work-item argument it shows
 active items with spec activity. It does not rerun coverage checks or mutate
-project state.
+project state. At collection, coverage compares actual repository changes since
+a clean work-item-start Git baseline. Missing evidence is reported and never
+replaced with an artifact-only pass. Commit project changes, including
+Ox-Agent's event journal, before starting a work item to obtain a baseline.
+Changed paths are project-relative, even when the project is nested in a larger
+Git worktree; missing baselines and Git-query failures remain distinct findings.
 
 `run` dispatches the stage-mapped skill through a configured harness
 adapter. `manual` prints packet and output paths for any agent,
